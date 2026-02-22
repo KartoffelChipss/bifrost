@@ -1,0 +1,23 @@
+{
+    "name": "fluxer-discord-bridge",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.ts",
+    "scripts": {
+        "build": "tsc",
+        "start": "tsc && node dist/index.js"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "packageManager": "pnpm@10.27.0",
+    "dependencies": {
+        "@fluxerjs/core": "^1.2.2",
+        "dotenv": "^17.3.1",
+        "winston": "^3.19.0"
+    },
+    "devDependencies": {
+        "@types/node": "^25.3.0",
+        "typescript": "^5.9.3"
+    }
+}
