@@ -13,6 +13,10 @@
 - Easy setup using our hosted bot or self-hosting with Docker
 - Customizable bot prefix and settings
 
+## Community
+
+Join out community Fluxer server for support, updates and to share your feedback: https://fluxer.gg/TN8FkpdQ
+
 ## Getting Started
 
 ### Hosted Bot
