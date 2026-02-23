@@ -44,6 +44,11 @@ const relayMessage = async (
             content: message.content,
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
+            attachments: message.attachments.map((attachment) => ({
+                url: attachment.url,
+                name: attachment.name || 'attachment',
+                spoiler: attachment.spoiler,
+            })),
         });
     } catch (error) {
         logger.error('Error relaying message to Fluxer:', error);

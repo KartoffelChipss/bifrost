@@ -1,4 +1,4 @@
-import { Client, Message, TextChannel } from '@fluxerjs/core';
+import { Client, Message, MessageAttachmentFlags, TextChannel } from '@fluxerjs/core';
 import CommandRegistry from './commands/CommandRegistry';
 import PingFluxerCommandHandler from './commands/fluxer/handlers/PingFluxerCommandHandler';
 import { isCommandString, parseCommandString } from './commands/parseCommandString';
@@ -38,6 +38,22 @@ const relayMessage = async (
             content: message.content,
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
+            attachments: message.attachments
+                .filter(
+                    (attachment) =>
+                        attachment.url !== null &&
+                        attachment.url !== undefined &&
+                        attachment.url !== '' &&
+                        !!attachment.url
+                )
+                .map((attachment) => ({
+                    url: attachment.url!,
+                    name: attachment.filename || 'attachment',
+                    spoiler:
+                        attachment.flags && attachment.flags & MessageAttachmentFlags.IS_SPOILER
+                            ? true
+                            : false,
+                })),
         });
     } catch (error) {
         logger.error('Error relaying message to Discord:', error);

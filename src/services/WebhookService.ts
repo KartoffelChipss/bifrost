@@ -2,8 +2,10 @@ import {
     Client as FluxerClient,
     TextChannel as FluxerTextChannel,
     Webhook as FluxerWebhook,
+    MessageAttachmentFlags,
 } from '@fluxerjs/core';
 import {
+    AttachmentBuilder,
     Client as DiscordClient,
     TextChannel as DiscordTextChannel,
     WebhookClient,
@@ -12,6 +14,12 @@ import logger from '../utils/logging/logger';
 import { LinkService } from './LinkService';
 
 type DiscordWebhook = WebhookClient;
+
+export type WebhookAttachment = {
+    url: string;
+    name: string;
+    spoiler?: boolean;
+};
 
 export class WebhookService {
     private readonly linkService: LinkService;
@@ -73,13 +81,25 @@ export class WebhookService {
 
     async sendMessageViaDiscordWebhook(
         webhook: DiscordWebhook,
-        data: { content: string; username: string; avatarURL: string }
+        data: {
+            content: string;
+            username: string;
+            avatarURL: string;
+            attachments?: WebhookAttachment[];
+        }
     ) {
         try {
+            const files = data.attachments?.map((att) => {
+                const attBuilder = new AttachmentBuilder(att.url, { name: att.name });
+                if (att.spoiler) attBuilder.setSpoiler(true);
+                return attBuilder;
+            });
+
             await webhook.send({
                 content: data.content,
                 username: data.username,
                 avatarURL: data.avatarURL,
+                files,
             });
         } catch (error: any) {
             logger.error('Error sending message via Discord webhook:', error);
@@ -123,13 +143,31 @@ export class WebhookService {
 
     async sendMessageViaFluxerWebhook(
         webhook: FluxerWebhook,
-        data: { content: string; username: string; avatarURL: string }
+        data: {
+            content: string;
+            username: string;
+            avatarURL: string;
+            attachments?: WebhookAttachment[];
+        }
     ) {
         try {
             await webhook.send({
                 content: data.content,
                 username: data.username,
                 avatar_url: data.avatarURL,
+                files:
+                    data.attachments?.map((attachment) => ({
+                        url: attachment.url,
+                        name: attachment.name,
+                        filename: attachment.name,
+                    })) || [],
+                attachments:
+                    data.attachments?.map((attachment, index) => ({
+                        id: index,
+                        name: attachment.name,
+                        filename: attachment.name,
+                        flags: attachment.spoiler ? MessageAttachmentFlags.IS_SPOILER : undefined,
+                    })) || [],
             });
         } catch (error: any) {
             logger.error('Error sending message via Fluxer webhook:', error);
