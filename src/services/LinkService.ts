@@ -138,4 +138,12 @@ export class LinkService {
 
         return this.channelRepo.findAllByGuild(guildLink.id);
     }
+
+    async getChannelLinkByDiscordChannelId(discordChannelId: string) {
+        return this.channelRepo.findByDiscordChannelId(discordChannelId);
+    }
+
+    async getChannelLinkByFluxerChannelId(fluxerChannelId: string) {
+        return this.channelRepo.findByFluxerChannelId(fluxerChannelId);
+    }
 }

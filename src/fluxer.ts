@@ -1,4 +1,4 @@
-import { Client } from '@fluxerjs/core';
+import { Client, Message, TextChannel } from '@fluxerjs/core';
 import CommandRegistry from './commands/CommandRegistry';
 import PingFluxerCommandHandler from './commands/fluxer/handlers/PingFluxerCommandHandler';
 import { isCommandString, parseCommandString } from './commands/parseCommandString';
@@ -11,13 +11,48 @@ import GuildLinkFluxerCommandHandler from './commands/fluxer/handlers/GuildLinkF
 import { LinkService } from './services/LinkService';
 import ChannelLinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelLinkFluxerCommandHandler';
 import ListChannelsFluxerCommandHandler from './commands/fluxer/handlers/ListChannelsFluxerCommandHandler';
+import { WebhookService } from './services/WebhookService';
+
+const relayMessage = async (
+    message: Message,
+    linkService: LinkService,
+    webhookService: WebhookService
+) => {
+    const linkedChannel = await linkService.getChannelLinkByFluxerChannelId(message.channelId);
+    if (!linkedChannel) return;
+
+    try {
+        const webhook = await webhookService.getDiscordWebhook(
+            linkedChannel.discordWebhookId,
+            linkedChannel.discordWebhookToken
+        );
+        if (!webhook) {
+            logger.warn(
+                `No webhook found for linked channel ${linkedChannel.linkId}, cannot relay message`
+            );
+            return;
+        }
+
+        await webhookService.sendMessageViaDiscordWebhook(webhook, {
+            content: message.content,
+            username: message.author.username,
+            avatarURL: message.author.avatarURL() || '',
+        });
+    } catch (error) {
+        logger.error('Error relaying message to Discord:', error);
+    }
+};
 
 const startFluxerClient = async ({
     linkService,
+    webhookService,
 }: {
     linkService: LinkService;
+    webhookService: WebhookService;
 }): Promise<Client> => {
     const client = new Client({ intents: 0, waitForGuilds: true });
+
+    webhookService.setFluxerClient(client);
 
     const commandRegistry = new CommandRegistry<FluxerCommandHandler>();
     commandRegistry.registerCommand('ping', new PingFluxerCommandHandler(client));
@@ -28,7 +63,7 @@ const startFluxerClient = async ({
     );
     commandRegistry.registerCommand(
         'channellink',
-        new ChannelLinkFluxerCommandHandler(client, linkService)
+        new ChannelLinkFluxerCommandHandler(client, linkService, webhookService)
     );
     commandRegistry.registerCommand(
         'listchannels',
@@ -59,6 +94,13 @@ const startFluxerClient = async ({
                 } catch (error) {
                     logger.error(`Error executing fluxer command "${command}":`, error);
                 }
+            }
+
+            if (
+                message.channel instanceof TextChannel &&
+                !isCommandString(message.content, COMMAND_PREFIX)
+            ) {
+                await relayMessage(message, linkService, webhookService);
             }
         });
 

@@ -1,4 +1,11 @@
-import { Client, GatewayIntentBits } from 'discord.js';
+import {
+    Client,
+    GatewayIntentBits,
+    Message,
+    OmitPartialGroupDMChannel,
+    Partials,
+    TextChannel,
+} from 'discord.js';
 import { COMMAND_PREFIX, DISCORD_BOT_TOKEN } from './utils/env';
 import logger from './utils/logging/logger';
 import CommandRegistry from './commands/CommandRegistry';
@@ -10,11 +17,44 @@ import { LinkService } from './services/LinkService';
 import GuildLinkDiscordCommandHandler from './commands/discord/handlers/GuildLinkDiscordCommandHandler';
 import ChannelLinkDiscordCommandHandler from './commands/discord/handlers/ChannelLinkDiscordCommandHandler';
 import ListChannelsDiscordCommandHandler from './commands/discord/handlers/ListChannelsDiscordCommandHandler';
+import { WebhookService } from './services/WebhookService';
+
+const relayMessage = async (
+    message: OmitPartialGroupDMChannel<Message<boolean>>,
+    linkService: LinkService,
+    webhookService: WebhookService
+) => {
+    const linkedChannel = await linkService.getChannelLinkByDiscordChannelId(message.channelId);
+    if (!linkedChannel) return;
+
+    try {
+        const webhook = await webhookService.getFluxerWebhook(
+            linkedChannel.fluxerWebhookId,
+            linkedChannel.fluxerWebhookToken
+        );
+        if (!webhook) {
+            logger.warn(
+                `No webhook found for linked channel ${linkedChannel.linkId}, cannot relay message`
+            );
+            return;
+        }
+
+        await webhookService.sendMessageViaFluxerWebhook(webhook, {
+            content: message.content,
+            username: message.author.username,
+            avatarURL: message.author.avatarURL() || '',
+        });
+    } catch (error) {
+        logger.error('Error relaying message to Fluxer:', error);
+    }
+};
 
 const startDiscordClient = async ({
     linkService,
+    webhookService,
 }: {
     linkService: LinkService;
+    webhookService: WebhookService;
 }): Promise<Client> => {
     const client = new Client({
         intents: [
@@ -22,7 +62,10 @@ const startDiscordClient = async ({
             GatewayIntentBits.GuildMessages,
             GatewayIntentBits.MessageContent,
         ],
+        partials: [Partials.Channel],
     });
+
+    webhookService.setDiscordClient(client);
 
     const commandRegistry = new CommandRegistry<DiscordCommandHandler>();
     commandRegistry.registerCommand('ping', new PingDiscordCommandHandler(client));
@@ -63,6 +106,13 @@ const startDiscordClient = async ({
             } catch (error) {
                 logger.error(`Error executing discord command "${command}":`, error);
             }
+        }
+
+        if (
+            message.channel instanceof TextChannel &&
+            !isCommandString(message.content, COMMAND_PREFIX)
+        ) {
+            await relayMessage(message, linkService, webhookService);
         }
     });
 

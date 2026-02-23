@@ -3,13 +3,16 @@ import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import { getUsageMessage } from '../../../utils/usageMessage';
 import logger from '../../../utils/logging/logger';
+import { WebhookService } from 'src/services/WebhookService';
 
 export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
+    private readonly webhookService: WebhookService;
 
-    constructor(client: Client, linkService: LinkService) {
+    constructor(client: Client, linkService: LinkService, webhookService: WebhookService) {
         super(client);
         this.linkService = linkService;
+        this.webhookService = webhookService;
     }
 
     public async handleCommand(
@@ -30,7 +33,6 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
         const discordChannelId = args[0];
 
         let guildLink = null;
-
         try {
             guildLink = await this.linkService.getGuildLinkForFluxerGuild(message.guildId!);
             if (!guildLink) {
@@ -41,15 +43,39 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
             return;
         }
 
+        let discordWebhook = null;
+        try {
+            discordWebhook = await this.webhookService.createDiscordWebhook(
+                discordChannelId,
+                `Fluxer Bridge Webhook for channel ${message.channelId}`
+            );
+        } catch (error: any) {
+            await message.reply(`Failed to create Discord webhook: ${error.message}`);
+            logger.error('Error creating Discord webhook:', error);
+            return;
+        }
+
+        let fluxerWebhook = null;
+        try {
+            fluxerWebhook = await this.webhookService.createFluxerWebhook(
+                message.channelId,
+                `Discord Bridge Webhook for channel ${message.channelId}`
+            );
+        } catch (error: any) {
+            await message.reply(`Failed to create Fluxer webhook: ${error.message}`);
+            logger.error('Error creating Fluxer webhook:', error);
+            return;
+        }
+
         try {
             await this.linkService.createChannelLink({
                 guildLinkId: guildLink.id,
                 discordChannelId,
                 fluxerChannelId: message.channelId,
-                discordWebhookId: '__NONE__',
-                discordWebhookToken: '__NONE__',
-                fluxerWebhookId: '__NONE__',
-                fluxerWebhookToken: '__NONE__',
+                discordWebhookId: discordWebhook.id,
+                discordWebhookToken: discordWebhook.token,
+                fluxerWebhookId: fluxerWebhook.id,
+                fluxerWebhookToken: fluxerWebhook.token,
             });
             await message.reply(
                 `Successfully linked this Fluxer channel to Discord channel ID \`${discordChannelId}\`.`
