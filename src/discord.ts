@@ -21,6 +21,7 @@ import ChannelUnlinkDiscordCommandHandler from './commands/discord/handlers/Chan
 import { WebhookService } from './services/WebhookService';
 import { buildDiscordStickerUrl } from './utils/buildStickerUrl';
 import { sanitizeMentions } from './utils/sanitizeMentions';
+import { getPollMessage } from './utils/pollMessageFormatter';
 
 const stickerFormatToExtension = (format: number): string => {
     switch (format) {
@@ -91,8 +92,22 @@ const relayMessage = async (
             });
         });
 
+        const isPollPresent =
+            message.poll &&
+            message.poll.question.text &&
+            message.poll.answers.some((a) => a.text) &&
+            message.poll.expiresTimestamp;
+
+        const messageContent = isPollPresent
+            ? getPollMessage(
+                  message.poll!.question.text!,
+                  message.poll!.answers.map((a) => a.text).filter((t): t is string => !!t),
+                  message.poll!.expiresTimestamp!
+              )
+            : sanitizedContent;
+
         await webhookService.sendMessageViaFluxerWebhook(webhook, {
-            content: sanitizedContent,
+            content: messageContent,
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
             attachments: attachments,
