@@ -28,13 +28,86 @@
 
 ### Self-Hosting with Docker
 
-1. Clone the repository: `git clone https://github.com/Kartoffelchipss/bifrost.git`
-2. Navigate to the project directory: `cd bifrost`
-3. Crete a Fluxer Bot in your user settings under "Applications".
-4. Create a `.env` file in the root directory and add your configuration variables (see `.env.example` for reference).
-5. Build and run the Docker container: `docker-compose up -d`
-6. Invite the bot to your Discord using the OAuth2 URL logged in the console after starting the container.
-7. Follow the same linking steps as the hosted bot to link your servers and channels
+#### 1. Clone the repository
+
+```bash
+git clone https://github.com/Kartoffelchipss/bifrost.git
+cd bifrost
+```
+
+---
+
+#### 2. Create a Fluxer Bot
+
+1. Open **Fluxer**.
+2. Go to **User Settings → Applications**.
+3. Click **Create Application**.
+4. Copy the **Bot Token** and **Application ID**, you’ll need it for the `.env` file.
+
+---
+
+#### 3. Create a Discord Bot
+
+1. Go to the **Discord Developer Portal**:  
+   https://discord.com/developers/applications
+2. Click **New Application**.
+3. Go to **Bot -> Add Bot**.
+4. Copy the **Bot Token**.
+5. Under **Privileged Gateway Intents**, enable:
+   - Message Content Intent
+6. Copy the **Bot Token** and **Application ID**, you’ll need it for the `.env` file.
+
+---
+
+#### 4. Create the `.env` file
+
+Create a `.env` file in the project root:
+
+```bash
+touch .env
+```
+
+Open it and add your credentials:
+
+```env
+# Fluxer
+FLUXER_BOT_TOKEN="Your Fluxer Bot Token"
+FLUXER_APPLICATION_ID="Your Fluxer Application ID"
+
+# Discord
+DISCORD_BOT_TOKEN="Your Discord Bot Token"
+DISCORD_APPLICATION_ID="Your Discord Application ID"
+```
+
+You can also use `.env.example` as a reference for all environment variables.
+
+---
+
+#### 5. Build and Start the Container
+
+```bash
+docker compose up -d --build
+```
+
+---
+
+#### 6. Invite the Discord and Fluxer Bot
+
+After starting the container, the invite link for both the Discord and Fluxer bot will be printed in the logs. Use these links to invite the bots to your respective servers.
+
+You can view the logs with:
+
+```bash
+docker compose logs -f
+```
+
+Or find the log files in the `config/logs` directory.
+
+---
+
+### 7. Link Servers and Channels
+
+Follow the same linking steps as the hosted bot to connect your Fluxer and Discord servers.
 
 ## License
 
