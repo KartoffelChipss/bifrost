@@ -76,7 +76,7 @@ const startDiscordClient = async ({
     );
     commandRegistry.registerCommand(
         'channellink',
-        new ChannelLinkDiscordCommandHandler(client, linkService)
+        new ChannelLinkDiscordCommandHandler(client, linkService, webhookService)
     );
     commandRegistry.registerCommand(
         'listchannels',

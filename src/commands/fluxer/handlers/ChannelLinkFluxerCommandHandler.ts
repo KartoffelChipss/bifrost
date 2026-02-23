@@ -40,6 +40,7 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
             }
         } catch (error: any) {
             await message.reply(`Failed to get guild link: ${error.message}`);
+            logger.error('Error fetching guild link:', error);
             return;
         }
 
