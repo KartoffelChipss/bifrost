@@ -72,11 +72,11 @@ const startDiscordClient = async ({
     commandRegistry.registerCommand('ping', new PingDiscordCommandHandler(client));
     commandRegistry.registerCommand('webhooktest', new WebhooktestDiscordCommandHandler(client));
     commandRegistry.registerCommand(
-        'guildlink',
+        'linkguild',
         new GuildLinkDiscordCommandHandler(client, linkService)
     );
     commandRegistry.registerCommand(
-        'channellink',
+        'linkchannel',
         new ChannelLinkDiscordCommandHandler(client, linkService, webhookService)
     );
     commandRegistry.registerCommand(
@@ -84,7 +84,7 @@ const startDiscordClient = async ({
         new ListChannelsDiscordCommandHandler(client, linkService)
     );
     commandRegistry.registerCommand(
-        'channelunlink',
+        'unlinkchannel',
         new ChannelUnlinkDiscordCommandHandler(client, linkService)
     );
 

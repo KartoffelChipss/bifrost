@@ -59,11 +59,11 @@ const startFluxerClient = async ({
     commandRegistry.registerCommand('ping', new PingFluxerCommandHandler(client));
     commandRegistry.registerCommand('webhooktest', new WebhooktestFluxerCommandHandler(client));
     commandRegistry.registerCommand(
-        'guildlink',
+        'linkguild',
         new GuildLinkFluxerCommandHandler(client, linkService)
     );
     commandRegistry.registerCommand(
-        'channellink',
+        'linkchannel',
         new ChannelLinkFluxerCommandHandler(client, linkService, webhookService)
     );
     commandRegistry.registerCommand(
@@ -71,7 +71,7 @@ const startFluxerClient = async ({
         new ListChannelsFluxerCommandHandler(client, linkService)
     );
     commandRegistry.registerCommand(
-        'channelunlink',
+        'unlinkchannel',
         new ChannelUnlinkFluxerCommandHandler(client, linkService)
     );
 
