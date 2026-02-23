@@ -159,6 +159,10 @@ const startDiscordClient = async ({
         logger.info(`Discord bot logged in as ${client.user?.tag}`);
     });
 
+    client.on('error', (error) => {
+        logger.error('Discord client error:', error);
+    });
+
     client.on('messageCreate', async (message) => {
         if (message.author.id === client.user?.id) return;
         if (message.author.bot) return;

@@ -126,6 +126,9 @@ const startFluxerClient = async ({
             logger.info('Fluxer bot is ready!');
             logger.info(`Fluxer bot is in ${client.guilds.size} guilds`);
         })
+        .events.Error((error) => {
+            logger.error('Fluxer client error:', error);
+        })
         .events.MessageCreate(async (message) => {
             if (message.author.id === client.user?.id) return;
             if (message.author.bot) return;
