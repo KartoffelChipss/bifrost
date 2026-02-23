@@ -11,6 +11,7 @@ import GuildLinkFluxerCommandHandler from './commands/fluxer/handlers/GuildLinkF
 import { LinkService } from './services/LinkService';
 import ChannelLinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelLinkFluxerCommandHandler';
 import ListChannelsFluxerCommandHandler from './commands/fluxer/handlers/ListChannelsFluxerCommandHandler';
+import ChannelUnlinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelUnlinkFluxerCommandHandler';
 import { WebhookService } from './services/WebhookService';
 
 const relayMessage = async (
@@ -68,6 +69,10 @@ const startFluxerClient = async ({
     commandRegistry.registerCommand(
         'listchannels',
         new ListChannelsFluxerCommandHandler(client, linkService)
+    );
+    commandRegistry.registerCommand(
+        'channelunlink',
+        new ChannelUnlinkFluxerCommandHandler(client, linkService)
     );
 
     client.events

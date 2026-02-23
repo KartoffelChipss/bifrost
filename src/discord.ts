@@ -17,6 +17,7 @@ import { LinkService } from './services/LinkService';
 import GuildLinkDiscordCommandHandler from './commands/discord/handlers/GuildLinkDiscordCommandHandler';
 import ChannelLinkDiscordCommandHandler from './commands/discord/handlers/ChannelLinkDiscordCommandHandler';
 import ListChannelsDiscordCommandHandler from './commands/discord/handlers/ListChannelsDiscordCommandHandler';
+import ChannelUnlinkDiscordCommandHandler from './commands/discord/handlers/ChannelUnlinkDiscordCommandHandler';
 import { WebhookService } from './services/WebhookService';
 
 const relayMessage = async (
@@ -82,6 +83,10 @@ const startDiscordClient = async ({
         'listchannels',
         new ListChannelsDiscordCommandHandler(client, linkService)
     );
+    commandRegistry.registerCommand(
+        'channelunlink',
+        new ChannelUnlinkDiscordCommandHandler(client, linkService)
+    );
 
     client.once('clientReady', () => {
         logger.info(`Discord bot logged in as ${client.user?.tag}`);
@@ -97,7 +102,7 @@ const startDiscordClient = async ({
             const { command, args } = parseCommandString(message.content, COMMAND_PREFIX);
             const handler = commandRegistry.getCommandHandler(command);
             if (!handler) {
-                logger.warn(`No handler found for command: ${command}`);
+                await message.reply(`Unknown command: \`${command}\``);
                 return;
             }
 

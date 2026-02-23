@@ -44,8 +44,6 @@ export class WebhookService {
                 throw new Error('Invalid Discord channel');
             }
 
-            console.log('Channel:', channel);
-
             const webhook = await channel.createWebhook({ name });
             return { id: webhook.id, token: webhook.token! };
         } catch (error: any) {
