@@ -36,8 +36,6 @@ const relayMessage = async (
             return;
         }
 
-        console.log('Relaying message to Discord:', message.content);
-
         const sanitizedContent = breakMentions(
             sanitizeMentions(message.content, {
                 resolveUser: (id) => {
@@ -55,8 +53,6 @@ const relayMessage = async (
                 },
             })
         );
-
-        console.log('Sanitized content:', sanitizedContent);
 
         const attachments = message.attachments
             .filter(

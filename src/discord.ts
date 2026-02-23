@@ -57,8 +57,6 @@ const relayMessage = async (
             return;
         }
 
-        console.log('Relaying message to Fluxer:', message.content);
-
         const sanitizedContent = sanitizeMentions(message.content, {
             resolveUser: (id) => {
                 const user = message.client.users.cache.get(id);
@@ -78,8 +76,6 @@ const relayMessage = async (
                     : null;
             },
         });
-
-        console.log('Sanitized content:', sanitizedContent);
 
         const attachments = message.attachments.map((attachment) => ({
             url: attachment.url,
