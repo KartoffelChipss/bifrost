@@ -1,0 +1,11 @@
+services:
+  bifrost:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bifrost
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./config:/config

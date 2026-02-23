@@ -1,5 +1,5 @@
 {
-    "name": "fluxer-discord-bridge",
+    "name": "bifrost",
     "version": "1.0.0",
     "description": "",
     "main": "index.ts",
