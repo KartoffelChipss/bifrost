@@ -1,7 +1,7 @@
 import { Message } from '@fluxerjs/core';
-import CommandHandler from '../CommandHandler';
+import FluxerCommandHandler from '../FluxerCommandHandler';
 
-export default class PingCommandHandler extends CommandHandler {
+export default class PingCommandHandler extends FluxerCommandHandler {
     public async handleCommand(
         message: Message,
         command: string,

@@ -1,8 +1,8 @@
 import { Message, TextChannel } from '@fluxerjs/core';
-import CommandHandler from '../CommandHandler';
-import { randomName } from '../../utils/randomName';
+import FluxerCommandHandler from '../FluxerCommandHandler';
+import { randomName } from '../../../utils/randomName';
 
-export default class WebhooktestCommandHandler extends CommandHandler {
+export default class WebhooktestCommandHandler extends FluxerCommandHandler {
     public async handleCommand(
         message: Message,
         command: string,

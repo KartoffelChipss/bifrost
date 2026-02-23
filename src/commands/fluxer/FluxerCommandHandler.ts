@@ -1,6 +1,6 @@
 import { Client, Message } from '@fluxerjs/core';
 
-export default abstract class CommandHandler {
+export default abstract class FluxerCommandHandler {
     private readonly client: Client;
 
     constructor(client: Client) {
