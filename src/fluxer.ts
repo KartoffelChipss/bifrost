@@ -8,11 +8,10 @@ import logger from './utils/logging/logger';
 import FluxerCommandHandler from './commands/fluxer/FluxerCommandHandler';
 import { COMMAND_PREFIX } from './utils/env';
 
-const commandRegistry = new CommandRegistry<FluxerCommandHandler>();
-
 const startFluxerClient = async (): Promise<Client> => {
     const client = new Client({ intents: 0, waitForGuilds: true });
 
+    const commandRegistry = new CommandRegistry<FluxerCommandHandler>();
     commandRegistry.registerCommand('ping', new PingFluxerCommandHandler(client));
     commandRegistry.registerCommand('webhooktest', new WebhooktestFluxerCommandHandler(client));
 

@@ -7,8 +7,6 @@ import { isCommandString, parseCommandString } from './commands/parseCommandStri
 import PingDiscordCommandHandler from './commands/discord/handlers/PingDiscordCommandHandler';
 import WebhooktestDiscordCommandHandler from './commands/discord/handlers/WebhooktestDiscordCommandHandler';
 
-const commandRegistry = new CommandRegistry<DiscordCommandHandler>();
-
 const startDiscordClient = async (): Promise<Client> => {
     const client = new Client({
         intents: [
@@ -18,6 +16,7 @@ const startDiscordClient = async (): Promise<Client> => {
         ],
     });
 
+    const commandRegistry = new CommandRegistry<DiscordCommandHandler>();
     commandRegistry.registerCommand('ping', new PingDiscordCommandHandler(client));
     commandRegistry.registerCommand('webhooktest', new WebhooktestDiscordCommandHandler(client));
 
