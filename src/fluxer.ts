@@ -1,21 +1,20 @@
 import { Client } from '@fluxerjs/core';
 import CommandRegistry from './commands/CommandRegistry';
-import PingCommandHandler from './commands/fluxer/handlers/PingCommandHandler';
+import PingFluxerCommandHandler from './commands/fluxer/handlers/PingFluxerCommandHandler';
 import { isCommandString, parseCommandString } from './commands/parseCommandString';
-import WebhooktestCommandHandler from './commands/fluxer/handlers/WebhooktestCommandHandler';
+import WebhooktestFluxerCommandHandler from './commands/fluxer/handlers/WebhooktestFluxerCommandHandler';
 import './utils/env';
 import logger from './utils/logging/logger';
 import FluxerCommandHandler from './commands/fluxer/FluxerCommandHandler';
-
-const commandPrefix = process.env.COMMAND_PREFIX || '!';
+import { COMMAND_PREFIX } from './utils/env';
 
 const commandRegistry = new CommandRegistry<FluxerCommandHandler>();
 
 const startFluxerClient = async (): Promise<Client> => {
     const client = new Client({ intents: 0, waitForGuilds: true });
 
-    commandRegistry.registerCommand('ping', new PingCommandHandler(client));
-    commandRegistry.registerCommand('webhooktest', new WebhooktestCommandHandler(client));
+    commandRegistry.registerCommand('ping', new PingFluxerCommandHandler(client));
+    commandRegistry.registerCommand('webhooktest', new WebhooktestFluxerCommandHandler(client));
 
     client.events
         .Ready(() => {
@@ -23,8 +22,13 @@ const startFluxerClient = async (): Promise<Client> => {
             logger.info(`Fluxer bot is in ${client.guilds.size} guilds`);
         })
         .events.MessageCreate(async (message) => {
-            if (isCommandString(message.content, commandPrefix)) {
-                const { command, args } = parseCommandString(message.content, commandPrefix);
+            if (message.author.id === client.user?.id) return;
+            if (message.author.bot) return;
+
+            if (!message.guildId) return;
+
+            if (isCommandString(message.content, COMMAND_PREFIX)) {
+                const { command, args } = parseCommandString(message.content, COMMAND_PREFIX);
                 const handler = commandRegistry.getCommandHandler(command);
                 if (!handler) {
                     logger.warn(`No handler found for command: ${command}`);
@@ -34,9 +38,8 @@ const startFluxerClient = async (): Promise<Client> => {
                 try {
                     await handler.handleCommand(message, command, ...args);
                 } catch (error) {
-                    logger.error(`Error executing command "${command}":`, error);
+                    logger.error(`Error executing fluxer command "${command}":`, error);
                 }
-                return;
             }
         });
 

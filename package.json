@@ -13,6 +13,7 @@
     "packageManager": "pnpm@10.27.0",
     "dependencies": {
         "@fluxerjs/core": "^1.2.2",
+        "discord.js": "^14.25.1",
         "dotenv": "^17.3.1",
         "winston": "^3.19.0"
     },

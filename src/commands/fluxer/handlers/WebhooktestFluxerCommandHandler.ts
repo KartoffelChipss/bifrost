@@ -2,7 +2,7 @@ import { Message, TextChannel } from '@fluxerjs/core';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import { randomName } from '../../../utils/randomName';
 
-export default class WebhooktestCommandHandler extends FluxerCommandHandler {
+export default class WebhooktestFluxerCommandHandler extends FluxerCommandHandler {
     public async handleCommand(
         message: Message,
         command: string,
@@ -18,5 +18,6 @@ export default class WebhooktestCommandHandler extends FluxerCommandHandler {
             content: `Hello, ${helloName}! This is a message sent via webhook.`,
             username: randomName(),
         });
+        await webhook.delete();
     }
 }
