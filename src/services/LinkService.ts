@@ -120,4 +120,22 @@ export class LinkService {
 
         return channelLink;
     }
+
+    async getChannelLinksForDiscordGuild(discordGuildId: string) {
+        const guildLink = await this.guildRepo.findByDiscordGuildId(discordGuildId);
+        if (!guildLink) {
+            throw new Error('Guild not linked');
+        }
+
+        return this.channelRepo.findAllByGuild(guildLink.id);
+    }
+
+    async getChannelLinksForFluxerGuild(fluxerGuildId: string) {
+        const guildLink = await this.guildRepo.findByFluxerGuildId(fluxerGuildId);
+        if (!guildLink) {
+            throw new Error('Guild not linked');
+        }
+
+        return this.channelRepo.findAllByGuild(guildLink.id);
+    }
 }

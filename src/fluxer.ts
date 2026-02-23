@@ -10,6 +10,7 @@ import { COMMAND_PREFIX } from './utils/env';
 import GuildLinkFluxerCommandHandler from './commands/fluxer/handlers/GuildLinkFluxerCommandHandler';
 import { LinkService } from './services/LinkService';
 import ChannelLinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelLinkFluxerCommandHandler';
+import ListChannelsFluxerCommandHandler from './commands/fluxer/handlers/ListChannelsFluxerCommandHandler';
 
 const startFluxerClient = async ({
     linkService,
@@ -28,6 +29,10 @@ const startFluxerClient = async ({
     commandRegistry.registerCommand(
         'channellink',
         new ChannelLinkFluxerCommandHandler(client, linkService)
+    );
+    commandRegistry.registerCommand(
+        'listchannels',
+        new ListChannelsFluxerCommandHandler(client, linkService)
     );
 
     client.events

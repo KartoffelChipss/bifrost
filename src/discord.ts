@@ -9,6 +9,7 @@ import WebhooktestDiscordCommandHandler from './commands/discord/handlers/Webhoo
 import { LinkService } from './services/LinkService';
 import GuildLinkDiscordCommandHandler from './commands/discord/handlers/GuildLinkDiscordCommandHandler';
 import ChannelLinkDiscordCommandHandler from './commands/discord/handlers/ChannelLinkDiscordCommandHandler';
+import ListChannelsDiscordCommandHandler from './commands/discord/handlers/ListChannelsDiscordCommandHandler';
 
 const startDiscordClient = async ({
     linkService,
@@ -33,6 +34,10 @@ const startDiscordClient = async ({
     commandRegistry.registerCommand(
         'channellink',
         new ChannelLinkDiscordCommandHandler(client, linkService)
+    );
+    commandRegistry.registerCommand(
+        'listchannels',
+        new ListChannelsDiscordCommandHandler(client, linkService)
     );
 
     client.once('clientReady', () => {

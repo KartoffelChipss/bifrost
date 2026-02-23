@@ -2,6 +2,7 @@ import { getUsageMessage } from '../../../utils/usageMessage';
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import { Client, PermissionFlagsBits } from 'discord.js';
+import logger from '../../../utils/logging/logger';
 
 export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
@@ -66,7 +67,7 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
             );
         } catch (error: any) {
             await message.reply(`Failed to create channel link: ${error.message}`);
-            console.error(error);
+            logger.error('Error creating channel link', { error });
         }
     }
 }

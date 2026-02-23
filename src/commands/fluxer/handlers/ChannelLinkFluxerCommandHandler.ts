@@ -2,6 +2,7 @@ import { Client, Message } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import { getUsageMessage } from '../../../utils/usageMessage';
+import logger from '../../../utils/logging/logger';
 
 export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
@@ -55,7 +56,7 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
             );
         } catch (error: any) {
             await message.reply(`Failed to create channel link: ${error.message}`);
-            console.error(error);
+            logger.error('Error creating channel link', { error });
         }
     }
 }
