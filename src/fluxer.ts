@@ -7,13 +7,28 @@ import './utils/env';
 import logger from './utils/logging/logger';
 import FluxerCommandHandler from './commands/fluxer/FluxerCommandHandler';
 import { COMMAND_PREFIX } from './utils/env';
+import GuildLinkFluxerCommandHandler from './commands/fluxer/handlers/GuildLinkFluxerCommandHandler';
+import { LinkService } from './services/LinkService';
+import ChannelLinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelLinkFluxerCommandHandler';
 
-const startFluxerClient = async (): Promise<Client> => {
+const startFluxerClient = async ({
+    linkService,
+}: {
+    linkService: LinkService;
+}): Promise<Client> => {
     const client = new Client({ intents: 0, waitForGuilds: true });
 
     const commandRegistry = new CommandRegistry<FluxerCommandHandler>();
     commandRegistry.registerCommand('ping', new PingFluxerCommandHandler(client));
     commandRegistry.registerCommand('webhooktest', new WebhooktestFluxerCommandHandler(client));
+    commandRegistry.registerCommand(
+        'guildlink',
+        new GuildLinkFluxerCommandHandler(client, linkService)
+    );
+    commandRegistry.registerCommand(
+        'channellink',
+        new ChannelLinkFluxerCommandHandler(client, linkService)
+    );
 
     client.events
         .Ready(() => {
@@ -30,7 +45,7 @@ const startFluxerClient = async (): Promise<Client> => {
                 const { command, args } = parseCommandString(message.content, COMMAND_PREFIX);
                 const handler = commandRegistry.getCommandHandler(command);
                 if (!handler) {
-                    logger.warn(`No handler found for command: ${command}`);
+                    await message.reply(`Unknown command: \`${command}\``);
                     return;
                 }
 

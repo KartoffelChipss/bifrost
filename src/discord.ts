@@ -6,8 +6,15 @@ import DiscordCommandHandler from './commands/discord/DiscordCommandHandler';
 import { isCommandString, parseCommandString } from './commands/parseCommandString';
 import PingDiscordCommandHandler from './commands/discord/handlers/PingDiscordCommandHandler';
 import WebhooktestDiscordCommandHandler from './commands/discord/handlers/WebhooktestDiscordCommandHandler';
+import { LinkService } from './services/LinkService';
+import GuildLinkDiscordCommandHandler from './commands/discord/handlers/GuildLinkDiscordCommandHandler';
+import ChannelLinkDiscordCommandHandler from './commands/discord/handlers/ChannelLinkDiscordCommandHandler';
 
-const startDiscordClient = async (): Promise<Client> => {
+const startDiscordClient = async ({
+    linkService,
+}: {
+    linkService: LinkService;
+}): Promise<Client> => {
     const client = new Client({
         intents: [
             GatewayIntentBits.Guilds,
@@ -19,6 +26,14 @@ const startDiscordClient = async (): Promise<Client> => {
     const commandRegistry = new CommandRegistry<DiscordCommandHandler>();
     commandRegistry.registerCommand('ping', new PingDiscordCommandHandler(client));
     commandRegistry.registerCommand('webhooktest', new WebhooktestDiscordCommandHandler(client));
+    commandRegistry.registerCommand(
+        'guildlink',
+        new GuildLinkDiscordCommandHandler(client, linkService)
+    );
+    commandRegistry.registerCommand(
+        'channellink',
+        new ChannelLinkDiscordCommandHandler(client, linkService)
+    );
 
     client.once('clientReady', () => {
         logger.info(`Discord bot logged in as ${client.user?.tag}`);
