@@ -14,6 +14,7 @@ import ListChannelsFluxerCommandHandler from './commands/fluxer/handlers/ListCha
 import ChannelUnlinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelUnlinkFluxerCommandHandler';
 import { WebhookService } from './services/WebhookService';
 import { buildFluxerStickerUrl } from './utils/buildStickerUrl';
+import { breakMentions, escapeMentions, sanitizeMentions } from './utils/sanitizeMentions';
 
 const relayMessage = async (
     message: Message,
@@ -34,6 +35,28 @@ const relayMessage = async (
             );
             return;
         }
+
+        console.log('Relaying message to Discord:', message.content);
+
+        const sanitizedContent = breakMentions(
+            sanitizeMentions(message.content, {
+                resolveUser: (id) => {
+                    const user = message.client.users.get(id);
+                    return user ? user.username : null;
+                },
+                resolveRole: (id) => {
+                    if (!message.guild) return null;
+                    const role = message.guild.roles.get(id);
+                    return role ? role.name : null;
+                },
+                resolveChannel: (id) => {
+                    const channel = message.client.channels.get(id);
+                    return channel ? channel.name : null;
+                },
+            })
+        );
+
+        console.log('Sanitized content:', sanitizedContent);
 
         const attachments = message.attachments
             .filter(
@@ -61,7 +84,7 @@ const relayMessage = async (
         });
 
         await webhookService.sendMessageViaDiscordWebhook(webhook, {
-            content: message.content,
+            content: sanitizedContent,
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
             attachments,

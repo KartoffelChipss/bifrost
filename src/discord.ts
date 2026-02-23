@@ -20,6 +20,7 @@ import ListChannelsDiscordCommandHandler from './commands/discord/handlers/ListC
 import ChannelUnlinkDiscordCommandHandler from './commands/discord/handlers/ChannelUnlinkDiscordCommandHandler';
 import { WebhookService } from './services/WebhookService';
 import { buildDiscordStickerUrl } from './utils/buildStickerUrl';
+import { sanitizeMentions } from './utils/sanitizeMentions';
 
 const stickerFormatToExtension = (format: number): string => {
     switch (format) {
@@ -56,6 +57,30 @@ const relayMessage = async (
             return;
         }
 
+        console.log('Relaying message to Fluxer:', message.content);
+
+        const sanitizedContent = sanitizeMentions(message.content, {
+            resolveUser: (id) => {
+                const user = message.client.users.cache.get(id);
+                return user ? user.username : null;
+            },
+            resolveRole: (id) => {
+                if (!message.guild) return null;
+                const role = message.guild.roles.cache.get(id);
+                return role ? role.name : null;
+            },
+            resolveChannel: (id) => {
+                const channel = message.client.channels.cache.get(id);
+                return channel
+                    ? channel instanceof TextChannel
+                        ? channel.name
+                        : channel.id
+                    : null;
+            },
+        });
+
+        console.log('Sanitized content:', sanitizedContent);
+
         const attachments = message.attachments.map((attachment) => ({
             url: attachment.url,
             name: attachment.name || 'attachment',
@@ -71,7 +96,7 @@ const relayMessage = async (
         });
 
         await webhookService.sendMessageViaFluxerWebhook(webhook, {
-            content: message.content,
+            content: sanitizedContent,
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
             attachments: attachments,
