@@ -13,6 +13,7 @@ import ChannelLinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelL
 import ListChannelsFluxerCommandHandler from './commands/fluxer/handlers/ListChannelsFluxerCommandHandler';
 import ChannelUnlinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelUnlinkFluxerCommandHandler';
 import { WebhookService } from './services/WebhookService';
+import { buildFluxerStickerUrl } from './utils/buildStickerUrl';
 
 const relayMessage = async (
     message: Message,
@@ -34,26 +35,36 @@ const relayMessage = async (
             return;
         }
 
+        const attachments = message.attachments
+            .filter(
+                (attachment) =>
+                    attachment.url !== null &&
+                    attachment.url !== undefined &&
+                    attachment.url !== '' &&
+                    !!attachment.url
+            )
+            .map((attachment) => ({
+                url: attachment.url!,
+                name: attachment.filename || 'attachment',
+                spoiler:
+                    attachment.flags && attachment.flags & MessageAttachmentFlags.IS_SPOILER
+                        ? true
+                        : false,
+            }));
+
+        message.stickers.forEach((sticker) => {
+            attachments.push({
+                url: buildFluxerStickerUrl(sticker.id, sticker.animated || false, 160),
+                name: sticker.name + '.webp',
+                spoiler: false,
+            });
+        });
+
         await webhookService.sendMessageViaDiscordWebhook(webhook, {
             content: message.content,
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
-            attachments: message.attachments
-                .filter(
-                    (attachment) =>
-                        attachment.url !== null &&
-                        attachment.url !== undefined &&
-                        attachment.url !== '' &&
-                        !!attachment.url
-                )
-                .map((attachment) => ({
-                    url: attachment.url!,
-                    name: attachment.filename || 'attachment',
-                    spoiler:
-                        attachment.flags && attachment.flags & MessageAttachmentFlags.IS_SPOILER
-                            ? true
-                            : false,
-                })),
+            attachments,
         });
     } catch (error) {
         logger.error('Error relaying message to Discord:', error);

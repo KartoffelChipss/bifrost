@@ -19,6 +19,22 @@ import ChannelLinkDiscordCommandHandler from './commands/discord/handlers/Channe
 import ListChannelsDiscordCommandHandler from './commands/discord/handlers/ListChannelsDiscordCommandHandler';
 import ChannelUnlinkDiscordCommandHandler from './commands/discord/handlers/ChannelUnlinkDiscordCommandHandler';
 import { WebhookService } from './services/WebhookService';
+import { buildDiscordStickerUrl } from './utils/buildStickerUrl';
+
+const stickerFormatToExtension = (format: number): string => {
+    switch (format) {
+        case 1:
+            return 'png';
+        case 2:
+            return 'png';
+        case 3:
+            return 'json';
+        case 4:
+            return 'gif';
+        default:
+            return 'png';
+    }
+};
 
 const relayMessage = async (
     message: OmitPartialGroupDMChannel<Message<boolean>>,
@@ -40,15 +56,25 @@ const relayMessage = async (
             return;
         }
 
+        const attachments = message.attachments.map((attachment) => ({
+            url: attachment.url,
+            name: attachment.name || 'attachment',
+            spoiler: attachment.spoiler,
+        }));
+
+        message.stickers.forEach((sticker) => {
+            attachments.push({
+                url: buildDiscordStickerUrl(sticker.id, 160),
+                name: sticker.name + '.' + stickerFormatToExtension(sticker.format),
+                spoiler: false,
+            });
+        });
+
         await webhookService.sendMessageViaFluxerWebhook(webhook, {
             content: message.content,
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
-            attachments: message.attachments.map((attachment) => ({
-                url: attachment.url,
-                name: attachment.name || 'attachment',
-                spoiler: attachment.spoiler,
-            })),
+            attachments: attachments,
         });
     } catch (error) {
         logger.error('Error relaying message to Fluxer:', error);
