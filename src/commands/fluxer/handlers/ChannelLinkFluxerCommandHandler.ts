@@ -56,7 +56,7 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
             );
         } catch (error: any) {
             await message.reply(`Failed to create channel link: ${error.message}`);
-            logger.error('Error creating channel link', { error });
+            logger.error('Error creating channel link:', error);
         }
     }
 }

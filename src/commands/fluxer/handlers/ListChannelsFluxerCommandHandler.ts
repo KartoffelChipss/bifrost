@@ -36,7 +36,7 @@ export default class ListChannelsFluxerCommandHandler extends FluxerCommandHandl
             await message.reply(`**Linked Channels:**\n${linksList}`);
         } catch (error: any) {
             await message.reply(`Failed to list channel links: ${error.message}`);
-            logger.error('Error listing channel links', { error });
+            logger.error('Error listing channel links:', error);
         }
     }
 }

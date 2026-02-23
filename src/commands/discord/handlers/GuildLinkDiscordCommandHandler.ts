@@ -2,6 +2,7 @@ import { getUsageMessage } from '../../../utils/usageMessage';
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import { Client, PermissionFlagsBits } from 'discord.js';
+import logger from '../../../utils/logging/logger';
 
 export default class GuildLinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
@@ -48,6 +49,7 @@ export default class GuildLinkDiscordCommandHandler extends DiscordCommandHandle
             );
         } catch (error: any) {
             await message.reply(`Failed to create guild link: ${error.message}`);
+            logger.error('Error creating guild link:', error);
         }
     }
 }

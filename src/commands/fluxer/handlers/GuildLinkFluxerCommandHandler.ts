@@ -2,6 +2,7 @@ import { Client, Message, PermissionFlags } from '@fluxerjs/core';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import { LinkService } from '../../../services/LinkService';
 import { getUsageMessage } from '../../../utils/usageMessage';
+import logger from '../../../utils/logging/logger';
 
 export default class GuildLinkFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
@@ -48,6 +49,7 @@ export default class GuildLinkFluxerCommandHandler extends FluxerCommandHandler 
             );
         } catch (error: any) {
             await message.reply(`Failed to create guild link: ${error.message}`);
+            logger.error('Error creating guild link:', error);
         }
     }
 }
