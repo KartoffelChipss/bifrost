@@ -87,7 +87,7 @@ export class WebhookService {
             avatarURL: string;
             attachments?: WebhookAttachment[];
         }
-    ) {
+    ): Promise<{ messageId: string }> {
         try {
             const files = data.attachments?.map((att) => {
                 const attBuilder = new AttachmentBuilder(att.url, { name: att.name });
@@ -95,12 +95,14 @@ export class WebhookService {
                 return attBuilder;
             });
 
-            await webhook.send({
+            const { id } = await webhook.send({
                 content: data.content,
                 username: data.username,
                 avatarURL: data.avatarURL,
                 files,
             });
+
+            return { messageId: id };
         } catch (error: any) {
             logger.error('Error sending message via Discord webhook:', error);
             throw error;
@@ -149,9 +151,9 @@ export class WebhookService {
             avatarURL: string;
             attachments?: WebhookAttachment[];
         }
-    ) {
+    ): Promise<{ messageId: string }> {
         try {
-            await webhook.send({
+            const msg = await webhook.send({
                 content: data.content,
                 username: data.username,
                 avatar_url: data.avatarURL,
@@ -169,6 +171,12 @@ export class WebhookService {
                         flags: attachment.spoiler ? MessageAttachmentFlags.IS_SPOILER : undefined,
                     })) || [],
             });
+
+            if (!msg) {
+                throw new Error('Did not receive message object after sending via Fluxer webhook');
+            }
+
+            return { messageId: msg.id };
         } catch (error: any) {
             logger.error('Error sending message via Fluxer webhook:', error);
             throw error;

@@ -157,12 +157,17 @@ export class LinkService {
         return this.messageRepo.getMessageLinkByFluxerMessageId(fluxerMessageId);
     }
 
-    async createMessageLink(
-        guildLinkId: string,
-        channelLinkId: string,
-        discordMessageId: string,
-        fluxerMessageId: string
-    ) {
+    async createMessageLink({
+        discordMessageId,
+        fluxerMessageId,
+        guildLinkId,
+        channelLinkId,
+    }: {
+        discordMessageId: string;
+        fluxerMessageId: string;
+        guildLinkId: string;
+        channelLinkId: string;
+    }) {
         return this.messageRepo.createMessageLink(
             guildLinkId,
             channelLinkId,

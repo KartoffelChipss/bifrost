@@ -20,7 +20,7 @@ const main = async () => {
 
     const cachedGuildLinkRepo = new CachedGuildLinkRepository(guildLinkRepo, 0);
     const cachedChannelLinkRepo = new CachedChannelLinkRepository(channelLinkRepo, 0);
-    const cachedMessageLinkRepo = new CachedMessageLinkRepository(messageLinkRepo, 0);
+    const cachedMessageLinkRepo = new CachedMessageLinkRepository(messageLinkRepo, 15_000);
 
     const linkService = new LinkService(
         cachedGuildLinkRepo,

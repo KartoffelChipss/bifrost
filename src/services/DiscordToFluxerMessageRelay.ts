@@ -90,11 +90,19 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
                   )
                 : sanitizedContent;
 
-            await webhookService.sendMessageViaFluxerWebhook(webhook, {
-                content: messageContent,
-                username: message.author.username,
-                avatarURL: message.author.avatarURL() || '',
-                attachments: attachments,
+            const { messageId: webhookMessageId } =
+                await webhookService.sendMessageViaFluxerWebhook(webhook, {
+                    content: messageContent,
+                    username: message.author.username,
+                    avatarURL: message.author.avatarURL() || '',
+                    attachments: attachments,
+                });
+
+            await linkService.createMessageLink({
+                discordMessageId: message.id,
+                fluxerMessageId: webhookMessageId,
+                guildLinkId: linkedChannel.guildLinkId,
+                channelLinkId: linkedChannel.id,
             });
         } catch (error) {
             logger.error('Error relaying message to Fluxer:', error);

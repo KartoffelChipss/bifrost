@@ -67,11 +67,19 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
                 });
             });
 
-            await webhookService.sendMessageViaDiscordWebhook(webhook, {
-                content: sanitizedContent,
-                username: message.author.username,
-                avatarURL: message.author.avatarURL() || '',
-                attachments,
+            const { messageId: webhookMessageId } =
+                await webhookService.sendMessageViaDiscordWebhook(webhook, {
+                    content: sanitizedContent,
+                    username: message.author.username,
+                    avatarURL: message.author.avatarURL() || '',
+                    attachments,
+                });
+
+            await linkService.createMessageLink({
+                discordMessageId: webhookMessageId,
+                fluxerMessageId: message.id,
+                guildLinkId: linkedChannel.guildLinkId,
+                channelLinkId: linkedChannel.id,
             });
         } catch (error) {
             logger.error('Error relaying message to Discord:', error);
