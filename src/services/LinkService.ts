@@ -1,10 +1,12 @@
+import { MessageLinkRepository } from 'src/db/repositories/MessageLinkRepository';
 import { ChannelLinkRepository } from '../db/repositories/ChannelLinkRepository';
 import { GuildLinkRepository } from '../db/repositories/GuildLinkRepository';
 
 export class LinkService {
     constructor(
         private guildRepo: GuildLinkRepository,
-        private channelRepo: ChannelLinkRepository
+        private channelRepo: ChannelLinkRepository,
+        private messageRepo: MessageLinkRepository
     ) {}
 
     async getGuildLinkForDiscordGuild(discordGuildId: string) {
@@ -145,5 +147,31 @@ export class LinkService {
 
     async getChannelLinkByFluxerChannelId(fluxerChannelId: string) {
         return this.channelRepo.findByFluxerChannelId(fluxerChannelId);
+    }
+
+    async getMessageLinkByDiscordMessageId(discordMessageId: string) {
+        return this.messageRepo.getMessageLinkByDiscordMessageId(discordMessageId);
+    }
+
+    async getMessageLinkByFluxerMessageId(fluxerMessageId: string) {
+        return this.messageRepo.getMessageLinkByFluxerMessageId(fluxerMessageId);
+    }
+
+    async createMessageLink(
+        guildLinkId: string,
+        channelLinkId: string,
+        discordMessageId: string,
+        fluxerMessageId: string
+    ) {
+        return this.messageRepo.createMessageLink(
+            guildLinkId,
+            channelLinkId,
+            discordMessageId,
+            fluxerMessageId
+        );
+    }
+
+    async deleteMessageLink(id: string) {
+        return this.messageRepo.deleteMessageLink(id);
     }
 }
