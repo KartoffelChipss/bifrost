@@ -21,7 +21,7 @@ Join out community Fluxer server for support, updates and to share your feedback
 
 ### Hosted Bot
 
-1. Invite the Bifröst bot to your Discord server using [this link](https://web.fluxer.app/oauth2/authorize?client_id=1475208219145040215&scope=bot&permissions=536939520).
+1. Invite the Bifröst bot to your Fluxer server using [this link](https://web.fluxer.app/oauth2/authorize?client_id=1475208219145040215&scope=bot&permissions=536939520) and to your Discord server using [this link](https://discord.com/oauth2/authorize?client_id=1475436995697180845&permissions=536939520&integration_type=0&scope=bot).
 2. Use the `!b linkguild <discordGuildId>` command in your Fluxer server to link your Discord server. 
    
    You can find your Discord Guild ID by enabling Developer Mode in Discord settings and right-clicking on your server name. (Alternatively you can also use `!b linkguild <fluxerGuildId>` on your Discord server to link your Fluxer server)
