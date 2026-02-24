@@ -1,4 +1,6 @@
-export default class CommandRegistry<T> {
+import CommandHandler from './CommandHandler';
+
+export default class CommandRegistry<T extends CommandHandler<any, any>> {
     private readonly commandHandlers: Map<string, T>;
 
     constructor() {
