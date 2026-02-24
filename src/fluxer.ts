@@ -13,82 +13,7 @@ import ChannelLinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelL
 import ListChannelsFluxerCommandHandler from './commands/fluxer/handlers/ListChannelsFluxerCommandHandler';
 import ChannelUnlinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelUnlinkFluxerCommandHandler';
 import { WebhookService } from './services/WebhookService';
-import { buildFluxerStickerUrl } from './utils/buildStickerUrl';
-import { breakMentions, escapeMentions, sanitizeMentions } from './utils/sanitizeMentions';
-
-const relayMessage = async (
-    message: Message,
-    linkService: LinkService,
-    webhookService: WebhookService
-) => {
-    const linkedChannel = await linkService.getChannelLinkByFluxerChannelId(message.channelId);
-    if (!linkedChannel) return;
-
-    try {
-        const webhook = await webhookService.getDiscordWebhook(
-            linkedChannel.discordWebhookId,
-            linkedChannel.discordWebhookToken
-        );
-        if (!webhook) {
-            logger.warn(
-                `No webhook found for linked channel ${linkedChannel.linkId}, cannot relay message`
-            );
-            return;
-        }
-
-        const sanitizedContent = breakMentions(
-            sanitizeMentions(message.content, {
-                resolveUser: (id) => {
-                    const user = message.client.users.get(id);
-                    return user ? user.username : null;
-                },
-                resolveRole: (id) => {
-                    if (!message.guild) return null;
-                    const role = message.guild.roles.get(id);
-                    return role ? role.name : null;
-                },
-                resolveChannel: (id) => {
-                    const channel = message.client.channels.get(id);
-                    return channel ? channel.name : null;
-                },
-            })
-        );
-
-        const attachments = message.attachments
-            .filter(
-                (attachment) =>
-                    attachment.url !== null &&
-                    attachment.url !== undefined &&
-                    attachment.url !== '' &&
-                    !!attachment.url
-            )
-            .map((attachment) => ({
-                url: attachment.url!,
-                name: attachment.filename || 'attachment',
-                spoiler:
-                    attachment.flags && attachment.flags & MessageAttachmentFlags.IS_SPOILER
-                        ? true
-                        : false,
-            }));
-
-        message.stickers.forEach((sticker) => {
-            attachments.push({
-                url: buildFluxerStickerUrl(sticker.id, sticker.animated || false, 160),
-                name: sticker.name + '.webp',
-                spoiler: false,
-            });
-        });
-
-        await webhookService.sendMessageViaDiscordWebhook(webhook, {
-            content: sanitizedContent,
-            username: message.author.username,
-            avatarURL: message.author.avatarURL() || '',
-            attachments,
-        });
-    } catch (error) {
-        logger.error('Error relaying message to Discord:', error);
-    }
-};
+import FluxerToDiscordMessageRelay from './services/FluxerToDiscordMessageRelay';
 
 const startFluxerClient = async ({
     linkService,
@@ -100,6 +25,11 @@ const startFluxerClient = async ({
     const client = new Client({ intents: 0, waitForGuilds: true });
 
     webhookService.setFluxerClient(client);
+
+    const messageRelay = new FluxerToDiscordMessageRelay({
+        linkService,
+        webhookService,
+    });
 
     const commandRegistry = new CommandRegistry<FluxerCommandHandler>();
     commandRegistry.registerCommand('ping', new PingFluxerCommandHandler(client));
@@ -154,7 +84,7 @@ const startFluxerClient = async ({
                 message.channel instanceof TextChannel &&
                 !isCommandString(message.content, COMMAND_PREFIX)
             ) {
-                await relayMessage(message, linkService, webhookService);
+                await messageRelay.relayMessage(message);
             }
         });
 
