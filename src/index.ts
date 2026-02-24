@@ -1,3 +1,5 @@
+import { CachedChannelLinkRepository } from './db/cachedrepos/CachedChannelLinkRepository';
+import { CachedGuildLinkRepository } from './db/cachedrepos/CachedGuildLinkRepository';
 import { initDatabase } from './db/sequelize';
 import { SequelizeChannelLinkRepository } from './db/sequelizerepos/SequelizeChannelLinkRepository';
 import { SequelizeGuildLinkRepository } from './db/sequelizerepos/SequelizeGuildLinkRepository';
@@ -13,7 +15,10 @@ const main = async () => {
     const guildLinkRepo = new SequelizeGuildLinkRepository();
     const channelLinkRepo = new SequelizeChannelLinkRepository();
 
-    const linkService = new LinkService(guildLinkRepo, channelLinkRepo);
+    const cachedGuildLinkRepo = new CachedGuildLinkRepository(guildLinkRepo, 0);
+    const cachedChannelLinkRepo = new CachedChannelLinkRepository(channelLinkRepo, 0);
+
+    const linkService = new LinkService(cachedGuildLinkRepo, cachedChannelLinkRepo);
     const webhookService = new WebhookService(linkService);
 
     const [discordClient, fluxerClient] = await Promise.all([

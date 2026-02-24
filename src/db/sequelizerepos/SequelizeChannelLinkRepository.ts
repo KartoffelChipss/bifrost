@@ -44,6 +44,16 @@ export class SequelizeChannelLinkRepository implements ChannelLinkRepository {
         return models.map((m) => m.toJSON() as ChannelLink);
     }
 
+    async findById(id: string): Promise<ChannelLink | null> {
+        const model = await ChannelLinkModel.findOne({
+            where: { id },
+        });
+
+        if (!model) return null;
+
+        return model.toJSON() as ChannelLink;
+    }
+
     async findByDiscordChannelId(discordChannelId: string): Promise<ChannelLink | null> {
         const model = await ChannelLinkModel.findOne({
             where: { discordChannelId },

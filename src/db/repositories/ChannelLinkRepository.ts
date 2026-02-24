@@ -15,6 +15,8 @@ export interface ChannelLinkRepository {
 
     findAllByGuild(guildLinkId: string): Promise<ChannelLink[]>;
 
+    findById(id: string): Promise<ChannelLink | null>;
+
     findByDiscordChannelId(discordChannelId: string): Promise<ChannelLink | null>;
 
     findByFluxerChannelId(fluxerChannelId: string): Promise<ChannelLink | null>;
