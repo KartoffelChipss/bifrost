@@ -14,17 +14,21 @@ import ChannelUnlinkFluxerCommandHandler from './commands/fluxer/handlers/Channe
 import { WebhookService } from './services/WebhookService';
 import FluxerToDiscordMessageRelay from './services/FluxerToDiscordMessageRelay';
 import HelpFluxerCommandHandler from './commands/fluxer/handlers/HelpFluxerCommandHandler';
+import HealthCheckService from './services/HealthCheckService';
 
 const startFluxerClient = async ({
     linkService,
     webhookService,
+    healthCheckService,
 }: {
     linkService: LinkService;
     webhookService: WebhookService;
+    healthCheckService: HealthCheckService;
 }): Promise<Client> => {
     const client = new Client({ intents: 0, waitForGuilds: true });
 
     webhookService.setFluxerClient(client);
+    healthCheckService.setFluxerClient(client);
 
     const messageRelay = new FluxerToDiscordMessageRelay({
         linkService,
@@ -54,6 +58,10 @@ const startFluxerClient = async ({
     client.once(Events.Ready, () => {
         logger.info('Fluxer bot is ready!');
         logger.info(`Fluxer bot is in ${client.guilds.size} guilds`);
+
+        setInterval(async () => {
+            await healthCheckService.pushFluxerHealthStatus();
+        }, 30_000);
     });
 
     client.on(Events.Error, (error) => {

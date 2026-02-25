@@ -13,13 +13,16 @@ import ChannelUnlinkDiscordCommandHandler from './commands/discord/handlers/Chan
 import { WebhookService } from './services/WebhookService';
 import DiscordToFluxerMessageRelay from './services/DiscordToFluxerMessageRelay';
 import HelpDiscordCommandHandler from './commands/discord/handlers/HelpDiscordCommandHandler';
+import HealthCheckService from './services/HealthCheckService';
 
 const startDiscordClient = async ({
     linkService,
     webhookService,
+    healthCheckService,
 }: {
     linkService: LinkService;
     webhookService: WebhookService;
+    healthCheckService: HealthCheckService;
 }): Promise<Client> => {
     const client = new Client({
         intents: [
@@ -31,6 +34,7 @@ const startDiscordClient = async ({
     });
 
     webhookService.setDiscordClient(client);
+    healthCheckService.setDiscordClient(client);
 
     const messageRelay = new DiscordToFluxerMessageRelay({
         linkService,
@@ -59,6 +63,10 @@ const startDiscordClient = async ({
 
     client.once('clientReady', () => {
         logger.info(`Discord bot logged in as ${client.user?.tag}`);
+
+        setInterval(async () => {
+            await healthCheckService.pushDiscordHealthStatus();
+        }, 30_000);
     });
 
     client.on('error', (error) => {
