@@ -141,6 +141,10 @@ export class LinkService {
         return this.channelRepo.findAllByGuild(guildLink.id);
     }
 
+    async getChannelLinkById(id: string) {
+        return this.channelRepo.findById(id);
+    }
+
     async getChannelLinkByDiscordChannelId(discordChannelId: string) {
         return this.channelRepo.findByDiscordChannelId(discordChannelId);
     }

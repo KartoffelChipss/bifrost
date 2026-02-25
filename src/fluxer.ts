@@ -59,6 +59,36 @@ const startFluxerClient = async ({
         .events.Error((error) => {
             logger.error('Fluxer client error:', error);
         })
+        .events.MessageDelete(async (message) => {
+            console.log('Message deleted:', message.id);
+
+            const linkedMessage = await linkService.getMessageLinkByDiscordMessageId(message.id);
+            if (!linkedMessage) return;
+
+            console.log('Found linked message:', linkedMessage);
+
+            const linkedChannel = await linkService.getChannelLinkById(linkedMessage.channelLinkId);
+            if (!linkedChannel) return;
+
+            console.log('Found linked channel:', linkedChannel);
+
+            const webhook = await webhookService.getDiscordWebhook(
+                linkedChannel.discordWebhookId,
+                linkedChannel.discordWebhookToken
+            );
+            if (!webhook) {
+                logger.warn(
+                    `No webhook found for linked channel ${linkedChannel.linkId}, cannot relay message deletion`
+                );
+                return;
+            }
+
+            try {
+                await webhook.deleteMessage(linkedMessage.discordMessageId);
+            } catch (error) {
+                logger.error('Error relaying message deletion to Discord:', error);
+            }
+        })
         .events.MessageCreate(async (message) => {
             if (message.author.id === client.user?.id) return;
             if (message.author.bot) return;
