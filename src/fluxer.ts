@@ -13,6 +13,7 @@ import ListChannelsFluxerCommandHandler from './commands/fluxer/handlers/ListCha
 import ChannelUnlinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelUnlinkFluxerCommandHandler';
 import { WebhookService } from './services/WebhookService';
 import FluxerToDiscordMessageRelay from './services/FluxerToDiscordMessageRelay';
+import HelpFluxerCommandHandler from './commands/fluxer/handlers/HelpFluxerCommandHandler';
 
 const startFluxerClient = async ({
     linkService,
@@ -32,6 +33,7 @@ const startFluxerClient = async ({
 
     const commandRegistry = new CommandRegistry<FluxerCommandHandler>();
     commandRegistry.registerCommand('ping', new PingFluxerCommandHandler(client));
+    commandRegistry.registerCommand('help', new HelpFluxerCommandHandler(client));
     commandRegistry.registerCommand(
         'linkguild',
         new GuildLinkFluxerCommandHandler(client, linkService)

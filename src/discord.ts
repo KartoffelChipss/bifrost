@@ -12,6 +12,7 @@ import ListChannelsDiscordCommandHandler from './commands/discord/handlers/ListC
 import ChannelUnlinkDiscordCommandHandler from './commands/discord/handlers/ChannelUnlinkDiscordCommandHandler';
 import { WebhookService } from './services/WebhookService';
 import DiscordToFluxerMessageRelay from './services/DiscordToFluxerMessageRelay';
+import HelpDiscordCommandHandler from './commands/discord/handlers/HelpDiscordCommandHandler';
 
 const startDiscordClient = async ({
     linkService,
@@ -38,6 +39,7 @@ const startDiscordClient = async ({
 
     const commandRegistry = new CommandRegistry<DiscordCommandHandler>();
     commandRegistry.registerCommand('ping', new PingDiscordCommandHandler(client));
+    commandRegistry.registerCommand('help', new HelpDiscordCommandHandler(client));
     commandRegistry.registerCommand(
         'linkguild',
         new GuildLinkDiscordCommandHandler(client, linkService)

@@ -1,15 +1,17 @@
-import { getUsageMessage } from '../utils/usageMessage';
+import { COMMAND_PREFIX } from '../utils/env';
 
-interface CommandInfo {
+export interface CommandInfo {
     description: string;
     usageArgs: string[];
 }
 
-interface Command {
+export interface Command {
     name: string;
     discord: CommandInfo;
     fluxer: CommandInfo;
 }
+
+export type CommandPlatform = 'discord' | 'fluxer';
 
 const commandList: Command[] = [
     {
@@ -69,11 +71,29 @@ const commandList: Command[] = [
     },
 ];
 
-export const getCommandUsage = (commandName: string, platform: 'discord' | 'fluxer'): string => {
+export const getCommandUsage = (commandName: string, platform: CommandPlatform): string => {
     const command = commandList.find((cmd) => cmd.name === commandName);
-    if (!command) {
-        return `Command \`${commandName}\` not found.`;
-    }
+    if (!command) return `Command \`${commandName}\` not found.`;
     const commandInfo = platform === 'discord' ? command.discord : command.fluxer;
-    return getUsageMessage(command.name, commandInfo.usageArgs, commandInfo.description);
+    const baseMessage = `Usage: \`${COMMAND_PREFIX}${commandName} ${commandInfo.usageArgs.join(' ')}\``;
+    return `${baseMessage}\n> ${commandInfo.description}`;
+};
+
+export const getHelpMessage = (platform: CommandPlatform): string => {
+    function getHelpLine(command: Command): string {
+        const usage =
+            command.discord.usageArgs && command.discord.usageArgs.length > 0
+                ? `${COMMAND_PREFIX}${command.name} ${command.discord.usageArgs.join(' ')}`
+                : `${COMMAND_PREFIX}${command.name}`;
+        return `- \`${usage}\`: ${platform === 'discord' ? command.discord.description : command.fluxer.description}`;
+    }
+
+    const helpMessage = `
+**Available Commands:**
+${commandList.map((cmd) => getHelpLine(cmd)).join('\n')}
+
+Use \`${COMMAND_PREFIX}<command>\` to execute a command. For example, \`${COMMAND_PREFIX}ping\`.
+    `;
+
+    return helpMessage;
 };

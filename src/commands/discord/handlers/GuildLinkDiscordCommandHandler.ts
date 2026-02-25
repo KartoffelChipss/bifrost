@@ -1,4 +1,3 @@
-import { getUsageMessage } from '../../../utils/usageMessage';
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import { Client, PermissionFlagsBits } from 'discord.js';
