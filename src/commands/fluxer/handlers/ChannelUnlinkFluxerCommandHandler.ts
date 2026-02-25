@@ -1,8 +1,8 @@
 import { Client, Message, PermissionFlags } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
-import { getUsageMessage } from '../../../utils/usageMessage';
 import logger from '../../../utils/logging/logger';
+import { getCommandUsage } from '../../../commands/commandList';
 
 export default class ChannelUnlinkFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
@@ -28,12 +28,8 @@ export default class ChannelUnlinkFluxerCommandHandler extends FluxerCommandHand
             return;
         }
 
-        if (args.length < 1 || args[0] === 'help') {
-            const usage = getUsageMessage(
-                command,
-                ['<link-id>'],
-                'Unlinks a channel link. Get the link ID from the listchannels command.'
-            );
+        if (args.length < 1 || args[0].toLowerCase() === 'help') {
+            const usage = getCommandUsage(command, 'fluxer');
             await message.reply(usage);
             return;
         }

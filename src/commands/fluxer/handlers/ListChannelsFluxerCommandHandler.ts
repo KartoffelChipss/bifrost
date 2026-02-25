@@ -2,6 +2,7 @@ import { Client, Message } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import logger from '../../../utils/logging/logger';
+import { getCommandUsage } from '../../../commands/commandList';
 
 export default class ListChannelsFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
@@ -17,6 +18,12 @@ export default class ListChannelsFluxerCommandHandler extends FluxerCommandHandl
         ...args: string[]
     ): Promise<void> {
         try {
+            if (args.length > 0 && args[0].toLowerCase() === 'help') {
+                const usage = getCommandUsage(command, 'fluxer');
+                await message.reply(usage);
+                return;
+            }
+
             const channelLinks = await this.linkService.getChannelLinksForFluxerGuild(
                 message.guildId!
             );

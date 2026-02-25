@@ -3,6 +3,7 @@ import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import { Client, PermissionFlagsBits } from 'discord.js';
 import logger from '../../../utils/logging/logger';
+import { getCommandUsage } from '../../../commands/commandList';
 
 export default class GuildLinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
@@ -30,12 +31,8 @@ export default class GuildLinkDiscordCommandHandler extends DiscordCommandHandle
             return;
         }
 
-        if (args.length < 1 || args[0] === 'help') {
-            const usage = getUsageMessage(
-                command,
-                ['<fluxerGuildId>'],
-                'Creates a link between this Discord guild and a Fluxer guild'
-            );
+        if (args.length < 1 || args[0].toLowerCase() === 'help') {
+            const usage = getCommandUsage(command, 'discord');
             await message.reply(usage);
             return;
         }

@@ -1,9 +1,9 @@
-import { getUsageMessage } from '../../../utils/usageMessage';
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import { Client, PermissionFlagsBits } from 'discord.js';
 import logger from '../../../utils/logging/logger';
 import { WebhookService } from '../../../services/WebhookService';
+import { getCommandUsage } from '../../../commands/commandList';
 
 export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
@@ -31,12 +31,8 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
             return;
         }
 
-        if (args.length < 1 || args[0] === 'help') {
-            const usage = getUsageMessage(
-                command,
-                ['<fluxer-channel-id>'],
-                'Links the current Discord channel to a Fluxer channel.'
-            );
+        if (args.length < 1 || args[0].toLowerCase() === 'help') {
+            const usage = getCommandUsage(command, 'discord');
             await message.reply(usage);
             return;
         }

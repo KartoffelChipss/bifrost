@@ -1,8 +1,8 @@
-import { getUsageMessage } from '../../../utils/usageMessage';
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import { Client, PermissionFlagsBits } from 'discord.js';
 import logger from '../../../utils/logging/logger';
+import { getCommandUsage } from '../../../commands/commandList';
 
 export default class ChannelUnlinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
@@ -28,12 +28,8 @@ export default class ChannelUnlinkDiscordCommandHandler extends DiscordCommandHa
             return;
         }
 
-        if (args.length < 1 || args[0] === 'help') {
-            const usage = getUsageMessage(
-                command,
-                ['<link-id>'],
-                'Unlinks a channel link. Get the link ID from the listchannels command.'
-            );
+        if (args.length < 1 || args[0].toLowerCase() === 'help') {
+            const usage = getCommandUsage(command, 'discord');
             await message.reply(usage);
             return;
         }

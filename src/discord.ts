@@ -82,7 +82,9 @@ const startDiscordClient = async ({
             const { command, args } = parseCommandString(message.content, COMMAND_PREFIX);
             const handler = commandRegistry.getCommandHandler(command);
             if (!handler) {
-                await message.reply(`Unknown command: \`${command}\``);
+                await message.reply(
+                    `Unknown command: \`${command}\`\nUse \`${COMMAND_PREFIX}help\` to see available commands.`
+                );
                 return;
             }
 

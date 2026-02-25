@@ -1,8 +1,8 @@
 import { Client, Message, PermissionFlags } from '@fluxerjs/core';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import { LinkService } from '../../../services/LinkService';
-import { getUsageMessage } from '../../../utils/usageMessage';
 import logger from '../../../utils/logging/logger';
+import { getCommandUsage } from '../../../commands/commandList';
 
 export default class GuildLinkFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
@@ -30,12 +30,8 @@ export default class GuildLinkFluxerCommandHandler extends FluxerCommandHandler 
             return;
         }
 
-        if (args.length < 1 || args[0] === 'help') {
-            const usage = getUsageMessage(
-                command,
-                ['<discordGuildId>'],
-                'Creates a link between a Discord guild and this Fluxer guild'
-            );
+        if (args.length < 1 || args[0].toLowerCase() === 'help') {
+            const usage = getCommandUsage(command, 'fluxer');
             await message.reply(usage);
             return;
         }
