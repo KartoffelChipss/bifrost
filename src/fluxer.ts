@@ -1,4 +1,4 @@
-import { Client, TextChannel } from '@fluxerjs/core';
+import { Client, Events, TextChannel } from '@fluxerjs/core';
 import CommandRegistry from './commands/CommandRegistry';
 import PingFluxerCommandHandler from './commands/fluxer/handlers/PingFluxerCommandHandler';
 import { isCommandString, parseCommandString } from './commands/parseCommandString';
@@ -51,74 +51,76 @@ const startFluxerClient = async ({
         new ChannelUnlinkFluxerCommandHandler(client, linkService)
     );
 
-    client.events
-        .Ready(() => {
-            logger.info('Fluxer bot is ready!');
-            logger.info(`Fluxer bot is in ${client.guilds.size} guilds`);
-        })
-        .events.Error((error) => {
-            logger.error('Fluxer client error:', error);
-        })
-        .events.MessageDelete(async (message) => {
-            console.log('Message deleted:', message.id);
+    client.once(Events.Ready, () => {
+        logger.info('Fluxer bot is ready!');
+        logger.info(`Fluxer bot is in ${client.guilds.size} guilds`);
+    });
 
-            const linkedMessage = await linkService.getMessageLinkByDiscordMessageId(message.id);
-            if (!linkedMessage) return;
+    client.on(Events.Error, (error) => {
+        logger.error('Fluxer client error:', error);
+    });
 
-            console.log('Found linked message:', linkedMessage);
+    client.on(Events.MessageDelete, async (message) => {
+        console.log('Message deleted:', message.id);
 
-            const linkedChannel = await linkService.getChannelLinkById(linkedMessage.channelLinkId);
-            if (!linkedChannel) return;
+        const linkedMessage = await linkService.getMessageLinkByDiscordMessageId(message.id);
+        if (!linkedMessage) return;
 
-            console.log('Found linked channel:', linkedChannel);
+        console.log('Found linked message:', linkedMessage);
 
-            const webhook = await webhookService.getDiscordWebhook(
-                linkedChannel.discordWebhookId,
-                linkedChannel.discordWebhookToken
+        const linkedChannel = await linkService.getChannelLinkById(linkedMessage.channelLinkId);
+        if (!linkedChannel) return;
+
+        console.log('Found linked channel:', linkedChannel);
+
+        const webhook = await webhookService.getDiscordWebhook(
+            linkedChannel.discordWebhookId,
+            linkedChannel.discordWebhookToken
+        );
+        if (!webhook) {
+            logger.warn(
+                `No webhook found for linked channel ${linkedChannel.linkId}, cannot relay message deletion`
             );
-            if (!webhook) {
-                logger.warn(
-                    `No webhook found for linked channel ${linkedChannel.linkId}, cannot relay message deletion`
+            return;
+        }
+
+        try {
+            await webhook.deleteMessage(linkedMessage.discordMessageId);
+        } catch (error) {
+            logger.error('Error relaying message deletion to Discord:', error);
+        }
+    });
+
+    client.on(Events.MessageCreate, async (message) => {
+        if (message.author.id === client.user?.id) return;
+        if (message.author.bot) return;
+
+        if (!message.guildId) return;
+
+        if (isCommandString(message.content, COMMAND_PREFIX)) {
+            const { command, args } = parseCommandString(message.content, COMMAND_PREFIX);
+            const handler = commandRegistry.getCommandHandler(command);
+            if (!handler) {
+                await message.reply(
+                    `Unknown command: \`${command}\`\nUse \`${COMMAND_PREFIX}help\` to see available commands.`
                 );
                 return;
             }
 
             try {
-                await webhook.deleteMessage(linkedMessage.discordMessageId);
+                await handler.handleCommand(message, command, ...args);
             } catch (error) {
-                logger.error('Error relaying message deletion to Discord:', error);
+                logger.error(`Error executing fluxer command "${command}":`, error);
             }
-        })
-        .events.MessageCreate(async (message) => {
-            if (message.author.id === client.user?.id) return;
-            if (message.author.bot) return;
+        }
 
-            if (!message.guildId) return;
-
-            if (isCommandString(message.content, COMMAND_PREFIX)) {
-                const { command, args } = parseCommandString(message.content, COMMAND_PREFIX);
-                const handler = commandRegistry.getCommandHandler(command);
-                if (!handler) {
-                    await message.reply(
-                        `Unknown command: \`${command}\`\nUse \`${COMMAND_PREFIX}help\` to see available commands.`
-                    );
-                    return;
-                }
-
-                try {
-                    await handler.handleCommand(message, command, ...args);
-                } catch (error) {
-                    logger.error(`Error executing fluxer command "${command}":`, error);
-                }
-            }
-
-            if (
-                message.channel instanceof TextChannel &&
-                !isCommandString(message.content, COMMAND_PREFIX)
-            ) {
-                await messageRelay.relayMessage(message);
-            }
-        });
+        if (
+            message.channel instanceof TextChannel &&
+            !isCommandString(message.content, COMMAND_PREFIX)
+        ) {
+            await messageRelay.relayMessage(message);
+        }
+    });
 
     await client.login(process.env.FLUXER_BOT_TOKEN!);
 
