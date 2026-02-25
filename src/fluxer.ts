@@ -1,8 +1,7 @@
-import { Client, Message, MessageAttachmentFlags, TextChannel } from '@fluxerjs/core';
+import { Client, TextChannel } from '@fluxerjs/core';
 import CommandRegistry from './commands/CommandRegistry';
 import PingFluxerCommandHandler from './commands/fluxer/handlers/PingFluxerCommandHandler';
 import { isCommandString, parseCommandString } from './commands/parseCommandString';
-import WebhooktestFluxerCommandHandler from './commands/fluxer/handlers/WebhooktestFluxerCommandHandler';
 import './utils/env';
 import logger from './utils/logging/logger';
 import FluxerCommandHandler from './commands/fluxer/FluxerCommandHandler';
@@ -33,7 +32,6 @@ const startFluxerClient = async ({
 
     const commandRegistry = new CommandRegistry<FluxerCommandHandler>();
     commandRegistry.registerCommand('ping', new PingFluxerCommandHandler(client));
-    commandRegistry.registerCommand('webhooktest', new WebhooktestFluxerCommandHandler(client));
     commandRegistry.registerCommand(
         'linkguild',
         new GuildLinkFluxerCommandHandler(client, linkService)

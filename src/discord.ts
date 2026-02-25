@@ -1,18 +1,10 @@
-import {
-    Client,
-    GatewayIntentBits,
-    Message,
-    OmitPartialGroupDMChannel,
-    Partials,
-    TextChannel,
-} from 'discord.js';
+import { Client, GatewayIntentBits, Partials, TextChannel } from 'discord.js';
 import { COMMAND_PREFIX, DISCORD_BOT_TOKEN } from './utils/env';
 import logger from './utils/logging/logger';
 import CommandRegistry from './commands/CommandRegistry';
 import DiscordCommandHandler from './commands/discord/DiscordCommandHandler';
 import { isCommandString, parseCommandString } from './commands/parseCommandString';
 import PingDiscordCommandHandler from './commands/discord/handlers/PingDiscordCommandHandler';
-import WebhooktestDiscordCommandHandler from './commands/discord/handlers/WebhooktestDiscordCommandHandler';
 import { LinkService } from './services/LinkService';
 import GuildLinkDiscordCommandHandler from './commands/discord/handlers/GuildLinkDiscordCommandHandler';
 import ChannelLinkDiscordCommandHandler from './commands/discord/handlers/ChannelLinkDiscordCommandHandler';
@@ -46,7 +38,6 @@ const startDiscordClient = async ({
 
     const commandRegistry = new CommandRegistry<DiscordCommandHandler>();
     commandRegistry.registerCommand('ping', new PingDiscordCommandHandler(client));
-    commandRegistry.registerCommand('webhooktest', new WebhooktestDiscordCommandHandler(client));
     commandRegistry.registerCommand(
         'linkguild',
         new GuildLinkDiscordCommandHandler(client, linkService)
