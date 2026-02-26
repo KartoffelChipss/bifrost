@@ -4,15 +4,23 @@ import { Client, PermissionFlagsBits } from 'discord.js';
 import logger from '../../../utils/logging/logger';
 import { WebhookService } from '../../../services/WebhookService';
 import { getCommandUsage } from '../../../commands/commandList';
+import BridgeEntityResolver from 'src/services/BridgeEntityResolver';
 
 export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
     private readonly webhookService: WebhookService;
+    private readonly channelMessageFetcher: BridgeEntityResolver;
 
-    constructor(client: Client, linkService: LinkService, webhookService: WebhookService) {
+    constructor(
+        client: Client,
+        linkService: LinkService,
+        webhookService: WebhookService,
+        channelMessageFetcher: BridgeEntityResolver
+    ) {
         super(client);
         this.linkService = linkService;
         this.webhookService = webhookService;
+        this.channelMessageFetcher = channelMessageFetcher;
     }
 
     public async handleCommand(
@@ -38,6 +46,14 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
         }
 
         const fluxerChannelId = args[0];
+
+        try {
+            await this.channelMessageFetcher.fetchFluxerChannel(fluxerChannelId);
+        } catch (error: any) {
+            await message.reply(`Could not find Fluxer channel: ${error.message}`);
+            logger.error('Error fetching Fluxer channel:', error);
+            return;
+        }
 
         let guildLink = null;
         try {

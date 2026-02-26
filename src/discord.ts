@@ -14,15 +14,18 @@ import { WebhookService } from './services/WebhookService';
 import DiscordToFluxerMessageRelay from './services/DiscordToFluxerMessageRelay';
 import HelpDiscordCommandHandler from './commands/discord/handlers/HelpDiscordCommandHandler';
 import HealthCheckService from './services/HealthCheckService';
+import BridgeEntityResolver from './services/BridgeEntityResolver';
 
 const startDiscordClient = async ({
     linkService,
     webhookService,
     healthCheckService,
+    channelMessageFetcher,
 }: {
     linkService: LinkService;
     webhookService: WebhookService;
     healthCheckService: HealthCheckService;
+    channelMessageFetcher: BridgeEntityResolver;
 }): Promise<Client> => {
     const client = new Client({
         intents: [
@@ -35,6 +38,7 @@ const startDiscordClient = async ({
 
     webhookService.setDiscordClient(client);
     healthCheckService.setDiscordClient(client);
+    channelMessageFetcher.setDiscordClient(client);
 
     const messageRelay = new DiscordToFluxerMessageRelay({
         linkService,
@@ -50,7 +54,12 @@ const startDiscordClient = async ({
     );
     commandRegistry.registerCommand(
         'linkchannel',
-        new ChannelLinkDiscordCommandHandler(client, linkService, webhookService)
+        new ChannelLinkDiscordCommandHandler(
+            client,
+            linkService,
+            webhookService,
+            channelMessageFetcher
+        )
     );
     commandRegistry.registerCommand(
         'listchannels',
@@ -95,6 +104,11 @@ const startDiscordClient = async ({
         if (!webhook) return;
 
         console.log('Deleting Fluxer message with ID:', messageLink.fluxerMessageId);
+        const msg = await channelMessageFetcher.fetchFluxerMessage(
+            channelLink.fluxerChannelId,
+            messageLink.fluxerMessageId
+        );
+        console.log('Fetched Fluxer message:', msg);
     });
 
     client.on('messageCreate', async (message) => {

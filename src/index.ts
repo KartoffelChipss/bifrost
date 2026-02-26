@@ -7,6 +7,7 @@ import { SequelizeGuildLinkRepository } from './db/sequelizerepos/SequelizeGuild
 import { SequelizeMessageLinkRepository } from './db/sequelizerepos/SequelizeMessageLinkRepository';
 import startDiscordClient from './discord';
 import startFluxerClient from './fluxer';
+import BridgeEntityResolver from './services/BridgeEntityResolver';
 import HealthCheckService from './services/HealthCheckService';
 import { LinkService } from './services/LinkService';
 import { WebhookService } from './services/WebhookService';
@@ -35,10 +36,21 @@ const main = async () => {
         cachedMessageLinkRepo
     );
     const webhookService = new WebhookService(linkService);
+    const channelMessageFetcher = new BridgeEntityResolver();
 
     await Promise.all([
-        startDiscordClient({ linkService, webhookService, healthCheckService }),
-        startFluxerClient({ linkService, webhookService, healthCheckService }),
+        startDiscordClient({
+            linkService,
+            webhookService,
+            healthCheckService,
+            channelMessageFetcher,
+        }),
+        startFluxerClient({
+            linkService,
+            webhookService,
+            healthCheckService,
+            channelMessageFetcher,
+        }),
     ]);
 
     logger.info('Both Discord and Fluxer clients have started successfully.');
