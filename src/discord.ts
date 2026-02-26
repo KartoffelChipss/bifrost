@@ -30,7 +30,7 @@ const startDiscordClient = async ({
             GatewayIntentBits.GuildMessages,
             GatewayIntentBits.MessageContent,
         ],
-        partials: [Partials.Channel],
+        partials: [Partials.Message, Partials.Channel],
     });
 
     webhookService.setDiscordClient(client);
@@ -71,6 +71,31 @@ const startDiscordClient = async ({
 
     client.on('error', (error) => {
         logger.error('Discord client error:', error);
+    });
+
+    client.on('messageDelete', async (message) => {
+        if (message.webhookId) return;
+
+        const messageLink = await linkService.getMessageLinkByDiscordMessageId(message.id);
+        if (!messageLink) return;
+
+        try {
+            linkService.deleteMessageLink(messageLink.id);
+        } catch (error) {
+            logger.error('Error deleting message link from database:', error);
+        }
+
+        const channelLink = await linkService.getChannelLinkById(messageLink.channelLinkId);
+        if (!channelLink) return;
+
+        // get webhook
+        const webhook = await webhookService.getFluxerWebhook(
+            channelLink.fluxerWebhookId,
+            channelLink.fluxerWebhookToken
+        );
+        if (!webhook) return;
+
+        console.log('Deleting Fluxer message with ID:', messageLink.fluxerMessageId);
     });
 
     client.on('messageCreate', async (message) => {
