@@ -88,7 +88,6 @@ const startDiscordClient = async ({
         const channelLink = await linkService.getChannelLinkById(messageLink.channelLinkId);
         if (!channelLink) return;
 
-        // get webhook
         const webhook = await webhookService.getFluxerWebhook(
             channelLink.fluxerWebhookId,
             channelLink.fluxerWebhookToken

@@ -70,6 +70,8 @@ const startFluxerClient = async ({
     });
 
     client.on(Events.MessageDelete, async (message: PartialMessage) => {
+        // TODO: Check if message was sent by webhook and ignore it
+
         const linkedMessage = await linkService.getMessageLinkByFluxerMessageId(message.id);
         if (!linkedMessage) return;
 
@@ -97,6 +99,35 @@ const startFluxerClient = async ({
             await webhook.deleteMessage(linkedMessage.discordMessageId);
         } catch (error) {
             logger.error('Error relaying message deletion to Discord:', error);
+        }
+    });
+
+    client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
+        // TODO: Check if message was sent by webhook and ignore it
+
+        const linkedMessage = await linkService.getMessageLinkByFluxerMessageId(newMessage.id);
+        if (!linkedMessage) return;
+
+        const linkedChannel = await linkService.getChannelLinkById(linkedMessage.channelLinkId);
+        if (!linkedChannel) return;
+
+        const webhook = await webhookService.getDiscordWebhook(
+            linkedChannel.discordWebhookId,
+            linkedChannel.discordWebhookToken
+        );
+        if (!webhook) {
+            logger.warn(
+                `No webhook found for linked channel ${linkedChannel.linkId}, cannot relay message update`
+            );
+            return;
+        }
+
+        try {
+            await webhook.editMessage(linkedMessage.discordMessageId, {
+                content: newMessage.content,
+            });
+        } catch (error) {
+            logger.error('Error relaying message update to Discord:', error);
         }
     });
 
