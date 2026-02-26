@@ -1,4 +1,4 @@
-import { Client, Message, PermissionFlags } from '@fluxerjs/core';
+import { Client, GuildMember, Message, PermissionFlags } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import logger from '../../../utils/logging/logger';
@@ -17,7 +17,14 @@ export default class ChannelUnlinkFluxerCommandHandler extends FluxerCommandHand
         command: string,
         ...args: string[]
     ): Promise<void> {
-        const authorMember = await message.guild?.fetchMember(message.author.id);
+        let authorMember: GuildMember | null = null;
+        try {
+            authorMember = (await message.guild?.fetchMember(message.author.id)) || null;
+        } catch (error) {
+            logger.error('Error fetching member for ChannelUnlinkFluxerCommandHandler:', error);
+            await message.reply('Could not fetch your member information.');
+            return;
+        }
         if (!authorMember) {
             await message.reply('Could not fetch your member information.');
             return;

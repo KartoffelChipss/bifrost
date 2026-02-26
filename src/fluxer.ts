@@ -15,25 +15,27 @@ import { WebhookService } from './services/WebhookService';
 import FluxerToDiscordMessageRelay from './services/FluxerToDiscordMessageRelay';
 import HelpFluxerCommandHandler from './commands/fluxer/handlers/HelpFluxerCommandHandler';
 import HealthCheckService from './services/HealthCheckService';
-import { cli } from 'winston/lib/winston/config';
-import BridgeEntityResolver from './services/BridgeEntityResolver';
+import DiscordEntityResolver from './services/DiscordEntityResolver';
+import FluxerEntityResolver from './services/FluxerEntityResolver';
 
 const startFluxerClient = async ({
     linkService,
     webhookService,
     healthCheckService,
-    channelMessageFetcher,
+    discordEntityResolver,
+    fluxerEntityResolver,
 }: {
     linkService: LinkService;
     webhookService: WebhookService;
     healthCheckService: HealthCheckService;
-    channelMessageFetcher: BridgeEntityResolver;
+    discordEntityResolver: DiscordEntityResolver;
+    fluxerEntityResolver: FluxerEntityResolver;
 }): Promise<Client> => {
     const client = new Client({ intents: 0, waitForGuilds: true });
 
     webhookService.setFluxerClient(client);
     healthCheckService.setFluxerClient(client);
-    channelMessageFetcher.setFluxerClient(client);
+    fluxerEntityResolver.setFluxerClient(client);
 
     const messageRelay = new FluxerToDiscordMessageRelay({
         linkService,

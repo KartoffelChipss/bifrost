@@ -4,23 +4,23 @@ import { Client, PermissionFlagsBits } from 'discord.js';
 import logger from '../../../utils/logging/logger';
 import { WebhookService } from '../../../services/WebhookService';
 import { getCommandUsage } from '../../../commands/commandList';
-import BridgeEntityResolver from 'src/services/BridgeEntityResolver';
+import FluxerEntityResolver from 'src/services/FluxerEntityResolver';
 
 export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
     private readonly webhookService: WebhookService;
-    private readonly channelMessageFetcher: BridgeEntityResolver;
+    private readonly fluxerEntityResolver: FluxerEntityResolver;
 
     constructor(
         client: Client,
         linkService: LinkService,
         webhookService: WebhookService,
-        channelMessageFetcher: BridgeEntityResolver
+        fluxerEntityResolver: FluxerEntityResolver
     ) {
         super(client);
         this.linkService = linkService;
         this.webhookService = webhookService;
-        this.channelMessageFetcher = channelMessageFetcher;
+        this.fluxerEntityResolver = fluxerEntityResolver;
     }
 
     public async handleCommand(
@@ -47,14 +47,6 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
 
         const fluxerChannelId = args[0];
 
-        try {
-            await this.channelMessageFetcher.fetchFluxerChannel(fluxerChannelId);
-        } catch (error: any) {
-            await message.reply(`Could not find Fluxer channel: ${error.message}`);
-            logger.error('Error fetching Fluxer channel:', error);
-            return;
-        }
-
         let guildLink = null;
         try {
             guildLink = await this.linkService.getGuildLinkForDiscordGuild(message.guildId!);
@@ -64,6 +56,20 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
         } catch (error: any) {
             await message.reply(`Failed to get guild link: ${error.message}`);
             logger.error('Error fetching guild link:', error);
+            return;
+        }
+
+        try {
+            const c = await this.fluxerEntityResolver.fetchChannel(
+                guildLink.fluxerGuildId,
+                fluxerChannelId
+            );
+            if (!c) throw new Error('Channel not found');
+        } catch (error: any) {
+            await message.reply(
+                `Linking failed: Could not find Fluxer channel with ID \`${fluxerChannelId}\`.`
+            );
+            logger.error('Error fetching Fluxer channel:', error);
             return;
         }
 
