@@ -11,7 +11,16 @@ import BridgeEntityResolver from './services/BridgeEntityResolver';
 import HealthCheckService from './services/HealthCheckService';
 import { LinkService } from './services/LinkService';
 import { WebhookService } from './services/WebhookService';
-import { DISCORD_HEALTH_PUSH_URL, FLUXER_HEALTH_PUSH_URL } from './utils/env';
+import {
+    DISCORD_APPLICATION_ID,
+    DISCORD_HEALTH_PUSH_URL,
+    FLUXER_APPLICATION_ID,
+    FLUXER_HEALTH_PUSH_URL,
+} from './utils/env';
+import {
+    generateDiscordBotInviteLink,
+    generateFluxerBotInviteLink,
+} from './utils/generateBotInvite';
 import logger from './utils/logging/logger';
 
 const main = async () => {
@@ -37,6 +46,12 @@ const main = async () => {
     );
     const webhookService = new WebhookService(linkService);
     const channelMessageFetcher = new BridgeEntityResolver();
+
+    const perms = '536939520';
+    const discordBotInviteLink = generateDiscordBotInviteLink(DISCORD_APPLICATION_ID, perms);
+    logger.info(`Discord Bot Invite Link: ${discordBotInviteLink}`);
+    const fluxerBotInviteLink = generateFluxerBotInviteLink(FLUXER_APPLICATION_ID, perms);
+    logger.info(`Fluxer Bot Invite Link: ${fluxerBotInviteLink}`);
 
     await Promise.all([
         startDiscordClient({
