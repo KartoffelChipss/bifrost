@@ -19,3 +19,5 @@ export const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
 export const COMMAND_PREFIX = process.env.COMMAND_PREFIX || '!b ';
 export const DISCORD_HEALTH_PUSH_URL = process.env.DISCORD_HEALTH_PUSH_URL || null;
 export const FLUXER_HEALTH_PUSH_URL = process.env.FLUXER_HEALTH_PUSH_URL || null;
+export const FLUXER_APPLICATION_ID = process.env.FLUXER_APPLICATION_ID || '';
+export const DISCORD_APPLICATION_ID = process.env.DISCORD_APPLICATION_ID || '';
