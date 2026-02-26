@@ -1,4 +1,4 @@
-import { Client, Events, TextChannel } from '@fluxerjs/core';
+import { Client, Events, PartialMessage, TextChannel } from '@fluxerjs/core';
 import CommandRegistry from './commands/CommandRegistry';
 import PingFluxerCommandHandler from './commands/fluxer/handlers/PingFluxerCommandHandler';
 import { isCommandString, parseCommandString } from './commands/parseCommandString';
@@ -15,6 +15,7 @@ import { WebhookService } from './services/WebhookService';
 import FluxerToDiscordMessageRelay from './services/FluxerToDiscordMessageRelay';
 import HelpFluxerCommandHandler from './commands/fluxer/handlers/HelpFluxerCommandHandler';
 import HealthCheckService from './services/HealthCheckService';
+import { cli } from 'winston/lib/winston/config';
 
 const startFluxerClient = async ({
     linkService,
@@ -68,18 +69,18 @@ const startFluxerClient = async ({
         logger.error('Fluxer client error:', error);
     });
 
-    client.on(Events.MessageDelete, async (message) => {
-        console.log('Message deleted:', message.id);
-
-        const linkedMessage = await linkService.getMessageLinkByDiscordMessageId(message.id);
+    client.on(Events.MessageDelete, async (message: PartialMessage) => {
+        const linkedMessage = await linkService.getMessageLinkByFluxerMessageId(message.id);
         if (!linkedMessage) return;
 
-        console.log('Found linked message:', linkedMessage);
+        try {
+            linkService.deleteMessageLink(linkedMessage.id);
+        } catch (error) {
+            logger.error('Error deleting message link from database:', error);
+        }
 
         const linkedChannel = await linkService.getChannelLinkById(linkedMessage.channelLinkId);
         if (!linkedChannel) return;
-
-        console.log('Found linked channel:', linkedChannel);
 
         const webhook = await webhookService.getDiscordWebhook(
             linkedChannel.discordWebhookId,

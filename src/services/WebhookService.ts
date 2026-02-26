@@ -153,24 +153,29 @@ export class WebhookService {
         }
     ): Promise<{ messageId: string }> {
         try {
-            const msg = await webhook.send({
-                content: data.content,
-                username: data.username,
-                avatar_url: data.avatarURL,
-                files:
-                    data.attachments?.map((attachment) => ({
-                        url: attachment.url,
-                        name: attachment.name,
-                        filename: attachment.name,
-                    })) || [],
-                attachments:
-                    data.attachments?.map((attachment, index) => ({
-                        id: index,
-                        name: attachment.name,
-                        filename: attachment.name,
-                        flags: attachment.spoiler ? MessageAttachmentFlags.IS_SPOILER : undefined,
-                    })) || [],
-            });
+            const msg = await webhook.send(
+                {
+                    content: data.content,
+                    username: data.username,
+                    avatar_url: data.avatarURL,
+                    files:
+                        data.attachments?.map((attachment) => ({
+                            url: attachment.url,
+                            name: attachment.name,
+                            filename: attachment.name,
+                        })) || [],
+                    attachments:
+                        data.attachments?.map((attachment, index) => ({
+                            id: index,
+                            name: attachment.name,
+                            filename: attachment.name,
+                            flags: attachment.spoiler
+                                ? MessageAttachmentFlags.IS_SPOILER
+                                : undefined,
+                        })) || [],
+                },
+                true
+            );
 
             if (!msg) {
                 throw new Error('Did not receive message object after sending via Fluxer webhook');
