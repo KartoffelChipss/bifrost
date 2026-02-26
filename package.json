@@ -18,6 +18,8 @@
         "lru-cache": "^11.2.6",
         "nanoid": "^5.1.6",
         "node-cache": "^5.1.2",
+        "pg": "^8.19.0",
+        "pg-hstore": "^2.3.4",
         "sequelize": "^6.37.7",
         "sqlite3": "^5.1.7",
         "winston": "^3.19.0"

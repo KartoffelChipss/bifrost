@@ -1,0 +1,48 @@
+services:
+    bifrost:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: bifrost
+        restart: unless-stopped
+        depends_on:
+            postgres:
+                condition: service_healthy
+        env_file:
+            - .env
+        environment:
+            DB_DIALECT: postgres
+            DB_HOST: postgres
+            DB_PORT: 5432
+            DB_NAME: bifrost
+            DB_USER: bifrost_user
+            DB_PASS: ${POSTGRES_PASSWORD}
+        volumes:
+            - ./config:/config
+        networks:
+            - bifrost_network
+
+    postgres:
+        image: postgres:16
+        container_name: bifrost_postgres
+        restart: unless-stopped
+        environment:
+            POSTGRES_DB: bifrost
+            POSTGRES_USER: bifrost_user
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U bifrost_user -d bifrost']
+            interval: 10s
+            timeout: 5s
+            retries: 5
+        networks:
+            - bifrost_network
+
+volumes:
+    postgres_data:
+
+networks:
+    bifrost_network:
+        driver: bridge
