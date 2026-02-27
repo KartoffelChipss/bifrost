@@ -89,6 +89,8 @@ const startDiscordClient = async ({
         if (!message.inGuild()) return;
         if (message.webhookId) return;
 
+        console.log('Discord message deleted with ID:', message.id);
+
         const messageLink = await linkService.getMessageLinkByDiscordMessageId(message.id);
         if (!messageLink) return;
 
@@ -101,6 +103,9 @@ const startDiscordClient = async ({
         const channelLink = await linkService.getChannelLinkById(messageLink.channelLinkId);
         if (!channelLink) return;
 
+        const guildLink = await linkService.getGuildLinkForDiscordGuild(message.guildId!);
+        if (!guildLink) return;
+
         const webhook = await webhookService.getFluxerWebhook(
             channelLink.fluxerWebhookId,
             channelLink.fluxerWebhookToken
@@ -109,11 +114,24 @@ const startDiscordClient = async ({
 
         console.log('Deleting Fluxer message with ID:', messageLink.fluxerMessageId);
         const msg = await fluxerEntityResolver.fetchMessage(
-            message.guildId!,
+            guildLink.fluxerGuildId,
             channelLink.fluxerChannelId,
             messageLink.fluxerMessageId
         );
         console.log('Fetched Fluxer message:', msg);
+        if (!msg) {
+            logger.error(
+                'Could not find linked Fluxer message to delete for Discord message ID:',
+                message.id
+            );
+            return;
+        }
+
+        try {
+            await msg.delete();
+        } catch (error) {
+            logger.error('Error deleting message from Fluxer:', error);
+        }
     });
 
     client.on('messageCreate', async (message) => {
