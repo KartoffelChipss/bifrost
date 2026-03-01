@@ -4,7 +4,7 @@ import { Client, PermissionFlagsBits } from 'discord.js';
 import logger from '../../../utils/logging/logger';
 import { WebhookService } from '../../../services/WebhookService';
 import { getCommandUsage } from '../../../commands/commandList';
-import FluxerEntityResolver from 'src/services/FluxerEntityResolver';
+import FluxerEntityResolver from '../../../services/entityResolver/FluxerEntityResolver';
 
 export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;

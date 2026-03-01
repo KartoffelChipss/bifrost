@@ -12,11 +12,11 @@ import ChannelLinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelL
 import ListChannelsFluxerCommandHandler from './commands/fluxer/handlers/ListChannelsFluxerCommandHandler';
 import ChannelUnlinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelUnlinkFluxerCommandHandler';
 import { WebhookService } from './services/WebhookService';
-import FluxerToDiscordMessageRelay from './services/FluxerToDiscordMessageRelay';
+import FluxerToDiscordMessageRelay from './services/messageRelay/FluxerToDiscordMessageRelay';
 import HelpFluxerCommandHandler from './commands/fluxer/handlers/HelpFluxerCommandHandler';
 import HealthCheckService from './services/HealthCheckService';
-import DiscordEntityResolver from './services/DiscordEntityResolver';
-import FluxerEntityResolver from './services/FluxerEntityResolver';
+import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
+import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
 
 const startFluxerClient = async ({
     linkService,

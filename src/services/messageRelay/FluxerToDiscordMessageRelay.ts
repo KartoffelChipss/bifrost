@@ -1,8 +1,8 @@
 import { Message, MessageAttachmentFlags } from '@fluxerjs/core';
 import MessageRelay from './MessageRelay';
-import logger from '../utils/logging/logger';
-import { breakMentions, sanitizeMentions } from '../utils/sanitizeMentions';
-import { buildFluxerStickerUrl } from '../utils/buildStickerUrl';
+import logger from '../../utils/logging/logger';
+import { breakMentions, sanitizeMentions } from '../../utils/sanitizeMentions';
+import { buildFluxerStickerUrl } from '../../utils/buildStickerUrl';
 
 export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
     public async relayMessage(message: Message): Promise<void> {

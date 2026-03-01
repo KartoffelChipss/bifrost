@@ -1,5 +1,5 @@
 import { Channel, Client, Guild, Message } from 'discord.js';
-import EntityResolver from './EntityResolver';
+import EntityResolver from '../entityResolver/EntityResolver';
 
 export default class DiscordEntityResolver implements EntityResolver<
     Guild,

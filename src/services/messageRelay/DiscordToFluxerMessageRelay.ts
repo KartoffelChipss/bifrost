@@ -1,9 +1,9 @@
 import { Message, OmitPartialGroupDMChannel, TextChannel } from 'discord.js';
 import MessageRelay from './MessageRelay';
-import logger from '../utils/logging/logger';
-import { sanitizeMentions } from '../utils/sanitizeMentions';
-import { buildDiscordStickerUrl } from '../utils/buildStickerUrl';
-import { getPollMessage } from '../utils/pollMessageFormatter';
+import logger from '../../utils/logging/logger';
+import { sanitizeMentions } from '../../utils/sanitizeMentions';
+import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
+import { getPollMessage } from '../../utils/pollMessageFormatter';
 
 export default class DiscordToFluxerMessageRelay extends MessageRelay<
     OmitPartialGroupDMChannel<Message<boolean>>

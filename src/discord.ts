@@ -11,11 +11,11 @@ import ChannelLinkDiscordCommandHandler from './commands/discord/handlers/Channe
 import ListChannelsDiscordCommandHandler from './commands/discord/handlers/ListChannelsDiscordCommandHandler';
 import ChannelUnlinkDiscordCommandHandler from './commands/discord/handlers/ChannelUnlinkDiscordCommandHandler';
 import { WebhookService } from './services/WebhookService';
-import DiscordToFluxerMessageRelay from './services/DiscordToFluxerMessageRelay';
+import DiscordToFluxerMessageRelay from './services/messageRelay/DiscordToFluxerMessageRelay';
 import HelpDiscordCommandHandler from './commands/discord/handlers/HelpDiscordCommandHandler';
 import HealthCheckService from './services/HealthCheckService';
-import FluxerEntityResolver from './services/FluxerEntityResolver';
-import DiscordEntityResolver from './services/DiscordEntityResolver';
+import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
+import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
 
 const startDiscordClient = async ({
     linkService,

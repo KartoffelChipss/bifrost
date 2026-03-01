@@ -7,8 +7,8 @@ import { SequelizeGuildLinkRepository } from './db/sequelizerepos/SequelizeGuild
 import { SequelizeMessageLinkRepository } from './db/sequelizerepos/SequelizeMessageLinkRepository';
 import startDiscordClient from './discord';
 import startFluxerClient from './fluxer';
-import DiscordEntityResolver from './services/DiscordEntityResolver';
-import FluxerEntityResolver from './services/FluxerEntityResolver';
+import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
+import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
 import HealthCheckService from './services/HealthCheckService';
 import { LinkService } from './services/LinkService';
 import { WebhookService } from './services/WebhookService';

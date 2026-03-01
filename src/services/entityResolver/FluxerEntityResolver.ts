@@ -1,5 +1,5 @@
 import { Channel, Client, Guild, Message } from '@fluxerjs/core';
-import EntityResolver from './EntityResolver';
+import EntityResolver from '../entityResolver/EntityResolver';
 
 export default class FluxerEntityResolver implements EntityResolver<Guild, Channel, Message> {
     private fluxerClient: Client | null = null;

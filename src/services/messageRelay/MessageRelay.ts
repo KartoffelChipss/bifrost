@@ -1,5 +1,5 @@
-import { LinkService } from './LinkService';
-import { WebhookService } from './WebhookService';
+import { LinkService } from '../LinkService';
+import { WebhookService } from '../WebhookService';
 
 export default abstract class MessageRelay<T> {
     private readonly linkService: LinkService;
