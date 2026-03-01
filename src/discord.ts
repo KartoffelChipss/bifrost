@@ -180,17 +180,11 @@ const startDiscordClient = async ({
         if (message.author.id === client.user?.id) return;
         if (!message.inGuild()) return;
 
-        // prevent loops by ignoring messages sent by webhooks that were created by this bot
         if (message.webhookId) {
             const webhookLink = await linkService.getChannelLinkByDiscordChannelId(
                 message.channelId
             );
-            if (webhookLink && webhookLink.discordWebhookId === message.webhookId) {
-                logger.info(
-                    `Ignoring message from webhook ${message.webhookId} in channel ${message.channelId} to prevent loop`
-                );
-                return;
-            }
+            if (webhookLink && webhookLink.discordWebhookId === message.webhookId) return;
         }
 
         if (isCommandString(message.content, COMMAND_PREFIX) && !message.author.bot) {

@@ -172,12 +172,7 @@ const startFluxerClient = async ({
             const webhookLink = await linkService.getChannelLinkByFluxerChannelId(
                 message.channelId
             );
-            if (webhookLink && webhookLink.fluxerWebhookId === message.webhookId) {
-                logger.info(
-                    `Ignoring message from webhook ${message.webhookId} in channel ${message.channelId} to prevent loop`
-                );
-                return;
-            }
+            if (webhookLink && webhookLink.fluxerWebhookId === message.webhookId) return;
         }
 
         if (isCommandString(message.content, COMMAND_PREFIX)) {
