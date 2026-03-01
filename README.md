@@ -22,9 +22,6 @@ Join out community Fluxer server for support, updates and to share your feedback
 
 ### Hosted Bot
 
-> [!NOTE]  
-> The hosted instance isn't running 24/7 yet!
-
 1. Invite the Bifröst bot to your Fluxer server using [this link](https://web.fluxer.app/oauth2/authorize?client_id=1475208219145040215&scope=bot&permissions=536947712) and to your Discord server using [this link](https://discord.com/oauth2/authorize?client_id=1475436995697180845&permissions=536947712&integration_type=0&scope=bot).
 2. Use the `!b linkguild <discordGuildId>` command in your Fluxer server to link your Discord server.
 
@@ -35,6 +32,9 @@ Join out community Fluxer server for support, updates and to share your feedback
     You can find your Discord Channel ID by enabling Developer Mode in Discord settings and right-clicking on the channel name.
 
 4. That's it! Your channels are now linked and messages will be synced between them. 🎉
+
+> [!NOTE]  
+> You can check the uptime of the hosted instance [here](https://bifrost-status.jan.run)
 
 ### Self-Hosting with Docker
 
