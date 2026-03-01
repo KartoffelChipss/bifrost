@@ -1,4 +1,4 @@
-import { Client } from 'discord.js';
+import { Client, PermissionFlagsBits } from 'discord.js';
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import logger from '../../../utils/logging/logger';
@@ -18,6 +18,13 @@ export default class ListChannelsDiscordCommandHandler extends DiscordCommandHan
         ...args: string[]
     ): Promise<void> {
         try {
+            const hasPerms = await this.requirePermission(
+                message,
+                PermissionFlagsBits.ManageChannels,
+                'Manage Channels'
+            );
+            if (!hasPerms) return;
+
             if (args.length > 0 && args[0].toLowerCase() === 'help') {
                 const usage = getCommandUsage(command, 'discord');
                 await message.reply(usage);
