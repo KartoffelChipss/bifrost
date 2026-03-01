@@ -45,7 +45,7 @@ const main = async () => {
         cachedChannelLinkRepo,
         cachedMessageLinkRepo
     );
-    const webhookService = new WebhookService(linkService);
+    const webhookService = new WebhookService();
     const discordEntityResolver = new DiscordEntityResolver();
     const fluxerEntityResolver = new FluxerEntityResolver();
 

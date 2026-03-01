@@ -29,13 +29,8 @@ export type WebhookMessageData = {
 };
 
 export class WebhookService {
-    private readonly linkService: LinkService;
     private discordClient: DiscordClient | null = null;
     private fluxerClient: FluxerClient | null = null;
-
-    constructor(linkService: LinkService) {
-        this.linkService = linkService;
-    }
 
     setDiscordClient(client: DiscordClient) {
         this.discordClient = client;
@@ -107,6 +102,28 @@ export class WebhookService {
             return { messageId: id };
         } catch (error: any) {
             logger.error('Error sending message via Discord webhook:', error);
+            throw error;
+        }
+    }
+
+    async editMessageViaDiscordWebhook(
+        webhook: DiscordWebhook,
+        messageId: string,
+        data: WebhookMessageData
+    ): Promise<void> {
+        try {
+            const files = data.attachments?.map((att) => {
+                const attBuilder = new AttachmentBuilder(att.url, { name: att.name });
+                if (att.spoiler) attBuilder.setSpoiler(true);
+                return attBuilder;
+            });
+
+            await webhook.editMessage(messageId, {
+                content: data.content,
+                files,
+            });
+        } catch (error: any) {
+            logger.error('Error editing message via Discord webhook:', error);
             throw error;
         }
     }
