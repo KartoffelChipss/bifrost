@@ -38,6 +38,15 @@ const startDiscordClient = async ({
             GatewayIntentBits.MessageContent,
         ],
         partials: [Partials.Message, Partials.Channel],
+        presence: {
+            status: 'online',
+            activities: [
+                {
+                    name: 'Bridging to Fluxer',
+                    type: 0,
+                },
+            ],
+        },
     });
 
     webhookService.setDiscordClient(client);

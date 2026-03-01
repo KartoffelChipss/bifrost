@@ -32,7 +32,16 @@ const startFluxerClient = async ({
     discordEntityResolver: DiscordEntityResolver;
     fluxerEntityResolver: FluxerEntityResolver;
 }): Promise<Client> => {
-    const client = new Client({ intents: 0, waitForGuilds: true });
+    const client = new Client({
+        intents: 0,
+        waitForGuilds: true,
+        presence: {
+            status: 'online',
+            custom_status: {
+                text: 'Bridging to Discord',
+            },
+        },
+    });
 
     webhookService.setFluxerClient(client);
     healthCheckService.setFluxerClient(client);
