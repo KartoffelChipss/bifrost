@@ -91,8 +91,6 @@ const startDiscordClient = async ({
     client.on('messageDelete', async (message) => {
         if (!message.inGuild()) return;
 
-        console.log('Discord message deleted with ID:', message.id);
-
         const messageLink = await linkService.getMessageLinkByDiscordMessageId(message.id);
         if (!messageLink) return;
 
