@@ -66,7 +66,7 @@ const startDiscordClient = async ({
     commandRegistry.registerCommand('help', new HelpDiscordCommandHandler(client));
     commandRegistry.registerCommand(
         'linkguild',
-        new GuildLinkDiscordCommandHandler(client, linkService)
+        new GuildLinkDiscordCommandHandler(client, linkService, fluxerEntityResolver)
     );
     commandRegistry.registerCommand(
         'unlinkguild',
@@ -178,7 +178,6 @@ const startDiscordClient = async ({
 
     client.on('messageCreate', async (message) => {
         if (message.author.id === client.user?.id) return;
-        if (message.author.bot) return;
 
         if (!message.inGuild()) return;
 

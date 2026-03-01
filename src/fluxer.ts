@@ -60,7 +60,7 @@ const startFluxerClient = async ({
     commandRegistry.registerCommand('help', new HelpFluxerCommandHandler(client));
     commandRegistry.registerCommand(
         'linkguild',
-        new GuildLinkFluxerCommandHandler(client, linkService)
+        new GuildLinkFluxerCommandHandler(client, linkService, discordEntityResolver)
     );
     commandRegistry.registerCommand(
         'unlinkguild',

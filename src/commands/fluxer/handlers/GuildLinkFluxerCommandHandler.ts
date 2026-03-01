@@ -3,13 +3,20 @@ import FluxerCommandHandler from '../FluxerCommandHandler';
 import { LinkService } from '../../../services/LinkService';
 import logger from '../../../utils/logging/logger';
 import { getCommandUsage } from '../../../commands/commandList';
+import DiscordEntityResolver from '../../../services/entityResolver/DiscordEntityResolver';
 
 export default class GuildLinkFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
+    private readonly discordEntityResolver: DiscordEntityResolver;
 
-    constructor(client: Client, linkService: LinkService) {
+    constructor(
+        client: Client,
+        linkService: LinkService,
+        discordEntityResolver: DiscordEntityResolver
+    ) {
         super(client);
         this.linkService = linkService;
+        this.discordEntityResolver = discordEntityResolver;
     }
 
     public async handleCommand(
@@ -33,6 +40,20 @@ export default class GuildLinkFluxerCommandHandler extends FluxerCommandHandler 
         }
 
         const [discordGuildId] = args;
+
+        try {
+            const discordGuild = await this.discordEntityResolver.fetchGuild(discordGuildId);
+            if (!discordGuild) {
+                await message.reply(
+                    `Linking failed: Could not find Discord guild with ID \`${discordGuildId}\`.`
+                );
+                return;
+            }
+        } catch (error: any) {
+            await message.reply(`Failed to verify Discord guild: ${error.message}`);
+            logger.error('Error fetching Discord guild:', error);
+            return;
+        }
 
         try {
             const guildLink = await this.linkService.createGuildLink(discordGuildId, fluxerGuildId);
