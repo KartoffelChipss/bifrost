@@ -79,4 +79,10 @@ export class SequelizeChannelLinkRepository implements ChannelLinkRepository {
             where: { id },
         });
     }
+
+    async deleteByGuildLinkId(guildLinkId: string): Promise<void> {
+        await ChannelLinkModel.destroy({
+            where: { guildLinkId },
+        });
+    }
 }

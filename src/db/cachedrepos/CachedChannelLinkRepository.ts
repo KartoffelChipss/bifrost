@@ -128,4 +128,17 @@ export class CachedChannelLinkRepository implements ChannelLinkRepository {
         this.cache.del(this.fluxerKey(existing.fluxerChannelId));
         this.cache.del(this.guildAllKey(existing.guildLinkId));
     }
+
+    async deleteByGuildLinkId(guildLinkId: string): Promise<void> {
+        const existingLinks = await this.repository.findAllByGuild(guildLinkId);
+
+        await this.repository.deleteByGuildLinkId(guildLinkId);
+
+        existingLinks.forEach((link) => {
+            this.cache.del(this.guildKey(link.guildLinkId, link.linkId));
+            this.cache.del(this.discordKey(link.discordChannelId));
+            this.cache.del(this.fluxerKey(link.fluxerChannelId));
+        });
+        this.cache.del(this.guildAllKey(guildLinkId));
+    }
 }

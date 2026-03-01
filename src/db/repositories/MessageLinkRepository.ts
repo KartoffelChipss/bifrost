@@ -17,4 +17,6 @@ export interface MessageLinkRepository {
     deleteMessageLink(id: string): Promise<void>;
 
     deleteByGuildLinkId(guildLinkId: string): Promise<void>;
+
+    deleteByChannelLinkId(channelLinkId: string): Promise<void>;
 }

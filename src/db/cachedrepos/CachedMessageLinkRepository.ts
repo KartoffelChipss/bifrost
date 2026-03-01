@@ -71,6 +71,19 @@ export class CachedMessageLinkRepository implements MessageLinkRepository {
         }
     }
 
+    async deleteByChannelLinkId(channelLinkId: string): Promise<void> {
+        await this.repository.deleteByChannelLinkId(channelLinkId);
+
+        for (const [key, value] of this.cache.entries()) {
+            if (value.channelLinkId === channelLinkId) {
+                this.cache.delete(key);
+                this.cache.delete(this.idKey(value.id));
+                this.cache.delete(this.discordKey(value.discordMessageId));
+                this.cache.delete(this.fluxerKey(value.fluxerMessageId));
+            }
+        }
+    }
+
     async getMessageLinkById(id: string): Promise<MessageLink | null> {
         const key = this.idKey(id);
         const cached = this.cache.get(key);

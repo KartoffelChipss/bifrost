@@ -22,4 +22,6 @@ export interface ChannelLinkRepository {
     findByFluxerChannelId(fluxerChannelId: string): Promise<ChannelLink | null>;
 
     deleteById(id: string): Promise<void>;
+
+    deleteByGuildLinkId(guildLinkId: string): Promise<void>;
 }

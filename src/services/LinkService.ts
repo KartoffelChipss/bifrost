@@ -41,6 +41,8 @@ export class LinkService {
             throw new Error('Guild not linked');
         }
 
+        await this.messageRepo.deleteByGuildLinkId(existingLink.id);
+        await this.channelRepo.deleteByGuildLinkId(existingLink.id);
         await this.guildRepo.deleteById(existingLink.id);
     }
 
@@ -50,6 +52,8 @@ export class LinkService {
             throw new Error('Guild not linked');
         }
 
+        await this.messageRepo.deleteByGuildLinkId(existingLink.id);
+        await this.channelRepo.deleteByGuildLinkId(existingLink.id);
         await this.guildRepo.deleteById(existingLink.id);
     }
 
