@@ -76,35 +76,39 @@ const startFluxerClient = async ({
     });
 
     client.on(Events.MessageDelete, async (message: PartialMessage) => {
-        // TODO: Check if message was sent by webhook and ignore it
-
-        const linkedMessage = await linkService.getMessageLinkByFluxerMessageId(message.id);
-        if (!linkedMessage) return;
+        const messageLink = await linkService.getMessageLinkByFluxerMessageId(message.id);
+        if (!messageLink) return;
 
         try {
-            linkService.deleteMessageLink(linkedMessage.id);
+            linkService.deleteMessageLink(messageLink.id);
         } catch (error) {
             logger.error('Error deleting message link from database:', error);
         }
 
-        const linkedChannel = await linkService.getChannelLinkById(linkedMessage.channelLinkId);
-        if (!linkedChannel) return;
+        const channelLink = await linkService.getChannelLinkById(messageLink.channelLinkId);
+        if (!channelLink) return;
 
-        const webhook = await webhookService.getDiscordWebhook(
-            linkedChannel.discordWebhookId,
-            linkedChannel.discordWebhookToken
+        const guildLink = await linkService.getGuildLinkById(channelLink.guildLinkId);
+        if (!guildLink) return;
+
+        //console.log('Deleting Discord message with ID:', messageLink.discordMessageId);
+        const msg = await discordEntityResolver.fetchMessage(
+            guildLink.discordGuildId,
+            channelLink.discordChannelId,
+            messageLink.discordMessageId
         );
-        if (!webhook) {
-            logger.warn(
-                `No webhook found for linked channel ${linkedChannel.linkId}, cannot relay message deletion`
+        if (!msg) {
+            logger.error(
+                'Could not find linked Discord message to delete for Fluxer message ID:',
+                message.id
             );
             return;
         }
 
         try {
-            await webhook.deleteMessage(linkedMessage.discordMessageId);
+            await msg.delete();
         } catch (error) {
-            logger.error('Error relaying message deletion to Discord:', error);
+            logger.error('Error deleting message from Discord:', error);
         }
     });
 

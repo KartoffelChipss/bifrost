@@ -9,6 +9,10 @@ export class LinkService {
         private messageRepo: MessageLinkRepository
     ) {}
 
+    async getGuildLinkById(id: string) {
+        return this.guildRepo.findById(id);
+    }
+
     async getGuildLinkForDiscordGuild(discordGuildId: string) {
         return this.guildRepo.findByDiscordGuildId(discordGuildId);
     }
