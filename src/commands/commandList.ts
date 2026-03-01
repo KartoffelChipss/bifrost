@@ -37,6 +37,17 @@ const commandList: Command[] = [
         },
     },
     {
+        name: 'unlinkguild',
+        discord: {
+            description: 'Unlinks this Discord guild from its linked Fluxer guild.',
+            usageArgs: [],
+        },
+        fluxer: {
+            description: 'Unlinks this Fluxer guild from its linked Discord guild.',
+            usageArgs: [],
+        },
+    },
+    {
         name: 'linkchannel',
         discord: {
             description: 'Links the current Discord channel to a Fluxer channel.',

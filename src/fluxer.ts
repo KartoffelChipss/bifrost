@@ -7,6 +7,7 @@ import logger from './utils/logging/logger';
 import FluxerCommandHandler from './commands/fluxer/FluxerCommandHandler';
 import { COMMAND_PREFIX } from './utils/env';
 import GuildLinkFluxerCommandHandler from './commands/fluxer/handlers/GuildLinkFluxerCommandHandler';
+import GuildUnlinkFluxerCommandHandler from './commands/fluxer/handlers/GuildUnlinkFluxerCommandHandler';
 import { LinkService } from './services/LinkService';
 import ChannelLinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelLinkFluxerCommandHandler';
 import ListChannelsFluxerCommandHandler from './commands/fluxer/handlers/ListChannelsFluxerCommandHandler';
@@ -60,6 +61,10 @@ const startFluxerClient = async ({
     commandRegistry.registerCommand(
         'linkguild',
         new GuildLinkFluxerCommandHandler(client, linkService)
+    );
+    commandRegistry.registerCommand(
+        'unlinkguild',
+        new GuildUnlinkFluxerCommandHandler(client, linkService)
     );
     commandRegistry.registerCommand(
         'linkchannel',

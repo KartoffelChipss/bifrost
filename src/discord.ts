@@ -7,6 +7,7 @@ import { isCommandString, parseCommandString } from './commands/parseCommandStri
 import PingDiscordCommandHandler from './commands/discord/handlers/PingDiscordCommandHandler';
 import { LinkService } from './services/LinkService';
 import GuildLinkDiscordCommandHandler from './commands/discord/handlers/GuildLinkDiscordCommandHandler';
+import GuildUnlinkDiscordCommandHandler from './commands/discord/handlers/GuildUnlinkDiscordCommandHandler';
 import ChannelLinkDiscordCommandHandler from './commands/discord/handlers/ChannelLinkDiscordCommandHandler';
 import ListChannelsDiscordCommandHandler from './commands/discord/handlers/ListChannelsDiscordCommandHandler';
 import ChannelUnlinkDiscordCommandHandler from './commands/discord/handlers/ChannelUnlinkDiscordCommandHandler';
@@ -66,6 +67,10 @@ const startDiscordClient = async ({
     commandRegistry.registerCommand(
         'linkguild',
         new GuildLinkDiscordCommandHandler(client, linkService)
+    );
+    commandRegistry.registerCommand(
+        'unlinkguild',
+        new GuildUnlinkDiscordCommandHandler(client, linkService)
     );
     commandRegistry.registerCommand(
         'linkchannel',
