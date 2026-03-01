@@ -16,6 +16,7 @@ import HelpDiscordCommandHandler from './commands/discord/handlers/HelpDiscordCo
 import HealthCheckService from './services/HealthCheckService';
 import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
+import DiscordMessageTransformer from './services/messageTransformer/DiscordMessageTranformer';
 
 const startDiscordClient = async ({
     linkService,
@@ -43,9 +44,11 @@ const startDiscordClient = async ({
     healthCheckService.setDiscordClient(client);
     discordEntityResolver.setDiscordClient(client);
 
+    const messageTransformer = new DiscordMessageTransformer();
     const messageRelay = new DiscordToFluxerMessageRelay({
         linkService,
         webhookService,
+        messageTransformer,
     });
 
     const commandRegistry = new CommandRegistry<DiscordCommandHandler>();
@@ -125,6 +128,41 @@ const startDiscordClient = async ({
             logger.error('Error deleting message from Fluxer:', error);
         }
     });
+
+    // client.on('messageUpdate', async (oldMessage, newMessage) => {
+    //     if (!newMessage.inGuild()) return;
+
+    //     const messageLink = await linkService.getMessageLinkByDiscordMessageId(newMessage.id);
+    //     if (!messageLink) return;
+
+    //     const channelLink = await linkService.getChannelLinkById(messageLink.channelLinkId);
+    //     if (!channelLink) return;
+
+    //     const guildLink = await linkService.getGuildLinkById(channelLink.guildLinkId);
+    //     if (!guildLink) return;
+
+    //     const msg = await fluxerEntityResolver.fetchMessage(
+    //         guildLink.fluxerGuildId,
+    //         channelLink.fluxerChannelId,
+    //         messageLink.fluxerMessageId
+    //     );
+
+    //     if (!msg) {
+    //         logger.error(
+    //             'Could not find linked Fluxer message to edit for Discord message ID:',
+    //             newMessage.id
+    //         );
+    //         return;
+    //     }
+
+    //     try {
+    //         await msg.edit({
+    //             content: newMessage.content,
+    //         });
+    //     } catch (error) {
+    //         logger.error('Error editing message in Fluxer:', error);
+    //     }
+    // });
 
     client.on('messageCreate', async (message) => {
         if (message.author.id === client.user?.id) return;

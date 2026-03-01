@@ -21,6 +21,13 @@ export type WebhookAttachment = {
     spoiler?: boolean;
 };
 
+export type WebhookMessageData = {
+    content: string;
+    username: string;
+    avatarURL: string;
+    attachments?: WebhookAttachment[];
+};
+
 export class WebhookService {
     private readonly linkService: LinkService;
     private discordClient: DiscordClient | null = null;
@@ -81,12 +88,7 @@ export class WebhookService {
 
     async sendMessageViaDiscordWebhook(
         webhook: DiscordWebhook,
-        data: {
-            content: string;
-            username: string;
-            avatarURL: string;
-            attachments?: WebhookAttachment[];
-        }
+        data: WebhookMessageData
     ): Promise<{ messageId: string }> {
         try {
             const files = data.attachments?.map((att) => {
@@ -145,12 +147,7 @@ export class WebhookService {
 
     async sendMessageViaFluxerWebhook(
         webhook: FluxerWebhook,
-        data: {
-            content: string;
-            username: string;
-            avatarURL: string;
-            attachments?: WebhookAttachment[];
-        }
+        data: WebhookMessageData
     ): Promise<{ messageId: string }> {
         try {
             const msg = await webhook.send(

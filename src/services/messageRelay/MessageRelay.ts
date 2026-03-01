@@ -1,22 +1,27 @@
 import { LinkService } from '../LinkService';
-import { WebhookService } from '../WebhookService';
+import MessageTransformer from '../messageTransformer/MessageTransformer';
+import { WebhookMessageData, WebhookService } from '../WebhookService';
 
-export default abstract class MessageRelay<T> {
+export default abstract class MessageRelay<RelayMessage> {
     private readonly linkService: LinkService;
     private readonly webhookService: WebhookService;
+    private readonly messageTransformer: MessageTransformer<RelayMessage, WebhookMessageData>;
 
     constructor({
         linkService,
         webhookService,
+        messageTransformer,
     }: {
         linkService: LinkService;
         webhookService: WebhookService;
+        messageTransformer: MessageTransformer<RelayMessage, WebhookMessageData>;
     }) {
         this.linkService = linkService;
         this.webhookService = webhookService;
+        this.messageTransformer = messageTransformer;
     }
 
-    public abstract relayMessage(message: T): Promise<void>;
+    public abstract relayMessage(message: RelayMessage): Promise<void>;
 
     protected getLinkService(): LinkService {
         return this.linkService;
@@ -24,5 +29,9 @@ export default abstract class MessageRelay<T> {
 
     protected getWebhookService(): WebhookService {
         return this.webhookService;
+    }
+
+    protected getMessageTransformer(): MessageTransformer<RelayMessage, WebhookMessageData> {
+        return this.messageTransformer;
     }
 }

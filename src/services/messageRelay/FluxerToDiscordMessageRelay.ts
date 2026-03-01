@@ -1,8 +1,6 @@
-import { Message, MessageAttachmentFlags } from '@fluxerjs/core';
+import { Message } from '@fluxerjs/core';
 import MessageRelay from './MessageRelay';
 import logger from '../../utils/logging/logger';
-import { breakMentions, sanitizeMentions } from '../../utils/sanitizeMentions';
-import { buildFluxerStickerUrl } from '../../utils/buildStickerUrl';
 
 export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
     public async relayMessage(message: Message): Promise<void> {
@@ -24,56 +22,10 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
                 return;
             }
 
-            const sanitizedContent = breakMentions(
-                sanitizeMentions(message.content, {
-                    resolveUser: (id) => {
-                        const user = message.client.users.get(id);
-                        return user ? user.username : null;
-                    },
-                    resolveRole: (id) => {
-                        if (!message.guild) return null;
-                        const role = message.guild.roles.get(id);
-                        return role ? role.name : null;
-                    },
-                    resolveChannel: (id) => {
-                        const channel = message.client.channels.get(id);
-                        return channel ? channel.name : null;
-                    },
-                })
-            );
-
-            const attachments = message.attachments
-                .filter(
-                    (attachment) =>
-                        attachment.url !== null &&
-                        attachment.url !== undefined &&
-                        attachment.url !== '' &&
-                        !!attachment.url
-                )
-                .map((attachment) => ({
-                    url: attachment.url!,
-                    name: attachment.filename || 'attachment',
-                    spoiler:
-                        attachment.flags && attachment.flags & MessageAttachmentFlags.IS_SPOILER
-                            ? true
-                            : false,
-                }));
-
-            message.stickers.forEach((sticker) => {
-                attachments.push({
-                    url: buildFluxerStickerUrl(sticker.id, sticker.animated || false, 160),
-                    name: sticker.name + '.webp',
-                    spoiler: false,
-                });
-            });
+            const msg = await this.getMessageTransformer().transformMessage(message);
 
             const { messageId: webhookMessageId } =
-                await webhookService.sendMessageViaDiscordWebhook(webhook, {
-                    content: sanitizedContent,
-                    username: message.author.username,
-                    avatarURL: message.author.avatarURL() || '',
-                    attachments,
-                });
+                await webhookService.sendMessageViaDiscordWebhook(webhook, msg);
 
             await linkService.createMessageLink({
                 discordMessageId: webhookMessageId,

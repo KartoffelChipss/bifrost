@@ -17,6 +17,7 @@ import HelpFluxerCommandHandler from './commands/fluxer/handlers/HelpFluxerComma
 import HealthCheckService from './services/HealthCheckService';
 import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
+import FluxerMessageTransformer from './services/messageTransformer/FluxerMessageTransformer';
 
 const startFluxerClient = async ({
     linkService,
@@ -37,9 +38,11 @@ const startFluxerClient = async ({
     healthCheckService.setFluxerClient(client);
     fluxerEntityResolver.setFluxerClient(client);
 
+    const messageTransformer = new FluxerMessageTransformer();
     const messageRelay = new FluxerToDiscordMessageRelay({
         linkService,
         webhookService,
+        messageTransformer,
     });
 
     const commandRegistry = new CommandRegistry<FluxerCommandHandler>();
