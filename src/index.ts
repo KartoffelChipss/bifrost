@@ -49,7 +49,7 @@ const main = async () => {
     const discordEntityResolver = new DiscordEntityResolver();
     const fluxerEntityResolver = new FluxerEntityResolver();
 
-    const perms = '536939520';
+    const perms = '536947712';
     const discordBotInviteLink = generateDiscordBotInviteLink(DISCORD_APPLICATION_ID, perms);
     logger.info(`Discord Bot Invite Link: ${discordBotInviteLink}`);
     const fluxerBotInviteLink = generateFluxerBotInviteLink(FLUXER_APPLICATION_ID, perms);
