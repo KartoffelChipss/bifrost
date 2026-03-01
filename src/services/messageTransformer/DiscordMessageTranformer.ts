@@ -4,6 +4,7 @@ import MessageTransformer from './MessageTransformer';
 import { sanitizeMentions } from '../../utils/sanitizeMentions';
 import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
 import { getPollMessage } from '../../utils/pollMessageFormatter';
+import WebhookEmbed from '../WebhookEmbed';
 
 type DiscordMessage = OmitPartialGroupDMChannel<Message<boolean>>;
 
@@ -27,6 +28,8 @@ export default class DiscordMessageTransformer implements MessageTransformer<
     }
 
     public async transformMessage(message: DiscordMessage): Promise<WebhookMessageData> {
+        // console.log('Transforming Discord message:', message.toJSON());
+
         const sanitizedContent = sanitizeMentions(message.content, {
             resolveUser: (id) => {
                 const user = message.client.users.cache.get(id);
@@ -80,6 +83,7 @@ export default class DiscordMessageTransformer implements MessageTransformer<
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
             attachments: attachments,
+            embeds: message.embeds.map((embed) => WebhookEmbed.fromDiscordEmbed(embed)),
         };
     }
 }

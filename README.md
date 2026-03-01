@@ -9,7 +9,7 @@
 
 - Link channels between Discord and Fluxer
 - Sync messages between linked channels
-- Support for messgages, attachements, stickers and polls
+- Support for messgages, attachements, stickers, embeds and polls
 - Bridge messages using webhooks
 - Easy setup using our hosted bot or self-hosting with Docker
 - Customizable bot prefix and settings

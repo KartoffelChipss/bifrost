@@ -12,6 +12,7 @@ import {
 } from 'discord.js';
 import logger from '../utils/logging/logger';
 import { LinkService } from './LinkService';
+import WebhookEmbed from './WebhookEmbed';
 
 type DiscordWebhook = WebhookClient;
 
@@ -26,6 +27,7 @@ export type WebhookMessageData = {
     username: string;
     avatarURL: string;
     attachments?: WebhookAttachment[];
+    embeds?: WebhookEmbed[];
 };
 
 export class WebhookService {
@@ -97,6 +99,7 @@ export class WebhookService {
                 username: data.username,
                 avatarURL: data.avatarURL,
                 files,
+                embeds: data.embeds?.map((embed) => embed.toDiscordEmbed()) || [],
             });
 
             return { messageId: id };
@@ -121,6 +124,7 @@ export class WebhookService {
             await webhook.editMessage(messageId, {
                 content: data.content,
                 files,
+                embeds: data.embeds?.map((embed) => embed.toDiscordEmbed()) || [],
             });
         } catch (error: any) {
             logger.error('Error editing message via Discord webhook:', error);
@@ -187,6 +191,7 @@ export class WebhookService {
                                 ? MessageAttachmentFlags.IS_SPOILER
                                 : undefined,
                         })) || [],
+                    embeds: data.embeds?.map((embed) => embed.toFluxerEmbed()) || [],
                 },
                 true
             );

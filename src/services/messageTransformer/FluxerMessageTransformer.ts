@@ -3,6 +3,7 @@ import MessageTransformer from './MessageTransformer';
 import { WebhookMessageData } from '../WebhookService';
 import { breakMentions, sanitizeMentions } from '../../utils/sanitizeMentions';
 import { buildFluxerStickerUrl } from '../../utils/buildStickerUrl';
+import WebhookEmbed from '../WebhookEmbed';
 
 export default class FluxerMessageTransformer implements MessageTransformer<
     Message,
@@ -57,6 +58,7 @@ export default class FluxerMessageTransformer implements MessageTransformer<
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
             attachments: attachments,
+            embeds: message.embeds.map((embed) => WebhookEmbed.fromFluxerEmbed(embed)),
         };
     }
 }

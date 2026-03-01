@@ -166,9 +166,19 @@ const startFluxerClient = async ({
 
     client.on(Events.MessageCreate, async (message) => {
         if (message.author.id === client.user?.id) return;
-        if (message.author.bot) return;
-
         if (!message.guildId) return;
+
+        if (message.webhookId) {
+            const webhookLink = await linkService.getChannelLinkByFluxerChannelId(
+                message.channelId
+            );
+            if (webhookLink && webhookLink.fluxerWebhookId === message.webhookId) {
+                logger.info(
+                    `Ignoring message from webhook ${message.webhookId} in channel ${message.channelId} to prevent loop`
+                );
+                return;
+            }
+        }
 
         if (isCommandString(message.content, COMMAND_PREFIX)) {
             const { command, args } = parseCommandString(message.content, COMMAND_PREFIX);
