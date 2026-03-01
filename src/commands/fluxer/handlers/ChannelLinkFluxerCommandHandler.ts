@@ -1,18 +1,26 @@
-import { Client, Message } from '@fluxerjs/core';
+import { Client, Message, PermissionFlags } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import logger from '../../../utils/logging/logger';
 import { WebhookService } from '../../../services/WebhookService';
 import { getCommandUsage } from '../../../commands/commandList';
+import DiscordEntityResolver from '../../../services/entityResolver/DiscordEntityResolver';
 
 export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
     private readonly webhookService: WebhookService;
+    private readonly discordEntityResolver: DiscordEntityResolver;
 
-    constructor(client: Client, linkService: LinkService, webhookService: WebhookService) {
+    constructor(
+        client: Client,
+        linkService: LinkService,
+        webhookService: WebhookService,
+        discordEntityResolver: DiscordEntityResolver
+    ) {
         super(client);
         this.linkService = linkService;
         this.webhookService = webhookService;
+        this.discordEntityResolver = discordEntityResolver;
     }
 
     public async handleCommand(
@@ -20,6 +28,13 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
         command: string,
         ...args: string[]
     ): Promise<void> {
+        const hasPerms = await this.requirePermission(
+            message,
+            PermissionFlags.ManageChannels,
+            'Manage Channels'
+        );
+        if (!hasPerms) return;
+
         if (args.length < 1 || args[0].toLowerCase() == 'help') {
             const usage = getCommandUsage(command, 'fluxer');
             await message.reply(usage);
@@ -37,6 +52,22 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
         } catch (error: any) {
             await message.reply(`Failed to get guild link: ${error.message}`);
             logger.error('Error fetching guild link:', error);
+            return;
+        }
+
+        try {
+            const discordChannel = await this.discordEntityResolver.fetchChannel(
+                message.guildId!,
+                discordChannelId
+            );
+            if (!discordChannel) {
+                throw new Error('Discord channel not found');
+            }
+        } catch (error: any) {
+            await message.reply(
+                `Linking failed: Could not find Discord channel with ID \`${discordChannelId}\`.`
+            );
+            logger.error('Error fetching Discord channel:', error);
             return;
         }
 

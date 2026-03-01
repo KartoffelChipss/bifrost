@@ -63,7 +63,12 @@ const startFluxerClient = async ({
     );
     commandRegistry.registerCommand(
         'linkchannel',
-        new ChannelLinkFluxerCommandHandler(client, linkService, webhookService)
+        new ChannelLinkFluxerCommandHandler(
+            client,
+            linkService,
+            webhookService,
+            discordEntityResolver
+        )
     );
     commandRegistry.registerCommand(
         'listchannels',

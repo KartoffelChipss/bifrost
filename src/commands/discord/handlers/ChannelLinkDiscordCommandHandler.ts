@@ -28,16 +28,12 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
         command: string,
         ...args: string[]
     ): Promise<void> {
-        const member = await message.guild?.members.fetch(message.author.id);
-        if (!member) {
-            await message.reply('Could not fetch your member information.');
-            return;
-        }
-
-        if (!member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-            await message.reply('You need the `Manage Channels` permission to use this command.');
-            return;
-        }
+        const hasPerms = await this.requirePermission(
+            message,
+            PermissionFlagsBits.ManageChannels,
+            'Manage Channels'
+        );
+        if (!hasPerms) return;
 
         if (args.length < 1 || args[0].toLowerCase() === 'help') {
             const usage = getCommandUsage(command, 'discord');
