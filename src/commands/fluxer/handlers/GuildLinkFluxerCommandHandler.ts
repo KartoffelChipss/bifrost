@@ -19,16 +19,12 @@ export default class GuildLinkFluxerCommandHandler extends FluxerCommandHandler 
     ): Promise<void> {
         const fluxerGuildId = message.guildId!;
 
-        const authorMember = await message.guild?.fetchMember(message.author.id);
-        if (!authorMember) {
-            await message.reply('Could not fetch your member information.');
-            return;
-        }
-
-        if (!authorMember.permissions.has(PermissionFlags.ManageGuild)) {
-            await message.reply('You need the `Manage Guild` permission to use this command.');
-            return;
-        }
+        const hasPerms = await this.requirePermission(
+            message,
+            PermissionFlags.ManageGuild,
+            'Manage Guild'
+        );
+        if (!hasPerms) return;
 
         if (args.length < 1 || args[0].toLowerCase() === 'help') {
             const usage = getCommandUsage(command, 'fluxer');

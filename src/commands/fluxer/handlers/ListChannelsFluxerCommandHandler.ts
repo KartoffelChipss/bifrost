@@ -1,4 +1,4 @@
-import { Client, Message } from '@fluxerjs/core';
+import { Client, Message, PermissionFlags } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import logger from '../../../utils/logging/logger';
@@ -18,6 +18,13 @@ export default class ListChannelsFluxerCommandHandler extends FluxerCommandHandl
         ...args: string[]
     ): Promise<void> {
         try {
+            const hasPerms = await this.requirePermission(
+                message,
+                PermissionFlags.ManageChannels,
+                'Manage Channels'
+            );
+            if (!hasPerms) return;
+
             if (args.length > 0 && args[0].toLowerCase() === 'help') {
                 const usage = getCommandUsage(command, 'fluxer');
                 await message.reply(usage);
