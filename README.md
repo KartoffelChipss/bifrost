@@ -10,6 +10,7 @@
 - Link channels between Discord and Fluxer
 - Sync messages between linked channels
 - Support for messgages, attachements, stickers and polls
+- Bridge messages using webhooks
 - Easy setup using our hosted bot or self-hosting with Docker
 - Customizable bot prefix and settings
 
@@ -25,12 +26,14 @@ Join out community Fluxer server for support, updates and to share your feedback
 > The hosted instance isn't running 24/7 yet!
 
 1. Invite the Bifröst bot to your Fluxer server using [this link](https://web.fluxer.app/oauth2/authorize?client_id=1475208219145040215&scope=bot&permissions=536939520) and to your Discord server using [this link](https://discord.com/oauth2/authorize?client_id=1475436995697180845&permissions=536939520&integration_type=0&scope=bot).
-2. Use the `!b linkguild <discordGuildId>` command in your Fluxer server to link your Discord server. 
-   
-   You can find your Discord Guild ID by enabling Developer Mode in Discord settings and right-clicking on your server name. (Alternatively you can also use `!b linkguild <fluxerGuildId>` on your Discord server to link your Fluxer server)
+2. Use the `!b linkguild <discordGuildId>` command in your Fluxer server to link your Discord server.
+
+    You can find your Discord Guild ID by enabling Developer Mode in Discord settings and right-clicking on your server name. (Alternatively you can also use `!b linkguild <fluxerGuildId>` on your Discord server to link your Fluxer server)
+
 3. Use the `!b linkchannel <discordChannelId> ` command in a Fluxer channel to link it to a Discord channel. You can also do this from Discord using `!b linkchannel <fluxerChannelId>` to link a Fluxer channel to the current Discord channel.
-   
-   You can find your Discord Channel ID by enabling Developer Mode in Discord settings and right-clicking on the channel name.
+
+    You can find your Discord Channel ID by enabling Developer Mode in Discord settings and right-clicking on the channel name.
+
 4. That's it! Your channels are now linked and messages will be synced between them. 🎉
 
 ### Self-Hosting with Docker
@@ -61,7 +64,7 @@ cd bifrost
 3. Go to **Bot -> Add Bot**.
 4. Copy the **Bot Token**.
 5. Under **Privileged Gateway Intents**, enable:
-   - Message Content Intent
+    - Message Content Intent
 6. Copy the **Bot Token** and **Application ID**, you’ll need it for the `.env` file.
 
 ---
