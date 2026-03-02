@@ -27,10 +27,8 @@ export default class DiscordMessageTransformer implements MessageTransformer<
         }
     }
 
-    public async transformMessage(message: DiscordMessage): Promise<WebhookMessageData> {
-        // console.log('Transforming Discord message:', message.toJSON());
-
-        const sanitizedContent = sanitizeMentions(message.content, {
+    private sanitizeContent(message: DiscordMessage): string {
+        return sanitizeMentions(message.content, {
             resolveUser: (id) => {
                 const user = message.client.users.cache.get(id);
                 return user ? user.username : null;
@@ -49,6 +47,12 @@ export default class DiscordMessageTransformer implements MessageTransformer<
                     : null;
             },
         });
+    }
+
+    public async transformMessage(message: DiscordMessage): Promise<WebhookMessageData> {
+        // console.log('Transforming Discord message:', message.toJSON());
+
+        const sanitizedContent = this.sanitizeContent(message);
 
         const attachments = message.attachments.map((attachment) => ({
             url: attachment.url,
@@ -78,12 +82,31 @@ export default class DiscordMessageTransformer implements MessageTransformer<
               )
             : sanitizedContent;
 
+        const embeds: WebhookEmbed[] = message.embeds.map((embed) =>
+            WebhookEmbed.fromDiscordEmbed(embed)
+        );
+
+        if (message.reference) {
+            const repliedMessage = await message.fetchReference();
+            const content = this.sanitizeContent(repliedMessage);
+            embeds.unshift(
+                new WebhookEmbed({
+                    description: `${content}`,
+                    color: 0x0b0d0e,
+                    author: {
+                        name: repliedMessage.author.username + ' ↩️',
+                        iconURL: repliedMessage.author.avatarURL() || undefined,
+                    },
+                })
+            );
+        }
+
         return {
             content: messageContent,
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
             attachments: attachments,
-            embeds: message.embeds.map((embed) => WebhookEmbed.fromDiscordEmbed(embed)),
+            embeds,
         };
     }
 }
