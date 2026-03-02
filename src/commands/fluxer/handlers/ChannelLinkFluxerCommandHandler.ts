@@ -57,7 +57,7 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
 
         try {
             const discordChannel = await this.discordEntityResolver.fetchChannel(
-                message.guildId!,
+                guildLink.discordGuildId,
                 discordChannelId
             );
             if (!discordChannel) {
