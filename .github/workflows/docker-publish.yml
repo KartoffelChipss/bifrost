@@ -29,3 +29,5 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/4g0tt3nsou1/bifrost:latest
+          provance: false
+          no-cache: true
