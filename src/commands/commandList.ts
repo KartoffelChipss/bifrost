@@ -114,6 +114,19 @@ const commandList: Command[] = [
             usageArgs: [],
         },
     },
+    {
+        name: 'autolink',
+        discord: {
+            description:
+                'Compares unlinked channels across both guilds and proposes links based on name similarity. Run with `confirm` to execute all proposals.',
+            usageArgs: ['[confirm]'],
+        },
+        fluxer: {
+            description:
+                'Compares unlinked channels across both guilds and proposes links based on name similarity. Run with `confirm` to execute all proposals.',
+            usageArgs: ['[confirm]'],
+        },
+    },
 ];
 
 function getStringCommandUsage(

@@ -17,6 +17,7 @@ import ChannelUnlinkDiscordCommandHandler from './commands/discord/handlers/Chan
 import { WebhookService } from './services/WebhookService';
 import DiscordToFluxerMessageRelay from './services/messageRelay/DiscordToFluxerMessageRelay';
 import HelpDiscordCommandHandler from './commands/discord/handlers/HelpDiscordCommandHandler';
+import AutolinkDiscordCommandHandler from './commands/discord/handlers/AutolinkDiscordCommandHandler';
 import HealthCheckService from './services/HealthCheckService';
 import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
@@ -129,6 +130,10 @@ const startDiscordClient = async ({
     commandRegistry.registerCommand(
         'unlinkchannel',
         new ChannelUnlinkDiscordCommandHandler(client, linkService)
+    );
+    commandRegistry.registerCommand(
+        'autolink',
+        new AutolinkDiscordCommandHandler(client, linkService, webhookService, fluxerEntityResolver)
     );
 
     client.once('clientReady', () => {
