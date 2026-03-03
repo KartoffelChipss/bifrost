@@ -28,4 +28,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/4g0tt3nSou1/bifrost:latest
+          tags: ghcr.io/4g0tt3nsou1/bifrost:latest

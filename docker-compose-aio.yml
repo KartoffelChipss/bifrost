@@ -1,6 +1,6 @@
 services:
     bifrost:
-        image: ghcr.io/4g0tt3nSou1/bifrost:latest
+        image: ghcr.io/4g0tt3nsou1/bifrost:latest
         container_name: bifrost
         restart: unless-stopped
         environment:
