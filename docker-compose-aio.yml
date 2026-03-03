@@ -16,6 +16,7 @@ services:
             FLUXER_HEALTH_PUSH_URL: https://status.sou1.dev/api/push
             FLUXER_HEALTH_PUSH_TOKEN_FILE: /root/.creds/bf_hc_flux
             NODE_ENV: development
+            METRICS_PORT: "9091"
         volumes:
             - bifrost:/config
             - /root/.creds/bf_flux:/root/.creds/bf_flux:ro
@@ -24,6 +25,7 @@ services:
             - /root/.creds/bf_hc_flux:/root/.creds/bf_hc_flux:ro
         networks:
             - bifrost
+            - npm
 
 volumes:
     bifrost:
@@ -31,3 +33,6 @@ volumes:
 networks:
     bifrost:
         driver: bridge
+    npm:
+        external: true
+        name: npm_default

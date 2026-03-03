@@ -28,6 +28,7 @@ import HealthCheckService from './services/HealthCheckService';
 import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
 import FluxerMessageTransformer from './services/messageTransformer/FluxerMessageTransformer';
+import MetricsService from './services/MetricsService';
 import StatsFluxerCommandHandler from './commands/fluxer/handlers/StatsFluxerCommandHandler';
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import FluxerStatsService from './services/statsService/FluxerStatsService';
@@ -40,6 +41,7 @@ const startFluxerClient = async ({
     healthCheckService,
     discordEntityResolver,
     fluxerEntityResolver,
+    metricsService,
     discordStatsService,
     fluxerStatsService,
     dbStatsService,
@@ -49,6 +51,7 @@ const startFluxerClient = async ({
     healthCheckService: HealthCheckService;
     discordEntityResolver: DiscordEntityResolver;
     fluxerEntityResolver: FluxerEntityResolver;
+    metricsService?: MetricsService;
     discordStatsService: DiscordStatsService;
     fluxerStatsService: FluxerStatsService;
     dbStatsService: DbStatsService;

@@ -65,6 +65,7 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
                     username: message.client.user?.username || 'Bifröst',
                     avatarURL: message.client.user?.avatarURL() || '',
                 });
+                this.metricsService?.messagesRelayed.inc({ direction: 'fluxer_to_discord' });
                 return;
             }
 
@@ -86,6 +87,7 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
                 guildLinkId: linkedChannel.guildLinkId,
                 channelLinkId: linkedChannel.id,
             });
+            this.metricsService?.messagesRelayed.inc({ direction: 'fluxer_to_discord' });
         } catch (error) {
             logger.error(
                 'Failed relaying Fluxer message to Discord',

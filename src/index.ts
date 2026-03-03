@@ -10,6 +10,7 @@ import startFluxerClient from './fluxer';
 import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
 import HealthCheckService from './services/HealthCheckService';
+import MetricsService from './services/MetricsService';
 import { LinkService } from './services/LinkService';
 import { WebhookService } from './services/WebhookService';
 import {
@@ -30,10 +31,13 @@ import { DbStatsService } from './services/DbStatsService';
 const main = async () => {
     await initDatabase();
 
+    const metricsService = new MetricsService(METRICS_PORT);
+
     const healthCheckService = new HealthCheckService(
         DISCORD_HEALTH_URL || null,
         FLUXER_HEALTH_URL || null
     );
+    healthCheckService.setMetricsService(metricsService);
 
     const guildLinkRepo = new SequelizeGuildLinkRepository();
     const channelLinkRepo = new SequelizeChannelLinkRepository();
@@ -157,6 +161,7 @@ const main = async () => {
             healthCheckService,
             discordEntityResolver,
             fluxerEntityResolver,
+            metricsService,
             discordStatsService,
             fluxerStatsService,
             dbStatsService,

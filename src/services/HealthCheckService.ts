@@ -1,6 +1,7 @@
 import { Client as FluxerClient } from '@fluxerjs/core';
 import { Client as DiscordClient } from 'discord.js';
 import logger from '../utils/logging/logger';
+import MetricsService from './MetricsService';
 
 interface HealthStatus {
     healthy: boolean;
@@ -20,6 +21,10 @@ export default class HealthCheckService {
     constructor(discordPushUrl: string | null, fluxerPushUrl: string | null) {
         this.discordPushUrl = discordPushUrl;
         this.fluxerPushUrl = fluxerPushUrl;
+    }
+
+    public setMetricsService(metricsService: MetricsService) {
+        this.metricsService = metricsService;
     }
 
     public setDiscordClient(client: DiscordClient) {
@@ -142,6 +147,8 @@ export default class HealthCheckService {
                 `Discord health status: DOWN${healthStatus.message ? ` - ${healthStatus.message}` : ''}`
             );
         }
+        this.metricsService?.discordUp.set(healthStatus.healthy ? 1 : 0);
+        this.metricsService?.healthPingMs.set({ bot: 'discord' }, ping);
         await this.pushHealthStatus(this.discordPushUrl, healthStatus, ping);
     }
 
