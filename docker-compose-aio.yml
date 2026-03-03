@@ -11,9 +11,9 @@ services:
             DISCORD_APPLICATION_ID: 1478331623853260892
             COMMAND_PREFIX: "%"
             CONFIG_PATH: /config
-            DISCORD_HEALTH_PUSH_URL: http://uptime-kuma:3001/api/push/
+            DISCORD_HEALTH_PUSH_URL: https://status.sou1.dev/api/push
             DISCORD_HEALTH_PUSH_TOKEN_FILE: /root/.creds/bf_hc_discord
-            FLUXER_HEALTH_PUSH_URL: http://uptime-kuma:3001/api/push/
+            FLUXER_HEALTH_PUSH_URL: https://status.sou1.dev/api/push
             FLUXER_HEALTH_PUSH_TOKEN_FILE: /root/.creds/bf_hc_flux
         volumes:
             - bifrost:/config
@@ -23,7 +23,6 @@ services:
             - /root/.creds/bf_hc_flux:/root/.creds/bf_hc_flux:ro
         networks:
             - bifrost
-            - npm
 
 volumes:
     bifrost:
@@ -31,6 +30,3 @@ volumes:
 networks:
     bifrost:
         driver: bridge
-    npm:
-        external: true
-        name: npm_default
