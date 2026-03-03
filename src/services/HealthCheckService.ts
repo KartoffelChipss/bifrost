@@ -73,7 +73,8 @@ export default class HealthCheckService {
         if (!this.fluxerClient)
             return { healthy: false, message: 'Fluxer client not initialized' };
         try {
-            await this.fluxerClient.rest.get('/gateway/bot');
+            const gatewayBot = await this.fluxerClient.rest.get('/gateway/bot');
+            logger.debug(`Fluxer /gateway/bot response: ${JSON.stringify(gatewayBot)}`);
             const isReady = this.fluxerClient.isReady();
             if (!isReady) {
                 return {
