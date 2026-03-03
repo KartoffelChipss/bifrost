@@ -92,7 +92,11 @@ export default class HealthCheckService {
         const url = new URL(pushUrl);
         url.searchParams.append('status', status.healthy ? 'up' : 'down');
         if (status.message) url.searchParams.append('msg', status.message);
-        await fetch(url, { method: 'GET' });
+        try {
+            await fetch(url, { method: 'GET' });
+        } catch (err) {
+            logger.error(`Failed to push health status to ${pushUrl}: ${err}`);
+        }
     }
 
     public async pushDiscordHealthStatus(): Promise<void> {

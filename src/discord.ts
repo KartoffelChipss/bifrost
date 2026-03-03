@@ -128,6 +128,7 @@ const startDiscordClient = async ({
     client.once('clientReady', () => {
         logger.info(`Discord bot logged in as ${client.user?.tag}`);
 
+        healthCheckService.pushDiscordHealthStatus();
         setInterval(async () => {
             await healthCheckService.pushDiscordHealthStatus();
         }, 30_000);
