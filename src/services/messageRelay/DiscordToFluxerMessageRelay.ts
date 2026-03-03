@@ -50,6 +50,18 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
         );
         if (!guildLink) return;
 
+        // Build payload before attempting send so it can be queued on failure
+        let msg: WebhookMessageData;
+        if (message.type === MessageType.UserJoin) {
+            msg = {
+                content: formatJoinMessage(message.author.username, 'discord'),
+                username: message.client.user?.username || 'Bifröst',
+                avatarURL: message.client.user?.avatarURL() || '',
+            };
+        } else {
+            msg = await this.getMessageTransformer().transformMessage(message);
+        }
+
         try {
             const webhook = await webhookService.getFluxerWebhook(
                 linkedChannel.fluxerWebhookId,
@@ -87,12 +99,14 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
             const { messageId: webhookMessageId } =
                 await webhookService.sendMessageViaFluxerWebhook(webhook, msg);
 
-            await linkService.createMessageLink({
-                discordMessageId: message.id,
-                fluxerMessageId: webhookMessageId,
-                guildLinkId: linkedChannel.guildLinkId,
-                channelLinkId: linkedChannel.id,
-            });
+            if (message.type !== MessageType.UserJoin) {
+                await linkService.createMessageLink({
+                    discordMessageId: message.id,
+                    fluxerMessageId: webhookMessageId,
+                    guildLinkId: linkedChannel.guildLinkId,
+                    channelLinkId: linkedChannel.id,
+                });
+            }
             this.metricsService?.messagesRelayed.inc({ direction: 'discord_to_fluxer' });
         } catch (error) {
             logger.error(

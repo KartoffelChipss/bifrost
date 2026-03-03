@@ -29,6 +29,7 @@ import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
 import FluxerMessageTransformer from './services/messageTransformer/FluxerMessageTransformer';
 import MetricsService from './services/MetricsService';
+import MessageQueueService from './services/MessageQueueService';
 import StatsFluxerCommandHandler from './commands/fluxer/handlers/StatsFluxerCommandHandler';
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import FluxerStatsService from './services/statsService/FluxerStatsService';
@@ -42,6 +43,7 @@ const startFluxerClient = async ({
     discordEntityResolver,
     fluxerEntityResolver,
     metricsService,
+    queueService,
     discordStatsService,
     fluxerStatsService,
     dbStatsService,
@@ -52,6 +54,7 @@ const startFluxerClient = async ({
     discordEntityResolver: DiscordEntityResolver;
     fluxerEntityResolver: FluxerEntityResolver;
     metricsService?: MetricsService;
+    queueService?: MessageQueueService;
     discordStatsService: DiscordStatsService;
     fluxerStatsService: FluxerStatsService;
     dbStatsService: DbStatsService;

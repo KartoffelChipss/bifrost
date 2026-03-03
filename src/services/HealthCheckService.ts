@@ -1,5 +1,5 @@
 import { Client as FluxerClient } from '@fluxerjs/core';
-import { Client as DiscordClient } from 'discord.js';
+import { ActivityType, Client as DiscordClient } from 'discord.js';
 import logger from '../utils/logging/logger';
 import MetricsService from './MetricsService';
 
@@ -133,6 +133,29 @@ export default class HealthCheckService {
         }
     }
 
+    private updateFluxerPresence(healthy: boolean): void {
+        if (!this.fluxerClient?.user) return;
+        // @fluxerjs/core types don't expose setPresence — cast to access the runtime method
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const user = this.fluxerClient.user as any;
+        if (healthy) {
+            user.setPresence?.({ status: 'online', custom_status: { text: 'Bridging to Discord' } });
+        } else {
+            user.setPresence?.({ status: 'dnd', custom_status: { text: 'Discord unreachable — messages queued' } });
+        }
+    }
+
+    private updateDiscordPresence(healthy: boolean): void {
+        if (!this.discordClient?.user) return;
+        if (healthy) {
+            this.discordClient.user.setStatus('online');
+            this.discordClient.user.setActivity('Bridging to Fluxer', { type: ActivityType.Watching });
+        } else {
+            this.discordClient.user.setStatus('dnd');
+            this.discordClient.user.setActivity('Fluxer unreachable — messages queued', { type: ActivityType.Watching });
+        }
+    }
+
     public async pushDiscordHealthStatus(): Promise<void> {
         if (!this.discordPushUrl) return;
 
@@ -150,6 +173,16 @@ export default class HealthCheckService {
         this.metricsService?.discordUp.set(healthStatus.healthy ? 1 : 0);
         this.metricsService?.healthPingMs.set({ bot: 'discord' }, ping);
         await this.pushHealthStatus(this.discordPushUrl, healthStatus, ping);
+
+        // Update Fluxer bot presence to reflect Discord state
+        this.updateFluxerPresence(healthStatus.healthy);
+
+        // Trigger queue drain on recovery
+        if (healthStatus.healthy && this.lastDiscordHealthy === false) {
+            logger.info('Discord recovered — triggering queue drain');
+            this.onDiscordRecovered?.();
+        }
+        this.lastDiscordHealthy = healthStatus.healthy;
     }
 
     private async getFluxerPlatformStatus(): Promise<string | null> {

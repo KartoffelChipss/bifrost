@@ -22,6 +22,7 @@ import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
 import DiscordMessageTransformer from './services/messageTransformer/DiscordMessageTranformer';
 import MetricsService from './services/MetricsService';
+import MessageQueueService from './services/MessageQueueService';
 import FluxerStatsService from './services/statsService/FluxerStatsService';
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import StatsDiscordCommandHandler from './commands/discord/handlers/StatsDiscordCommandHandler';
@@ -35,6 +36,7 @@ const startDiscordClient = async ({
     discordEntityResolver,
     fluxerEntityResolver,
     metricsService,
+    queueService,
     discordStatsService,
     fluxerStatsService,
     dbStatsService,
@@ -45,6 +47,7 @@ const startDiscordClient = async ({
     discordEntityResolver: DiscordEntityResolver;
     fluxerEntityResolver: FluxerEntityResolver;
     metricsService?: MetricsService;
+    queueService?: MessageQueueService;
     discordStatsService: DiscordStatsService;
     fluxerStatsService: FluxerStatsService;
     dbStatsService: DbStatsService;
@@ -130,6 +133,13 @@ const startDiscordClient = async ({
 
     client.once('clientReady', () => {
         logger.info(`Discord bot logged in as ${client.user?.tag}`);
+
+        if (queueService) {
+            queueService.drain(webhookService, linkService).catch((err) =>
+                logger.error('Startup queue drain error:', err)
+            );
+            queueService.startDrainInterval(webhookService, linkService);
+        }
 
         healthCheckService.pushDiscordHealthStatus();
         setInterval(async () => {

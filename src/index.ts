@@ -11,6 +11,7 @@ import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
 import HealthCheckService from './services/HealthCheckService';
 import MetricsService from './services/MetricsService';
+import MessageQueueService from './services/MessageQueueService';
 import { LinkService } from './services/LinkService';
 import { WebhookService } from './services/WebhookService';
 import {
@@ -32,6 +33,7 @@ const main = async () => {
     await initDatabase();
 
     const metricsService = new MetricsService(METRICS_PORT);
+    const queueService = new MessageQueueService(QUEUE_TTL_MS);
 
     const healthCheckService = new HealthCheckService(
         DISCORD_HEALTH_URL || null,
@@ -142,6 +144,17 @@ const main = async () => {
         );
     });
 
+    healthCheckService.setOnDiscordRecovered(() => {
+        queueService.drain(webhookService, linkService).catch((err) =>
+            logger.error('Queue drain on Discord recovery error:', err)
+        );
+    });
+    healthCheckService.setOnFluxerRecovered(() => {
+        queueService.drain(webhookService, linkService).catch((err) =>
+            logger.error('Queue drain on Fluxer recovery error:', err)
+        );
+    });
+
     const perms = '536947712';
     const discordBotInviteLink = generateDiscordBotInviteLink(
         DISCORD_APP_ID,
@@ -162,6 +175,7 @@ const main = async () => {
             discordEntityResolver,
             fluxerEntityResolver,
             metricsService,
+            queueService,
             discordStatsService,
             fluxerStatsService,
             dbStatsService,

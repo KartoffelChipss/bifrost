@@ -2,6 +2,7 @@ import { LinkService } from '../LinkService';
 import MessageTransformer from '../messageTransformer/MessageTransformer';
 import { WebhookMessageData, WebhookService } from '../WebhookService';
 import MetricsService from '../MetricsService';
+import MessageQueueService from '../MessageQueueService';
 
 export default abstract class MessageRelay<RelayMessage> {
     private readonly linkService: LinkService;
@@ -16,6 +17,7 @@ export default abstract class MessageRelay<RelayMessage> {
         webhookService,
         messageTransformer,
         metricsService,
+        queueService,
     }: {
         linkService: LinkService;
         webhookService: WebhookService;
@@ -28,6 +30,7 @@ export default abstract class MessageRelay<RelayMessage> {
         this.webhookService = webhookService;
         this.messageTransformer = messageTransformer;
         this.metricsService = metricsService ?? null;
+        this.queueService = queueService ?? null;
     }
 
     public abstract relayMessage(message: RelayMessage): Promise<void>;
