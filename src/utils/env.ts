@@ -1,14 +1,31 @@
 import dotenv from 'dotenv';
+import fs from 'fs';
 
 dotenv.config({ quiet: true });
 
+function resolveFileSecret(varName: string) {
+    const filePath = process.env[`${varName}_FILE`];
+    if (filePath) {
+        try {
+            process.env[varName] = fs.readFileSync(filePath, 'utf8').trim();
+        } catch (err) {
+            console.error(`Error: Could not read secret file for ${varName} at "${filePath}": ${(err as Error).message}`);
+            process.exit(1);
+        }
+    }
+}
+
+resolveFileSecret('FLUXER_BOT_TOKEN');
+resolveFileSecret('DISCORD_BOT_TOKEN');
+resolveFileSecret('DB_PASS');
+
 if (!process.env.FLUXER_BOT_TOKEN) {
-    console.error('Error: FLUXER_BOT_TOKEN is not set in the environment variables.');
+    console.error('Error: FLUXER_BOT_TOKEN or FLUXER_BOT_TOKEN_FILE is not set in the environment variables.');
     process.exit(1);
 }
 
 if (!process.env.DISCORD_BOT_TOKEN) {
-    console.error('Error: DISCORD_BOT_TOKEN is not set in the environment variables.');
+    console.error('Error: DISCORD_BOT_TOKEN or DISCORD_BOT_TOKEN_FILE is not set in the environment variables.');
     process.exit(1);
 }
 

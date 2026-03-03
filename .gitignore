@@ -4,3 +4,4 @@ node_modules/
 config/
 logs/
 .idea/
+package-lock.json
