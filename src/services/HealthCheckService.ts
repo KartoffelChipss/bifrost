@@ -92,6 +92,7 @@ export default class HealthCheckService {
         const url = new URL(pushUrl);
         url.searchParams.append('status', status.healthy ? 'up' : 'down');
         if (status.message) url.searchParams.append('msg', status.message);
+        if (ping !== undefined) url.searchParams.append('ping', String(ping));
         try {
             await fetch(url, { method: 'GET' });
         } catch (err) {
@@ -102,7 +103,10 @@ export default class HealthCheckService {
     public async pushDiscordHealthStatus(): Promise<void> {
         if (!this.discordPushUrl) return;
 
+        const start = Date.now();
         const healthStatus = await this.checkDiscordHealth();
+        const ping = Date.now() - start;
+
         if (healthStatus.healthy) {
             logger.info(`Discord health status: UP`);
         } else {
@@ -110,13 +114,16 @@ export default class HealthCheckService {
                 `Discord health status: DOWN${healthStatus.message ? ` - ${healthStatus.message}` : ''}`
             );
         }
-        await this.pushHealthStatus(this.discordPushUrl, healthStatus);
+        await this.pushHealthStatus(this.discordPushUrl, healthStatus, ping);
     }
 
     public async pushFluxerHealthStatus(): Promise<void> {
         if (!this.fluxerPushUrl) return;
 
+        const start = Date.now();
         const healthStatus = await this.checkFluxerHealth();
+        const ping = Date.now() - start;
+
         if (healthStatus.healthy) {
             this.fluxerConsecutiveDowns = 0;
             logger.info(`Fluxer health status: UP`);
