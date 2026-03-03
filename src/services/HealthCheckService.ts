@@ -147,17 +147,18 @@ export default class HealthCheckService {
 
     private async getFluxerPlatformStatus(): Promise<string | null> {
         try {
-            const res = await fetch('https://fluxerstatus.com/api/v2/summary.json');
+            const res = await fetch('https://fluxerstatus.com/summary.json');
             if (!res.ok) return null;
             const json = await res.json() as {
                 page: { status: string };
-                activeIncidents: { name: string; status: string; impact: string }[];
+                activeIncidents: { name: string; impact: string }[];
+                activeMaintenances: { name: string }[];
             };
             if (json.page.status === 'UP') return null;
             const incidents = json.activeIncidents.map((i) => `${i.name} (${i.impact})`).join(', ');
-            return incidents
-                ? `${json.page.status} — ${incidents}`
-                : json.page.status;
+            const maintenances = json.activeMaintenances.map((m) => m.name).join(', ');
+            const details = [incidents, maintenances].filter(Boolean).join('; ');
+            return details ? `${json.page.status} — ${details}` : json.page.status;
         } catch {
             return null;
         }
