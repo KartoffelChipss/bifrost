@@ -92,18 +92,21 @@ export const getCommandUsage = (commandName: string, platform: CommandPlatform):
 
 export const getHelpMessage = (platform: CommandPlatform): string => {
     function getHelpLine(command: Command): string {
+        const commandInfo = platform === 'discord' ? command.discord : command.fluxer;
+
         const usage =
-            command.discord.usageArgs && command.discord.usageArgs.length > 0
-                ? `${COMMAND_PREFIX}${command.name} ${command.discord.usageArgs.join(' ')}`
+            commandInfo.usageArgs && commandInfo.usageArgs.length > 0
+                ? `${COMMAND_PREFIX}${command.name} ${commandInfo.usageArgs.join(' ')}`
                 : `${COMMAND_PREFIX}${command.name}`;
-        return `- \`${usage}\`: ${platform === 'discord' ? command.discord.description : command.fluxer.description}`;
+
+        return `- \`${usage}\`: ${commandInfo.description}`;
     }
 
     const helpMessage = `
 **Available Commands:**
 ${commandList.map((cmd) => getHelpLine(cmd)).join('\n')}
 
-Use \`${COMMAND_PREFIX}<command>\` to execute a command. For example, \`${COMMAND_PREFIX}ping\`.
+Use \`${COMMAND_PREFIX}<command>\` to execute a command.
     `;
 
     return helpMessage;
