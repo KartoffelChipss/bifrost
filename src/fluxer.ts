@@ -125,6 +125,10 @@ const startFluxerClient = async ({
         new ChannelUnlinkFluxerCommandHandler(client, linkService)
     );
 
+    setInterval(async () => {
+        await healthCheckService.pushFluxerHealthStatus();
+    }, 30_000);
+
     client.once(Events.Ready, () => {
         logger.info('Fluxer bot is ready!');
         logger.info(`Fluxer bot is in ${client.guilds.size} guilds`);

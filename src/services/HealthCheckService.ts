@@ -102,7 +102,27 @@ export default class HealthCheckService {
 
         try {
             const res = await fetch(url, { method: 'GET' });
-            if (!res.ok) logger.warn(`Health push rejected: HTTP ${res.status} from ${redacted}`);
+            const body = await res.text();
+            logger.debug(`Health push response: HTTP ${res.status} — ${body}`);
+
+            if (!res.ok) {
+                logger.error(`Health push failed: HTTP ${res.status} from ${redacted}`);
+                return;
+            }
+
+            try {
+                const json = JSON.parse(body) as { ok: boolean; msg?: string };
+                if (!json.ok) {
+                    const msg = json.msg ?? 'unknown error';
+                    if (msg.toLowerCase().includes('not found')) {
+                        logger.warn(`Health push rejected — monitor not found at ${redacted}`);
+                    } else {
+                        logger.error(`Health push rejected — ${msg}`);
+                    }
+                }
+            } catch {
+                logger.warn(`Health push: unexpected non-JSON response from ${redacted}`);
+            }
         } catch (err) {
             logger.error(`Failed to push health status to ${redacted}: ${err}`);
         }
@@ -123,6 +143,24 @@ export default class HealthCheckService {
             );
         }
         await this.pushHealthStatus(this.discordPushUrl, healthStatus, ping);
+    }
+
+    private async getFluxerPlatformStatus(): Promise<string | null> {
+        try {
+            const res = await fetch('https://fluxerstatus.com/api/v2/summary.json');
+            if (!res.ok) return null;
+            const json = await res.json() as {
+                page: { status: string };
+                activeIncidents: { name: string; status: string; impact: string }[];
+            };
+            if (json.page.status === 'UP') return null;
+            const incidents = json.activeIncidents.map((i) => `${i.name} (${i.impact})`).join(', ');
+            return incidents
+                ? `${json.page.status} — ${incidents}`
+                : json.page.status;
+        } catch {
+            return null;
+        }
     }
 
     public async pushFluxerHealthStatus(): Promise<void> {
