@@ -94,7 +94,8 @@ export default class HealthCheckService {
         if (status.message) url.searchParams.append('msg', status.message);
         if (ping !== undefined) url.searchParams.append('ping', String(ping));
         try {
-            await fetch(url, { method: 'GET' });
+            const res = await fetch(url, { method: 'GET' });
+            if (!res.ok) logger.warn(`Health push rejected: HTTP ${res.status} from ${url}`);
         } catch (err) {
             logger.error(`Failed to push health status to ${pushUrl}: ${err}`);
         }
