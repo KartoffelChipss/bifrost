@@ -3,44 +3,34 @@ services:
         image: kartoffelchipss/bifrost:latest
         container_name: bifrost
         restart: unless-stopped
-        depends_on:
-            postgres:
-                condition: service_healthy
-        env_file:
-            - .env
         environment:
-            DB_DIALECT: postgres
-            DB_HOST: postgres
-            DB_PORT: 5432
-            DB_NAME: bifrost
-            DB_USER: bifrost_user
-            DB_PASS: ${POSTGRES_PASSWORD}
+            DB_DIALECT: sqlite
+            FLUXER_BOT_TOKEN_FILE: /root/.creds/bf_flux
+            DISCORD_BOT_TOKEN_FILE: /root/.creds/bf_discord
+            FLUXER_APPLICATION_ID: 1478333491047665698
+            DISCORD_APPLICATION_ID: 1478331623853260892
+            COMMAND_PREFIX: "%"
+            CONFIG_PATH: /config
+            DISCORD_HEALTH_PUSH_URL: http://uptime-kuma:3001/api/push/
+            DISCORD_HEALTH_PUSH_TOKEN_FILE: /root/.creds/bf_hc_discord
+            FLUXER_HEALTH_PUSH_URL: http://uptime-kuma:3001/api/push/
+            FLUXER_HEALTH_PUSH_TOKEN_FILE: /root/.creds/bf_hc_flux
         volumes:
-            - ./config:/config
+            - bifrost:/config
+            - /root/.creds/bf_flux:/root/.creds/bf_flux:ro
+            - /root/.creds/bf_discord:/root/.creds/bf_discord:ro
+            - /root/.creds/bf_hc_discord:/root/.creds/bf_hc_discord:ro
+            - /root/.creds/bf_hc_flux:/root/.creds/bf_hc_flux:ro
         networks:
-            - bifrost_network
-
-    postgres:
-        image: postgres:16
-        container_name: bifrost_postgres
-        restart: unless-stopped
-        environment:
-            POSTGRES_DB: bifrost
-            POSTGRES_USER: bifrost_user
-            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-        volumes:
-            - postgres_data:/var/lib/postgresql/data
-        healthcheck:
-            test: ['CMD-SHELL', 'pg_isready -U bifrost_user -d bifrost']
-            interval: 10s
-            timeout: 5s
-            retries: 5
-        networks:
-            - bifrost_network
+            - bifrost
+            - npm
 
 volumes:
-    postgres_data:
+    bifrost:
 
 networks:
-    bifrost_network:
+    bifrost:
         driver: bridge
+    npm:
+        external: true
+        name: npm_default
