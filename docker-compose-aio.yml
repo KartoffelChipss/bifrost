@@ -15,6 +15,7 @@ services:
             DISCORD_HEALTH_PUSH_TOKEN_FILE: /root/.creds/bf_hc_discord
             FLUXER_HEALTH_PUSH_URL: https://status.sou1.dev/api/push
             FLUXER_HEALTH_PUSH_TOKEN_FILE: /root/.creds/bf_hc_flux
+            NODE_ENV: development
         volumes:
             - bifrost:/config
             - /root/.creds/bf_flux:/root/.creds/bf_flux:ro

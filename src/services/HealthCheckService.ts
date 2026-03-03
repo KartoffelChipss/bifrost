@@ -93,11 +93,18 @@ export default class HealthCheckService {
         url.searchParams.append('status', status.healthy ? 'up' : 'down');
         if (status.message) url.searchParams.append('msg', status.message);
         if (ping !== undefined) url.searchParams.append('ping', String(ping));
+
+        const redacted = new URL(url.toString());
+        const parts = redacted.pathname.split('/');
+        parts[parts.length - 1] = '[REDACTED]';
+        redacted.pathname = parts.join('/');
+        logger.debug(`Health push → ${redacted.toString()}`);
+
         try {
             const res = await fetch(url, { method: 'GET' });
-            if (!res.ok) logger.warn(`Health push rejected: HTTP ${res.status} from ${url}`);
+            if (!res.ok) logger.warn(`Health push rejected: HTTP ${res.status} from ${redacted}`);
         } catch (err) {
-            logger.error(`Failed to push health status to ${pushUrl}: ${err}`);
+            logger.error(`Failed to push health status to ${redacted}: ${err}`);
         }
     }
 
