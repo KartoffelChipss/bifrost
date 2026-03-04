@@ -112,7 +112,12 @@ export default class HealthCheckService {
             logger.debug(`Health push response: HTTP ${res.status} — ${body}`);
 
             if (!res.ok) {
-                logger.error(`Health push failed: HTTP ${res.status} from ${redacted}`);
+                let errDetail = '';
+                try {
+                    const json = JSON.parse(body) as { ok?: boolean; msg?: string };
+                    if (json.msg) errDetail = ` — ${json.msg}`;
+                } catch { /* body wasn't JSON */ }
+                logger.error(`Health push failed: HTTP ${res.status} from ${redacted}${errDetail}`);
                 return;
             }
 
