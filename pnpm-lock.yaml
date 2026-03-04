@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@fluxerjs/core':
-        specifier: ^1.2.2
-        version: 1.2.2
+        specifier: ^1.2.3
+        version: 1.2.3
       discord.js:
         specifier: ^14.25.1
         version: 14.25.1
@@ -86,27 +86,27 @@ packages:
     resolution: {integrity: sha512-wPlQDxEmlDg5IxhJPuxXr3Vy9AjYq5xCvFWGJyD7w7Np8ZGu+Mc+97LCoEc/+AYCo2IDpKioiH0/c/mj5ZR9Uw==}
     engines: {node: '>=16.11.0'}
 
-  '@fluxerjs/builders@1.2.2':
-    resolution: {integrity: sha512-647yuM44Fs+Cf/MKo01XRWoVb7RoFdSOBHebFiTLLCTO/tqz+dgZ4wgVsDNu9O/BB/oZ2tjAp9jDTxvXMXkUbA==}
+  '@fluxerjs/builders@1.2.3':
+    resolution: {integrity: sha512-VBeQtM9uEAY+WIpuHZzkx2tFtLNCgTRYcbEwrrb6s5h59rpPkEM2y94t4oYWDKCMVICffR69y1J3vggu0Q3x0w==}
 
-  '@fluxerjs/collection@1.2.2':
-    resolution: {integrity: sha512-ryytiFh38gELqOLHBtL6Tz4f7/7DIu9L2CMTOqNYoer7E1ef8ukU7YiyANASWHgTf34hcGMC0tdi0dcFFFKkKQ==}
+  '@fluxerjs/collection@1.2.3':
+    resolution: {integrity: sha512-1vEbqQl/PcfiYABjbiPAsKMg1UtpbjYS9b0JKwVdgPaChAF6NPusoU3vOuGzGxD2+JXK5P1V73UQQ8yKWrnUCQ==}
 
-  '@fluxerjs/core@1.2.2':
-    resolution: {integrity: sha512-P+c1jveYqwWGT6vafw+U1WmDPJ0Brp+aNa52Qp2vSsEQ3FLNUg+/25PhyrcPP0x2Mf7zoa1Wv9zGLlkHlKb9Ag==}
+  '@fluxerjs/core@1.2.3':
+    resolution: {integrity: sha512-i0lkgO7Q+DePuX3Td0kYW1U94ljG5Nup14tXlECEaTP3FZcLu3ygSy0Km1OjYVoNAsxQZkOFr1J6A6r5PH5WLQ==}
     engines: {node: '>=18.0.0'}
 
-  '@fluxerjs/rest@1.2.2':
-    resolution: {integrity: sha512-Y96A2wQJ8akiAPpiyQm2WWBfNvrQBGIxIuwFCTuXkWg/g+0D6hYrVB7VHxQlnBeDUlj4T+fSJiqSoAYQ3pwrCQ==}
+  '@fluxerjs/rest@1.2.3':
+    resolution: {integrity: sha512-e1eodt4rNHtqtqlDL4Kp2JUsvHigS0w/LKfIrGu5nndX+LaVoh5Lp3afzWSnFilW6gqNHsqIEIgsmOGeJNP0CA==}
 
-  '@fluxerjs/types@1.2.2':
-    resolution: {integrity: sha512-z3AcTxVF2iY/D0XR8xGIcx+c6LY6eNLWR0uO46xNGmEqpm5guE3joDz/EN8DfAZXuap/ludgqX6EA8dLADIeMg==}
+  '@fluxerjs/types@1.2.3':
+    resolution: {integrity: sha512-oyxJfaPIpJYBSEj/is+YNk3JE2c0QVvBmc9Qr5wAmc0hGzTp1Oh2Vff8HwK14R2xL5bJde79U0eyxHxwMlf+rg==}
 
-  '@fluxerjs/util@1.2.2':
-    resolution: {integrity: sha512-H0c6rKufJJQsz7cloZSK1EqqbRCaxEIF2LdJ4cIRiGPczQTleD2xAIOQ2NvBZxnFvwx+OeetZs79b42bsjcjHQ==}
+  '@fluxerjs/util@1.2.3':
+    resolution: {integrity: sha512-vxDlxnQV3sTAAdZGrRQrmEx+O8Uzydw+HMx6vF4l0nxeTRwAZgR19CApY6r0tZk2mnHwZO0pqfaXbB4dHL4bGw==}
 
-  '@fluxerjs/ws@1.2.2':
-    resolution: {integrity: sha512-twg1wYRYo4DlEHsVHSuUhSAKGK2qTmHM2PV3LNSdE0HdGQIB1EFviSuo0rWDpCb1sVTwIzBVMtthrlxyPfVtKA==}
+  '@fluxerjs/ws@1.2.3':
+    resolution: {integrity: sha512-0aQn1myqChfO2pABYVdm1bSqWOQrDURt7Bzh42hNsiTUGiJIkyf78r24k6X1JDHXuhUEd9MTBkIDCqQ7LD1K6w==}
 
   '@gar/promisify@1.1.3':
     resolution: {integrity: sha512-k2Ty1JcVojjJFwrg/ThKi2ujJ7XNLYaFGNB/bWT9wGR+oSMJHMa5w+CUq6p/pVrKeNNgA7pCqEcjSnHVoqJQFw==}
@@ -920,38 +920,38 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@fluxerjs/builders@1.2.2':
+  '@fluxerjs/builders@1.2.3':
     dependencies:
-      '@fluxerjs/types': 1.2.2
-      '@fluxerjs/util': 1.2.2
+      '@fluxerjs/types': 1.2.3
+      '@fluxerjs/util': 1.2.3
 
-  '@fluxerjs/collection@1.2.2': {}
+  '@fluxerjs/collection@1.2.3': {}
 
-  '@fluxerjs/core@1.2.2':
+  '@fluxerjs/core@1.2.3':
     dependencies:
-      '@fluxerjs/builders': 1.2.2
-      '@fluxerjs/collection': 1.2.2
-      '@fluxerjs/rest': 1.2.2
-      '@fluxerjs/types': 1.2.2
-      '@fluxerjs/util': 1.2.2
-      '@fluxerjs/ws': 1.2.2
+      '@fluxerjs/builders': 1.2.3
+      '@fluxerjs/collection': 1.2.3
+      '@fluxerjs/rest': 1.2.3
+      '@fluxerjs/types': 1.2.3
+      '@fluxerjs/util': 1.2.3
+      '@fluxerjs/ws': 1.2.3
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@fluxerjs/rest@1.2.2':
+  '@fluxerjs/rest@1.2.3':
     dependencies:
-      '@fluxerjs/types': 1.2.2
+      '@fluxerjs/types': 1.2.3
 
-  '@fluxerjs/types@1.2.2': {}
+  '@fluxerjs/types@1.2.3': {}
 
-  '@fluxerjs/util@1.2.2':
+  '@fluxerjs/util@1.2.3':
     dependencies:
-      '@fluxerjs/types': 1.2.2
+      '@fluxerjs/types': 1.2.3
 
-  '@fluxerjs/ws@1.2.2':
+  '@fluxerjs/ws@1.2.3':
     dependencies:
-      '@fluxerjs/types': 1.2.2
+      '@fluxerjs/types': 1.2.3
       ws: 8.19.0
     transitivePeerDependencies:
       - bufferutil
