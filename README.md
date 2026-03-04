@@ -38,10 +38,10 @@ Join out community Fluxer server for support, updates and to share your feedback
 
 ### Self-Hosting with Docker
 
-#### 1. Clone the repository
+#### 1. Create a Project Directory
 
 ```bash
-git clone https://github.com/Kartoffelchipss/bifrost.git
+mkdir bifrost
 cd bifrost
 ```
 
@@ -93,17 +93,54 @@ You can also use `.env.example` as a reference for all environment variables.
 
 ---
 
-#### 5. Build and Start the Container
+#### 5. Create the docker-compose.yml
+
+Create a `docker-compose.yml` file:
+
+```yml
+services:
+    bifrost:
+        image: kartoffelchipss/bifrost:latest
+        container_name: bifrost
+        restart: unless-stopped
+        env_file:
+            - .env
+        volumes:
+            - ./config:/config
+```
+
+Alternative: Download the compose file from GitHub
+
+Instead of creating the file manually, you can download the official compose file from the repository:
 
 ```bash
-docker compose up -d --build
+curl -O https://raw.githubusercontent.com/KartoffelChipss/bifrost/main/docker-compose.yml
 ```
+
+Alternative: All-in-one setup with PostgreSQL
+
+If you want a complete setup with PostgreSQL included, you can use the all-in-one compose file:
+
+```bash
+curl -o docker-compose.yml https://raw.githubusercontent.com/Kartoffelchipss/bifrost/main/docker-compose-aio.yml
+```
+
+This version automatically starts:
+
+- Bifröst
+- PostgreSQL database
 
 ---
 
-#### 6. Invite the Discord and Fluxer Bot
+#### 6. Start the Container
 
-After starting the container, the invite link for both the Discord and Fluxer bot will be printed in the logs. Use these links to invite the bots to your respective servers.
+Run:
+
+```bash
+docker compose up -d
+```
+
+Docker will automatically pull the latest Bifröst image from Docker Hub and start the container.
 
 You can view the logs with:
 
@@ -113,9 +150,15 @@ docker compose logs -f
 
 Or find the log files in the `config/logs` directory.
 
+#### 7. Invite the Discord and Fluxer Bot
+
+After the container starts, the invite links for both the Discord and Fluxer bots will be printed in the logs.
+
+Use these links to invite the bots to your servers.
+
 ---
 
-### 7. Link Servers and Channels
+### 8. Link Servers and Channels
 
 Follow the same linking steps as the hosted bot to connect your Fluxer and Discord servers.
 

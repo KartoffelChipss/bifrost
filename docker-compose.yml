@@ -1,8 +1,6 @@
 services:
   bifrost:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: kartoffelchipss/bifrost:latest
     container_name: bifrost
     restart: unless-stopped
     env_file:
