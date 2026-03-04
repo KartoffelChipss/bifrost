@@ -80,6 +80,19 @@ const commandList: Command[] = [
             usageArgs: ['<link-id>'],
         },
     },
+    {
+        name: 'stats',
+        discord: {
+            description:
+                'Shows statistics about the bot, such as number of linked guilds and channels.',
+            usageArgs: [],
+        },
+        fluxer: {
+            description:
+                'Shows statistics about the bot, such as number of linked guilds and channels.',
+            usageArgs: [],
+        },
+    },
 ];
 
 export const getCommandUsage = (commandName: string, platform: CommandPlatform): string => {

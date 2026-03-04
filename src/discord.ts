@@ -18,6 +18,9 @@ import HealthCheckService from './services/HealthCheckService';
 import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
 import DiscordMessageTransformer from './services/messageTransformer/DiscordMessageTranformer';
+import FluxerStatsService from './services/statsService/FluxerStatsService';
+import DiscordStatsService from './services/statsService/DiscordStatsService';
+import StatsDiscordCommandHandler from './commands/discord/handlers/StatsDiscordCommandHandler';
 
 const startDiscordClient = async ({
     linkService,
@@ -25,12 +28,16 @@ const startDiscordClient = async ({
     healthCheckService,
     discordEntityResolver,
     fluxerEntityResolver,
+    discordStatsService,
+    fluxerStatsService,
 }: {
     linkService: LinkService;
     webhookService: WebhookService;
     healthCheckService: HealthCheckService;
     discordEntityResolver: DiscordEntityResolver;
     fluxerEntityResolver: FluxerEntityResolver;
+    discordStatsService: DiscordStatsService;
+    fluxerStatsService: FluxerStatsService;
 }): Promise<Client> => {
     const client = new Client({
         intents: [
@@ -53,6 +60,7 @@ const startDiscordClient = async ({
     webhookService.setDiscordClient(client);
     healthCheckService.setDiscordClient(client);
     discordEntityResolver.setDiscordClient(client);
+    discordStatsService.setClient(client);
 
     const messageTransformer = new DiscordMessageTransformer();
     const messageRelay = new DiscordToFluxerMessageRelay({
@@ -64,6 +72,10 @@ const startDiscordClient = async ({
     const commandRegistry = new CommandRegistry<DiscordCommandHandler>();
     commandRegistry.registerCommand('ping', new PingDiscordCommandHandler(client));
     commandRegistry.registerCommand('help', new HelpDiscordCommandHandler(client));
+    commandRegistry.registerCommand(
+        'stats',
+        new StatsDiscordCommandHandler(client, discordStatsService, fluxerStatsService)
+    );
     commandRegistry.registerCommand(
         'linkguild',
         new GuildLinkDiscordCommandHandler(client, linkService, fluxerEntityResolver)

@@ -23,6 +23,8 @@ import {
     generateFluxerBotInviteLink,
 } from './utils/generateBotInvite';
 import logger from './utils/logging/logger';
+import DiscordStatsService from './services/statsService/DiscordStatsService';
+import FluxerStatsService from './services/statsService/FluxerStatsService';
 
 const main = async () => {
     await initDatabase();
@@ -48,6 +50,8 @@ const main = async () => {
     const webhookService = new WebhookService();
     const discordEntityResolver = new DiscordEntityResolver();
     const fluxerEntityResolver = new FluxerEntityResolver();
+    const discordStatsService = new DiscordStatsService();
+    const fluxerStatsService = new FluxerStatsService();
 
     const perms = '536947712';
     const discordBotInviteLink = generateDiscordBotInviteLink(DISCORD_APPLICATION_ID, perms);
@@ -62,6 +66,8 @@ const main = async () => {
             healthCheckService,
             discordEntityResolver,
             fluxerEntityResolver,
+            discordStatsService,
+            fluxerStatsService,
         }),
         startFluxerClient({
             linkService,
@@ -69,6 +75,8 @@ const main = async () => {
             healthCheckService,
             discordEntityResolver,
             fluxerEntityResolver,
+            discordStatsService,
+            fluxerStatsService,
         }),
     ]);
 
