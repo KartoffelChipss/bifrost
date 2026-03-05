@@ -8,3 +8,5 @@ package-lock.json
 docs/.vitepress/dist
 docs/.vitepress/cache
 .claude/
+
+.github/workflows/docker-release.yml

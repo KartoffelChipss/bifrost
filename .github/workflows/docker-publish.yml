@@ -31,3 +31,6 @@ jobs:
           tags: ghcr.io/4g0tt3nsou1/bifrost:latest
           provenance: false
           no-cache: true
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            REPO_URL=https://github.com/${{ github.repository }}

@@ -144,15 +144,73 @@ const main = async () => {
         );
     });
 
+    const FLUXER_DOWN_THRESHOLD = 5;        // 5 × 30s = 2.5 min before restart
+    const FLUXER_MAX_RESTARTS = 3;          // restart up to N times, then long backoff
+    const FLUXER_BACKOFF_MS = 20 * 60_000; // 20 min wait after exhausting restarts
+
+    const fluxerArgs = {
+        linkService,
+        webhookService,
+        healthCheckService,
+        discordEntityResolver,
+        fluxerEntityResolver,
+        metricsService,
+        queueService,
+        discordStatsService,
+        fluxerStatsService,
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fluxerClientRef: { current: any } = { current: null };
+    let fluxerRestartAttempts = 0;
+    let fluxerRestartState: 'idle' | 'restarting' | 'backoff' = 'idle';
+
+    const doFluxerRestart = async () => {
+        fluxerRestartState = 'restarting';
+        fluxerRestartAttempts++;
+        logger.warn(`[Fluxer] Restarting client (attempt #${fluxerRestartAttempts})...`);
+        healthCheckService.resetFluxerDownCount();
+        try { fluxerClientRef.current?.destroy?.(); } catch {}
+        await new Promise(r => setTimeout(r, 3_000));
+        try {
+            fluxerClientRef.current = await startFluxerClient(fluxerArgs);
+            logger.info(`[Fluxer] Client restarted successfully (attempt #${fluxerRestartAttempts})`);
+            fluxerRestartState = 'idle';
+        } catch (err) {
+            logger.error(`[Fluxer] Restart #${fluxerRestartAttempts} failed:`, err);
+            enterFluxerBackoff();
+        }
+    };
+
+    const enterFluxerBackoff = () => {
+        fluxerRestartState = 'backoff';
+        healthCheckService.resetFluxerDownCount();
+        logger.warn(`[Fluxer] Entering ${FLUXER_BACKOFF_MS / 60_000}-minute backoff before next restart`);
+        setTimeout(() => {
+            fluxerRestartState = 'idle';
+            doFluxerRestart().catch((err) => logger.error('[Fluxer] Restart after backoff failed:', err));
+        }, FLUXER_BACKOFF_MS);
+    };
+
     healthCheckService.setOnDiscordRecovered(() => {
         queueService.drain(webhookService, linkService).catch((err) =>
             logger.error('Queue drain on Discord recovery error:', err)
         );
     });
     healthCheckService.setOnFluxerRecovered(() => {
+        fluxerRestartAttempts = 0;
         queueService.drain(webhookService, linkService).catch((err) =>
             logger.error('Queue drain on Fluxer recovery error:', err)
         );
+    });
+    healthCheckService.setOnFluxerDown((count) => {
+        if (fluxerRestartState !== 'idle') return;
+        if (count < FLUXER_DOWN_THRESHOLD) return;
+        if (fluxerRestartAttempts >= FLUXER_MAX_RESTARTS) {
+            enterFluxerBackoff();
+            return;
+        }
+        doFluxerRestart().catch((err) => logger.error('[Fluxer] Restart error:', err));
     });
 
     const perms = '536947712';

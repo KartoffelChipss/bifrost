@@ -137,10 +137,6 @@ const startFluxerClient = async ({
         new AutolinkFluxerCommandHandler(client, linkService, webhookService, discordEntityResolver)
     );
 
-    setInterval(async () => {
-        await healthCheckService.pushFluxerHealthStatus();
-    }, 30_000);
-
     client.once(Events.Ready, () => {
         logger.info('Fluxer bot is ready!');
         logger.info(`Fluxer bot is in ${client.guilds.size} guilds`);
