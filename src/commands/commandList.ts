@@ -37,7 +37,7 @@ const commandList: Command[] = [
         },
     },
     {
-        name: 'linkguild',
+        name: 'link',
         discord: {
             description:
                 'Creates a link between this Discord guild and a Fluxer guild.',
@@ -50,7 +50,7 @@ const commandList: Command[] = [
         },
     },
     {
-        name: 'unlinkguild',
+        name: 'unlink',
         discord: {
             description:
                 'Unlinks this Discord guild from its linked Fluxer guild.',
@@ -63,7 +63,7 @@ const commandList: Command[] = [
         },
     },
     {
-        name: 'linkchannel',
+        name: 'listall',
         discord: {
             description:
                 'Links the current Discord channel to a Fluxer channel.',

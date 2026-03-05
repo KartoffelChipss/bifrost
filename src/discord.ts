@@ -9,11 +9,10 @@ import {
 } from './commands/parseCommandString';
 import PingDiscordCommandHandler from './commands/discord/handlers/PingDiscordCommandHandler';
 import { LinkService } from './services/LinkService';
-import GuildLinkDiscordCommandHandler from './commands/discord/handlers/GuildLinkDiscordCommandHandler';
-import GuildUnlinkDiscordCommandHandler from './commands/discord/handlers/GuildUnlinkDiscordCommandHandler';
-import ChannelLinkDiscordCommandHandler from './commands/discord/handlers/ChannelLinkDiscordCommandHandler';
-import ListChannelsDiscordCommandHandler from './commands/discord/handlers/ListChannelsDiscordCommandHandler';
-import ChannelUnlinkDiscordCommandHandler from './commands/discord/handlers/ChannelUnlinkDiscordCommandHandler';
+import LinkDiscordCommandHandler from './commands/discord/handlers/LinkDiscordCommandHandler';
+import UnlinkDiscordCommandHandler from './commands/discord/handlers/UnlinkDiscordCommandHandler';
+import ListDiscordCommandHandler from './commands/discord/handlers/ListDiscordCommandHandler';
+import ListAllDiscordCommandHandler from './commands/discord/handlers/ListAllDiscordCommandHandler';
 import { WebhookService } from './services/WebhookService';
 import DiscordToFluxerMessageRelay from './services/messageRelay/DiscordToFluxerMessageRelay';
 import HelpDiscordCommandHandler from './commands/discord/handlers/HelpDiscordCommandHandler';

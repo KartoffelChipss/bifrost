@@ -82,6 +82,10 @@ export class CachedGuildLinkRepository implements GuildLinkRepository {
         return created;
     }
 
+    async findAll(): Promise<GuildLink[]> {
+        return this.repository.findAll();
+    }
+
     async deleteById(id: string): Promise<void> {
         const existing = await this.repository.findById(id);
         if (!existing) return;

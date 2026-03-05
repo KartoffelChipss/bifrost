@@ -43,6 +43,11 @@ export class SequelizeGuildLinkRepository implements GuildLinkRepository {
         return model.toJSON() as GuildLink;
     }
 
+    async findAll() {
+        const models = await GuildLinkModel.findAll();
+        return models.map((m) => m.toJSON() as GuildLink);
+    }
+
     async deleteById(id: string) {
         await GuildLinkModel.destroy({
             where: { id },

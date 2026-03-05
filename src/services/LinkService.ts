@@ -21,6 +21,10 @@ export class LinkService {
         return this.guildRepo.findByFluxerGuildId(fluxerGuildId);
     }
 
+    async getAllGuildLinks() {
+        return this.guildRepo.findAll();
+    }
+
     async createGuildLink(discordGuildId: string, fluxerGuildId: string) {
         const existingDiscordLink =
             await this.guildRepo.findByDiscordGuildId(discordGuildId);
