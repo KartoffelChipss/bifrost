@@ -16,10 +16,8 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
         _command: string,
         ..._args: string[]
     ): Promise<void> {
-        if (message.guild?.ownerId !== message.author.id) {
-            await message.reply('Only the server owner can use this command.');
-            return;
-        }
+        const isOwner = await this.requireOwner(message);
+        if (!isOwner) return;
 
         try {
             const channelLinks = await this.linkService.getChannelLinksForDiscordGuild(

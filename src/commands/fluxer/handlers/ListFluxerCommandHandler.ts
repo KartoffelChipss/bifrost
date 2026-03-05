@@ -16,11 +16,8 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
         _command: string,
         ..._args: string[]
     ): Promise<void> {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        if ((message.guild as any)?.ownerId !== message.author.id) {
-            await message.reply('Only the server owner can use this command.');
-            return;
-        }
+        const isOwner = await this.requireOwner(message);
+        if (!isOwner) return;
 
         try {
             const channelLinks = await this.linkService.getChannelLinksForFluxerGuild(

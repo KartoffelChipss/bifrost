@@ -1,4 +1,4 @@
-import { ChannelType, Client, PermissionFlagsBits } from 'discord.js';
+import { ChannelType, Client } from 'discord.js';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import FluxerEntityResolver from '../../../services/entityResolver/FluxerEntityResolver';
@@ -29,12 +29,8 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
         _command: string,
         ...args: string[]
     ): Promise<void> {
-        const hasPerms = await this.requirePermission(
-            message,
-            PermissionFlagsBits.ManageChannels,
-            'Manage Channels'
-        );
-        if (!hasPerms) return;
+        const isOwner = await this.requireOwner(message);
+        if (!isOwner) return;
 
         const doConfirm = args[0]?.toLowerCase() === 'confirm';
 

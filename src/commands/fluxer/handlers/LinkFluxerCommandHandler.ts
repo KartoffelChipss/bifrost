@@ -1,4 +1,4 @@
-import { Client, Message, PermissionFlags } from '@fluxerjs/core';
+import { Client, Message } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import DiscordEntityResolver from '../../../services/entityResolver/DiscordEntityResolver';
@@ -6,7 +6,13 @@ import FluxerCommandHandler from '../FluxerCommandHandler';
 import { COMMAND_PREFIX } from '../../../utils/env';
 import logger from '../../../utils/logging/logger';
 
+type PendingLink =
+    | { type: 'guild'; discordGuildId: string; guildName: string }
+    | { type: 'channel'; discordChannelId: string; channelName: string; guildLinkId: string; fluxerChannelId: string };
+
 export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
+    private pending = new Map<string, { action: PendingLink; timer: NodeJS.Timeout }>();
+
     constructor(
         client: Client,
         private readonly linkService: LinkService,
@@ -16,51 +22,99 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
         super(client);
     }
 
+    private setPending(userId: string, action: PendingLink) {
+        const existing = this.pending.get(userId);
+        if (existing) clearTimeout(existing.timer);
+        const timer = setTimeout(() => this.pending.delete(userId), 5 * 60 * 1000);
+        this.pending.set(userId, { action, timer });
+    }
+
+    private takePending(userId: string): PendingLink | null {
+        const entry = this.pending.get(userId);
+        if (!entry) return null;
+        clearTimeout(entry.timer);
+        this.pending.delete(userId);
+        return entry.action;
+    }
+
     public async handleCommand(
         message: Message,
         _command: string,
         ...args: string[]
     ): Promise<void> {
-        const hasPerms = await this.requirePermission(
-            message,
-            PermissionFlags.ManageChannels,
-            'Manage Channels'
-        );
-        if (!hasPerms) return;
+        const isOwner = await this.requireOwner(message);
+        if (!isOwner) return;
 
+        // Confirm flow
+        if (args[0]?.toLowerCase() === 'confirm') {
+            const pending = this.takePending(message.author.id);
+            if (!pending) {
+                await message.reply(
+                    `No pending link action. Run \`${COMMAND_PREFIX}link <id>\` first.`
+                );
+                return;
+            }
+
+            if (pending.type === 'guild') {
+                try {
+                    await this.linkService.createGuildLink(pending.discordGuildId, message.guildId!);
+                    await message.reply(
+                        `This Fluxer server is now bridged with Discord guild **${pending.guildName}**.\n` +
+                        `Use \`${COMMAND_PREFIX}link <discord-channel-id>\` in any channel to start linking channels.`
+                    );
+                } catch (err: any) {
+                    await message.reply(`Failed to link guild: ${err.message}`);
+                    logger.error('Link guild failed:', err);
+                }
+            } else {
+                try {
+                    const discordWebhook = await this.webhookService.createDiscordWebhook(
+                        pending.discordChannelId,
+                        `Fluxer Bridge Webhook for channel ${pending.discordChannelId}`
+                    );
+                    const fluxerWebhook = await this.webhookService.createFluxerWebhook(
+                        pending.fluxerChannelId,
+                        `Discord Bridge Webhook for channel ${pending.fluxerChannelId}`
+                    );
+                    await this.linkService.createChannelLink({
+                        guildLinkId: pending.guildLinkId,
+                        discordChannelId: pending.discordChannelId,
+                        fluxerChannelId: pending.fluxerChannelId,
+                        discordWebhookId: discordWebhook.id,
+                        discordWebhookToken: discordWebhook.token,
+                        fluxerWebhookId: fluxerWebhook.id,
+                        fluxerWebhookToken: fluxerWebhook.token,
+                    });
+                    await message.reply(
+                        `Linked this channel ↔ **#${pending.channelName}** on Discord successfully.`
+                    );
+                } catch (err: any) {
+                    await message.reply(`Failed to link channel: ${err.message}`);
+                    logger.error('Link channel failed:', err);
+                }
+            }
+            return;
+        }
+
+        // Detection phase
         const id = args[0];
-        const doConfirm = args[1]?.toLowerCase() === 'confirm';
-
         if (!id) {
             await message.reply(
-                `Usage: \`${COMMAND_PREFIX}link <id> [confirm]\`\n` +
-                `> Provide a Discord guild ID to bridge servers, or a Discord channel ID to bridge channels.`
+                `Usage: \`${COMMAND_PREFIX}link <id>\`\n` +
+                `> Provide a Discord guild ID to bridge servers, or a Discord channel ID to bridge channels.\n` +
+                `> Then run \`${COMMAND_PREFIX}link confirm\` to proceed.`
             );
             return;
         }
 
-        // --- Detect what the ID refers to ---
-
         // 1. Try Discord guild
         const discordGuild = await this.discordEntityResolver.fetchGuild(id).catch(() => null);
         if (discordGuild) {
-            if (!doConfirm) {
-                await message.reply(
-                    `Found Discord guild **${discordGuild.name}**.\n` +
-                    `Run \`${COMMAND_PREFIX}link ${id} confirm\` to bridge this Fluxer server to it.`
-                );
-                return;
-            }
-            try {
-                await this.linkService.createGuildLink(id, message.guildId!);
-                await message.reply(
-                    `This Fluxer server is now bridged with Discord guild **${discordGuild.name}**.\n` +
-                    `Use \`${COMMAND_PREFIX}link <discord-channel-id>\` in any channel to start linking channels.`
-                );
-            } catch (err: any) {
-                await message.reply(`Failed to link guild: ${err.message}`);
-                logger.error('Link guild failed:', err);
-            }
+            this.setPending(message.author.id, { type: 'guild', discordGuildId: id, guildName: discordGuild.name });
+            await message.reply(
+                `Found Discord guild **${discordGuild.name}**.\n` +
+                `Run \`${COMMAND_PREFIX}link confirm\` to bridge this Fluxer server to it.`
+            );
             return;
         }
 
@@ -70,38 +124,17 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
             const discordChannel = await this.discordEntityResolver.fetchChannel(guildLink.discordGuildId, id).catch(() => null);
             if (discordChannel) {
                 const channelName = 'name' in discordChannel ? (discordChannel as any).name : id;
-                if (!doConfirm) {
-                    await message.reply(
-                        `Found Discord channel **#${channelName}**.\n` +
-                        `Run \`${COMMAND_PREFIX}link ${id} confirm\` to link this channel to it.`
-                    );
-                    return;
-                }
-                try {
-                    const discordWebhook = await this.webhookService.createDiscordWebhook(
-                        id,
-                        `Fluxer Bridge Webhook for channel ${id}`
-                    );
-                    const fluxerWebhook = await this.webhookService.createFluxerWebhook(
-                        message.channelId,
-                        `Discord Bridge Webhook for channel ${message.channelId}`
-                    );
-                    await this.linkService.createChannelLink({
-                        guildLinkId: guildLink.id,
-                        discordChannelId: id,
-                        fluxerChannelId: message.channelId,
-                        discordWebhookId: discordWebhook.id,
-                        discordWebhookToken: discordWebhook.token,
-                        fluxerWebhookId: fluxerWebhook.id,
-                        fluxerWebhookToken: fluxerWebhook.token,
-                    });
-                    await message.reply(
-                        `Linked this channel ↔ **#${channelName}** on Discord successfully.`
-                    );
-                } catch (err: any) {
-                    await message.reply(`Failed to link channel: ${err.message}`);
-                    logger.error('Link channel failed:', err);
-                }
+                this.setPending(message.author.id, {
+                    type: 'channel',
+                    discordChannelId: id,
+                    channelName,
+                    guildLinkId: guildLink.id,
+                    fluxerChannelId: message.channelId,
+                });
+                await message.reply(
+                    `Found Discord channel **#${channelName}**.\n` +
+                    `Run \`${COMMAND_PREFIX}link confirm\` to link this channel to it.`
+                );
                 return;
             }
         }
