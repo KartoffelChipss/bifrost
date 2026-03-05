@@ -32,6 +32,9 @@ import { DbStatsService } from './services/DbStatsService';
 const main = async () => {
     await initDatabase();
 
+    logger.debug(`GIT_COMMIT: ${GIT_COMMIT ?? 'not resolved — stats will show N/A'}`);
+    logger.debug(`REPO_URL: ${REPO_URL ?? 'not resolved — build link will be hash only'}`);
+
     const metricsService = new MetricsService(METRICS_PORT);
     const queueService = new MessageQueueService(QUEUE_TTL_MS);
 
