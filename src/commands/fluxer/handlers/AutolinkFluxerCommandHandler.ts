@@ -34,7 +34,7 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
         const isOwner = await this.requireOwner(message);
         if (!isOwner) return;
 
-        const footer = { text: `${message.content} | ${message.author.username}#${message.author.discriminator}` };
+        const footer = this.footer(message);
         const doConfirm = args[0]?.toLowerCase() === 'confirm';
 
         let guildLink;
@@ -49,7 +49,7 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
                             `Cannot run autolink: ${error.message}. Use \`${COMMAND_PREFIX}linkguild\` first.`
                         )
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer),
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
             return;
@@ -77,7 +77,7 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
                     new EmbedBuilder()
                         .setDescription('Could not fetch the linked Discord guild.')
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer),
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
             return;
@@ -101,7 +101,7 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
                                 ` and **${fluxerTextChannels.length}** unlinked Fluxer text channels.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer),
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
             return;
@@ -133,7 +133,7 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
                             ].join('\n')
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer),
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
             return;
@@ -189,7 +189,7 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
                 new EmbedBuilder()
                     .setDescription(descriptionLines.join('\n'))
                     .setColor(summaryColor)
-                    .setFooter(footer),
+                    .setFooter(footer).setTimestamp(),
             ],
         });
     }

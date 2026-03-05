@@ -53,7 +53,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
         const isOwner = await this.requireOwner(message);
         if (!isOwner) return;
 
-        const footer = { text: `${message.content} | ${message.author.username}#${message.author.discriminator}` };
+        const footer = this.footer(message);
 
         // Confirm flow
         if (args[0]?.toLowerCase() === 'confirm') {
@@ -64,7 +64,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                         new EmbedBuilder()
                             .setDescription(`No pending unlink action. Run \`${COMMAND_PREFIX}unlink <id>\` first.`)
                             .setColor(EmbedColors.Error)
-                            .setFooter(footer),
+                            .setFooter(footer).setTimestamp(),
                     ],
                 });
                 return;
@@ -90,7 +90,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Server bridge removed. All channel links have been deleted.`)
                                 .setColor(EmbedColors.Success)
-                                .setFooter(footer),
+                                .setFooter(footer).setTimestamp(),
                         ],
                     });
                 } catch (err: any) {
@@ -99,7 +99,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Failed to unlink guild: ${err.message}`)
                                 .setColor(EmbedColors.Error)
-                                .setFooter(footer),
+                                .setFooter(footer).setTimestamp(),
                         ],
                     });
                     logger.error('Unlink guild failed:', err);
@@ -118,7 +118,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Channel bridge removed.`)
                                 .setColor(EmbedColors.Success)
-                                .setFooter(footer),
+                                .setFooter(footer).setTimestamp(),
                         ],
                     });
                 } catch (err: any) {
@@ -127,7 +127,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Failed to unlink channel: ${err.message}`)
                                 .setColor(EmbedColors.Error)
-                                .setFooter(footer),
+                                .setFooter(footer).setTimestamp(),
                         ],
                     });
                     logger.error('Unlink channel failed:', err);
@@ -149,7 +149,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                             `> Use \`${COMMAND_PREFIX}list\` to see active links and their IDs.`
                         )
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer),
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
             return;
@@ -168,7 +168,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                             `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer),
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
             return;
@@ -195,7 +195,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                             `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer),
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
             return;
@@ -209,7 +209,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                         `Use \`${COMMAND_PREFIX}list\` to see active links.`
                     )
                     .setColor(EmbedColors.Error)
-                    .setFooter(footer),
+                    .setFooter(footer).setTimestamp(),
             ],
         });
     }

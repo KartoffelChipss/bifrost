@@ -46,7 +46,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
         const isOwner = await this.requireOwner(message);
         if (!isOwner) return;
 
-        const footer = { text: `${message.content} | ${message.author.username}#${message.author.discriminator}` };
+        const footer = this.footer(message);
 
         // Confirm flow
         if (args[0]?.toLowerCase() === 'confirm') {
@@ -57,7 +57,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                         new EmbedBuilder()
                             .setDescription(`No pending link action. Run \`${COMMAND_PREFIX}link <id>\` first.`)
                             .setColor(EmbedColors.Error)
-                            .setFooter(footer),
+                            .setFooter(footer).setTimestamp(),
                     ],
                 });
                 return;
@@ -74,7 +74,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                                     `Use \`${COMMAND_PREFIX}link <discord-channel-id>\` in any channel to start linking channels.`
                                 )
                                 .setColor(EmbedColors.Success)
-                                .setFooter(footer),
+                                .setFooter(footer).setTimestamp(),
                         ],
                     });
                 } catch (err: any) {
@@ -83,7 +83,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Failed to link guild: ${err.message}`)
                                 .setColor(EmbedColors.Error)
-                                .setFooter(footer),
+                                .setFooter(footer).setTimestamp(),
                         ],
                     });
                     logger.error('Link guild failed:', err);
@@ -114,7 +114,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                                     `Linked this channel ↔ **#${pending.channelName}** on Discord successfully.`
                                 )
                                 .setColor(EmbedColors.Success)
-                                .setFooter(footer),
+                                .setFooter(footer).setTimestamp(),
                         ],
                     });
                 } catch (err: any) {
@@ -123,7 +123,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Failed to link channel: ${err.message}`)
                                 .setColor(EmbedColors.Error)
-                                .setFooter(footer),
+                                .setFooter(footer).setTimestamp(),
                         ],
                     });
                     logger.error('Link channel failed:', err);
@@ -144,7 +144,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                             `> Then run \`${COMMAND_PREFIX}link confirm\` to proceed.`
                         )
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer),
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
             return;
@@ -162,7 +162,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                             `Run \`${COMMAND_PREFIX}link confirm\` to bridge this Fluxer server to it.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer),
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
             return;
@@ -189,7 +189,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                                 `Run \`${COMMAND_PREFIX}link confirm\` to link this channel to it.`
                             )
                             .setColor(EmbedColors.Warning)
-                            .setFooter(footer),
+                            .setFooter(footer).setTimestamp(),
                     ],
                 });
                 return;
@@ -205,7 +205,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                 new EmbedBuilder()
                     .setDescription(`Could not find a Discord guild or channel with ID \`${id}\`.${hint}`)
                     .setColor(EmbedColors.Error)
-                    .setFooter(footer),
+                    .setFooter(footer).setTimestamp(),
             ],
         });
     }

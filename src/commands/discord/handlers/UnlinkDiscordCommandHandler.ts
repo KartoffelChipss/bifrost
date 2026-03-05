@@ -62,7 +62,7 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                         new EmbedBuilder()
                             .setDescription(`No pending unlink action. Run \`${COMMAND_PREFIX}unlink <id>\` first.`)
                             .setColor(EmbedColors.Error)
-                            .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                            .setFooter(this.footer(message)).setTimestamp()
                     ]
                 });
                 return;
@@ -88,7 +88,7 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Server bridge removed. All channel links have been deleted.`)
                                 .setColor(EmbedColors.Success)
-                                .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                                .setFooter(this.footer(message)).setTimestamp()
                         ]
                     });
                 } catch (err: any) {
@@ -97,7 +97,7 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Failed to unlink guild: ${err.message}`)
                                 .setColor(EmbedColors.Error)
-                                .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                                .setFooter(this.footer(message)).setTimestamp()
                         ]
                     });
                     logger.error('Unlink guild failed:', err);
@@ -116,7 +116,7 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Channel bridge removed.`)
                                 .setColor(EmbedColors.Success)
-                                .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                                .setFooter(this.footer(message)).setTimestamp()
                         ]
                     });
                 } catch (err: any) {
@@ -125,7 +125,7 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Failed to unlink channel: ${err.message}`)
                                 .setColor(EmbedColors.Error)
-                                .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                                .setFooter(this.footer(message)).setTimestamp()
                         ]
                     });
                     logger.error('Unlink channel failed:', err);
@@ -147,7 +147,7 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                             `> Use \`${COMMAND_PREFIX}list\` to see active links and their IDs.`
                         )
                         .setColor(EmbedColors.Error)
-                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        .setFooter(this.footer(message)).setTimestamp()
                 ]
             });
             return;
@@ -166,7 +166,7 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                             `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        .setFooter(this.footer(message)).setTimestamp()
                 ]
             });
             return;
@@ -193,7 +193,7 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                             `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        .setFooter(this.footer(message)).setTimestamp()
                 ]
             });
             return;
@@ -207,7 +207,7 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                         `Use \`${COMMAND_PREFIX}list\` to see active links.`
                     )
                     .setColor(EmbedColors.Error)
-                    .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                    .setFooter(this.footer(message)).setTimestamp()
             ]
         });
     }

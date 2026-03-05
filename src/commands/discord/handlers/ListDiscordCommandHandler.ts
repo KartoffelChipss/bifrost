@@ -48,7 +48,7 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                         new EmbedBuilder()
                             .setDescription('You do not have permission to use this command.')
                             .setColor(EmbedColors.Error)
-                            .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                            .setFooter(this.footer(message)).setTimestamp()
                     ]
                 });
                 return;
@@ -63,7 +63,7 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                             new EmbedBuilder()
                                 .setDescription('No guild bridges configured.')
                                 .setColor(EmbedColors.Warning)
-                                .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                                .setFooter(this.footer(message)).setTimestamp()
                         ]
                     });
                     return;
@@ -98,9 +98,7 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                     );
                 }
 
-                embeds[embeds.length - 1].setFooter({
-                    text: `${message.content} | ${message.author.tag}`,
-                });
+                embeds[embeds.length - 1].setFooter(this.footer(message)).setTimestamp();
 
                 await message.reply({ embeds });
             } catch (err: any) {
@@ -109,7 +107,7 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                         new EmbedBuilder()
                             .setDescription(`Failed to list all links: ${err.message}`)
                             .setColor(EmbedColors.Error)
-                            .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                            .setFooter(this.footer(message)).setTimestamp()
                     ]
                 });
                 logger.error('Error listing all links:', err);
@@ -126,7 +124,7 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                         new EmbedBuilder()
                             .setDescription('No guild bridge found for this server.')
                             .setColor(EmbedColors.Warning)
-                            .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                            .setFooter(this.footer(message)).setTimestamp()
                     ]
                 });
                 return;
@@ -140,7 +138,7 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                         new EmbedBuilder()
                             .setDescription('No channel links found for this server.')
                             .setColor(EmbedColors.Warning)
-                            .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                            .setFooter(this.footer(message)).setTimestamp()
                     ]
                 });
                 return;
@@ -154,7 +152,7 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                         .setTitle('Discord ↔ Fluxer | Linked Channels')
                         .setDescription(lines.join('\n\n'))
                         .setColor(EmbedColors.Info)
-                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        .setFooter(this.footer(message)).setTimestamp()
                 ]
             });
         } catch (err: any) {
@@ -163,7 +161,7 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                     new EmbedBuilder()
                         .setDescription(`Failed to list channel links: ${err.message}`)
                         .setColor(EmbedColors.Error)
-                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        .setFooter(this.footer(message)).setTimestamp()
                 ]
             });
             logger.error('Error listing channel links:', err);

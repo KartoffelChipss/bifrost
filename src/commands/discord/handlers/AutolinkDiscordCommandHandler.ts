@@ -47,7 +47,7 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                             `Cannot run autolink: ${error.message}. Use \`${COMMAND_PREFIX}linkguild\` first.`
                         )
                         .setColor(EmbedColors.Error)
-                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        .setFooter(this.footer(message)).setTimestamp()
                 ]
             });
             return;
@@ -77,7 +77,7 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                     new EmbedBuilder()
                         .setDescription('Could not fetch the linked Fluxer guild.')
                         .setColor(EmbedColors.Error)
-                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        .setFooter(this.footer(message)).setTimestamp()
                 ]
             });
             return;
@@ -99,7 +99,7 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                                 ` and **${fluxerTextChannels.length}** unlinked Fluxer text channels.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        .setFooter(this.footer(message)).setTimestamp()
                 ]
             });
             return;
@@ -131,7 +131,7 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                             ].join('\n')
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        .setFooter(this.footer(message)).setTimestamp()
                 ]
             });
             return;
@@ -186,7 +186,7 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                 new EmbedBuilder()
                     .setDescription(summaryLines.join('\n'))
                     .setColor(isPartial ? EmbedColors.Warning : EmbedColors.Success)
-                    .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                    .setFooter(this.footer(message)).setTimestamp()
             ]
         });
     }

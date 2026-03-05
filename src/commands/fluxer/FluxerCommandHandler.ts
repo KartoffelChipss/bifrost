@@ -116,7 +116,7 @@ export default abstract class FluxerCommandHandler extends CommandHandler<
                     new EmbedBuilder()
                         .setDescription('Only the server owner can use this command.')
                         .setColor(EmbedColors.Error)
-                        .setFooter({ text: `${message.content} | ${message.author.username}#${message.author.discriminator}` }),
+                        .setFooter(this.footer(message)).setTimestamp(),
                 ],
             });
             return false;
