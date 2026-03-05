@@ -1,19 +1,30 @@
 import { Client, Message } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
+import { WebhookService } from '../../../services/WebhookService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import { COMMAND_PREFIX } from '../../../utils/env';
 import logger from '../../../utils/logging/logger';
 
 type PendingUnlink =
     | { type: 'guild'; discordGuildId: string }
-    | { type: 'channel'; linkId: string; discordChannelId: string; fluxerChannelId: string };
+    | {
+          type: 'channel';
+          linkId: string;
+          discordChannelId: string;
+          fluxerChannelId: string;
+          discordWebhookId: string;
+          discordWebhookToken: string;
+          fluxerWebhookId: string;
+          fluxerWebhookToken: string;
+      };
 
 export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
     private pending = new Map<string, { action: PendingUnlink; timer: NodeJS.Timeout }>();
 
     constructor(
         client: Client,
-        private readonly linkService: LinkService
+        private readonly linkService: LinkService,
+        private readonly webhookService: WebhookService
     ) {
         super(client);
     }
@@ -53,6 +64,18 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
 
             if (pending.type === 'guild') {
                 try {
+                    // Clean up webhooks for all channel links before removing the guild link
+                    const channelLinks = await this.linkService
+                        .getChannelLinksForFluxerGuild(message.guildId!)
+                        .catch(() => []);
+                    for (const link of channelLinks) {
+                        await this.webhookService
+                            .deleteDiscordWebhook(link.discordWebhookId, link.discordWebhookToken)
+                            .catch((err) => logger.error('Failed to delete Discord webhook during guild unlink:', err));
+                        await this.webhookService
+                            .deleteFluxerWebhook(link.fluxerWebhookId, link.fluxerWebhookToken)
+                            .catch((err) => logger.error('Failed to delete Fluxer webhook during guild unlink:', err));
+                    }
                     await this.linkService.removeGuildLinkFromFluxer(message.guildId!);
                     await message.reply(`Server bridge removed. All channel links have been deleted.`);
                 } catch (err: any) {
@@ -61,6 +84,12 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                 }
             } else {
                 try {
+                    await this.webhookService
+                        .deleteDiscordWebhook(pending.discordWebhookId, pending.discordWebhookToken)
+                        .catch((err) => logger.error('Failed to delete Discord webhook during channel unlink:', err));
+                    await this.webhookService
+                        .deleteFluxerWebhook(pending.fluxerWebhookId, pending.fluxerWebhookToken)
+                        .catch((err) => logger.error('Failed to delete Fluxer webhook during channel unlink:', err));
                     await this.linkService.removeChannelLinkForFluxer(message.guildId!, pending.linkId);
                     await message.reply(`Channel bridge removed.`);
                 } catch (err: any) {
@@ -103,6 +132,10 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                 linkId: channelLink.linkId,
                 discordChannelId: id,
                 fluxerChannelId: channelLink.fluxerChannelId,
+                discordWebhookId: channelLink.discordWebhookId,
+                discordWebhookToken: channelLink.discordWebhookToken,
+                fluxerWebhookId: channelLink.fluxerWebhookId,
+                fluxerWebhookToken: channelLink.fluxerWebhookToken,
             });
             await message.reply(
                 `This will remove the channel bridge for Discord channel \`${id}\` ↔ <#${channelLink.fluxerChannelId}>.\n` +
