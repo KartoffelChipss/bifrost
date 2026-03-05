@@ -316,6 +316,12 @@ const startDiscordClient = async ({
                     error
                 );
             }
+
+            if (DELETE_INVOCATION) {
+                message.delete().catch((err) =>
+                    logger.error('Failed to delete invocation message:', err)
+                );
+            }
         }
 
         const isValidWebhookChannel =

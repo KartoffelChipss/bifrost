@@ -1,10 +1,11 @@
-import { Client, PermissionFlagsBits } from 'discord.js';
+import { Client, EmbedBuilder } from 'discord.js';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import FluxerEntityResolver from '../../../services/entityResolver/FluxerEntityResolver';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import { COMMAND_PREFIX } from '../../../utils/env';
 import logger from '../../../utils/logging/logger';
+import { EmbedColors } from '../../../utils/embeds';
 
 type PendingLink =
     | { type: 'guild'; fluxerGuildId: string; guildName: string }
@@ -49,21 +50,40 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
         if (args[0]?.toLowerCase() === 'confirm') {
             const pending = this.takePending(message.author.id);
             if (!pending) {
-                await message.reply(
-                    `No pending link action. Run \`${COMMAND_PREFIX}link <id>\` first.`
-                );
+                await message.reply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setDescription(`No pending link action. Run \`${COMMAND_PREFIX}link <id>\` first.`)
+                            .setColor(EmbedColors.Error)
+                            .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                    ]
+                });
                 return;
             }
 
             if (pending.type === 'guild') {
                 try {
                     await this.linkService.createGuildLink(message.guildId!, pending.fluxerGuildId);
-                    await message.reply(
-                        `This Discord server is now bridged with Fluxer guild **${pending.guildName}**.\n` +
-                        `Use \`${COMMAND_PREFIX}link <fluxer-channel-id>\` in any channel to start linking channels.`
-                    );
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription(
+                                    `This Discord server is now bridged with Fluxer guild **${pending.guildName}**.\n` +
+                                    `Use \`${COMMAND_PREFIX}link <fluxer-channel-id>\` in any channel to start linking channels.`
+                                )
+                                .setColor(EmbedColors.Success)
+                                .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        ]
+                    });
                 } catch (err: any) {
-                    await message.reply(`Failed to link guild: ${err.message}`);
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription(`Failed to link guild: ${err.message}`)
+                                .setColor(EmbedColors.Error)
+                                .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        ]
+                    });
                     logger.error('Link guild failed:', err);
                 }
             } else {
@@ -85,11 +105,25 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
                         fluxerWebhookId: fluxerWebhook.id,
                         fluxerWebhookToken: fluxerWebhook.token,
                     });
-                    await message.reply(
-                        `Linked <#${pending.discordChannelId}> ↔ **#${pending.channelName}** successfully.`
-                    );
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription(
+                                    `Linked <#${pending.discordChannelId}> ↔ **#${pending.channelName}** successfully.`
+                                )
+                                .setColor(EmbedColors.Success)
+                                .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        ]
+                    });
                 } catch (err: any) {
-                    await message.reply(`Failed to link channel: ${err.message}`);
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription(`Failed to link channel: ${err.message}`)
+                                .setColor(EmbedColors.Error)
+                                .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                        ]
+                    });
                     logger.error('Link channel failed:', err);
                 }
             }
@@ -99,11 +133,18 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
         // Detection phase
         const id = args[0];
         if (!id) {
-            await message.reply(
-                `Usage: \`${COMMAND_PREFIX}link <id>\`\n` +
-                `> Provide a Fluxer guild ID to bridge servers, or a Fluxer channel ID to bridge channels.\n` +
-                `> Then run \`${COMMAND_PREFIX}link confirm\` to proceed.`
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription(
+                            `Usage: \`${COMMAND_PREFIX}link <id>\`\n` +
+                            `> Provide a Fluxer guild ID to bridge servers, or a Fluxer channel ID to bridge channels.\n` +
+                            `> Then run \`${COMMAND_PREFIX}link confirm\` to proceed.`
+                        )
+                        .setColor(EmbedColors.Error)
+                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                ]
+            });
             return;
         }
 
@@ -112,10 +153,17 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
         if (fluxerGuild) {
             const guildName = (fluxerGuild as any).name ?? id;
             this.setPending(message.author.id, { type: 'guild', fluxerGuildId: id, guildName });
-            await message.reply(
-                `Found Fluxer guild **${guildName}**.\n` +
-                `Run \`${COMMAND_PREFIX}link confirm\` to bridge this Discord server to it.`
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription(
+                            `Found Fluxer guild **${guildName}**.\n` +
+                            `Run \`${COMMAND_PREFIX}link confirm\` to bridge this Discord server to it.`
+                        )
+                        .setColor(EmbedColors.Warning)
+                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                ]
+            });
             return;
         }
 
@@ -132,10 +180,17 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
                     guildLinkId: guildLink.id,
                     discordChannelId: message.channelId,
                 });
-                await message.reply(
-                    `Found Fluxer channel **#${channelName}**.\n` +
-                    `Run \`${COMMAND_PREFIX}link confirm\` to link <#${message.channelId}> to it.`
-                );
+                await message.reply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setDescription(
+                                `Found Fluxer channel **#${channelName}**.\n` +
+                                `Run \`${COMMAND_PREFIX}link confirm\` to link <#${message.channelId}> to it.`
+                            )
+                            .setColor(EmbedColors.Warning)
+                            .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                    ]
+                });
                 return;
             }
         }
@@ -144,6 +199,13 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
         const hint = guildLink
             ? ''
             : ` (Link a Fluxer guild first with \`${COMMAND_PREFIX}link <fluxer-guild-id>\`)`;
-        await message.reply(`Could not find a Fluxer guild or channel with ID \`${id}\`.${hint}`);
+        await message.reply({
+            embeds: [
+                new EmbedBuilder()
+                    .setDescription(`Could not find a Fluxer guild or channel with ID \`${id}\`.${hint}`)
+                    .setColor(EmbedColors.Error)
+                    .setFooter({ text: `${message.content} | ${message.author.tag}` })
+            ]
+        });
     }
 }

@@ -1,5 +1,5 @@
 import { ChannelType } from 'discord.js';
-import { Client, Message } from '@fluxerjs/core';
+import { Client, EmbedBuilder, Message } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import DiscordEntityResolver from '../../../services/entityResolver/DiscordEntityResolver';
@@ -7,6 +7,7 @@ import { matchChannels, ChannelInfo } from '../../../utils/channelMatcher';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import { COMMAND_PREFIX } from '../../../utils/env';
 import logger from '../../../utils/logging/logger';
+import { EmbedColors } from '../../../utils/embeds';
 
 export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
@@ -33,6 +34,7 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
         const isOwner = await this.requireOwner(message);
         if (!isOwner) return;
 
+        const footer = { text: `${message.content} | ${message.author.username}#${message.author.discriminator}` };
         const doConfirm = args[0]?.toLowerCase() === 'confirm';
 
         let guildLink;
@@ -40,9 +42,16 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
             guildLink = await this.linkService.getGuildLinkForFluxerGuild(message.guildId!);
             if (!guildLink) throw new Error('this guild is not linked to a Discord guild');
         } catch (error: any) {
-            await message.reply(
-                `Cannot run autolink: ${error.message}. Use \`${COMMAND_PREFIX}linkguild\` first.`
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription(
+                            `Cannot run autolink: ${error.message}. Use \`${COMMAND_PREFIX}linkguild\` first.`
+                        )
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer),
+                ],
+            });
             return;
         }
 
@@ -63,7 +72,14 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
         // Fetch all Discord text channels in the linked Discord guild
         const discordGuild = await this.discordEntityResolver.fetchGuild(guildLink.discordGuildId);
         if (!discordGuild) {
-            await message.reply('Could not fetch the linked Discord guild.');
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription('Could not fetch the linked Discord guild.')
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer),
+                ],
+            });
             return;
         }
         const allDiscordChannels = await discordGuild.channels.fetch();
@@ -77,10 +93,17 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
         const proposals = matchChannels(discordTextChannels, fluxerTextChannels);
 
         if (proposals.length === 0) {
-            await message.reply(
-                `No confident channel name matches found among **${discordTextChannels.length}** unlinked Discord` +
-                    ` and **${fluxerTextChannels.length}** unlinked Fluxer text channels.`
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription(
+                            `No confident channel name matches found among **${discordTextChannels.length}** unlinked Discord` +
+                                ` and **${fluxerTextChannels.length}** unlinked Fluxer text channels.`
+                        )
+                        .setColor(EmbedColors.Warning)
+                        .setFooter(footer),
+                ],
+            });
             return;
         }
 
@@ -93,18 +116,26 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
             const unmatchedFluxer = fluxerTextChannels.length - proposals.length;
             const unmatchedTotal = unmatchedDiscord + unmatchedFluxer;
 
-            await message.reply(
-                [
-                    `**Auto-link Wizard** — ${proposals.length} proposal${proposals.length !== 1 ? 's' : ''} found`,
-                    '',
-                    lines.join('\n'),
-                    '',
-                    unmatchedTotal > 0
-                        ? `${unmatchedTotal} channel${unmatchedTotal !== 1 ? 's' : ''} had no confident match.`
-                        : 'All unlinked channels were matched.',
-                    `Run \`${COMMAND_PREFIX}autolink confirm\` to link all proposals.`,
-                ].join('\n')
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Auto-link Wizard')
+                        .setDescription(
+                            [
+                                `${proposals.length} proposal${proposals.length !== 1 ? 's' : ''} found`,
+                                '',
+                                lines.join('\n'),
+                                '',
+                                unmatchedTotal > 0
+                                    ? `${unmatchedTotal} channel${unmatchedTotal !== 1 ? 's' : ''} had no confident match.`
+                                    : 'All unlinked channels were matched.',
+                                `Run \`${COMMAND_PREFIX}autolink confirm\` to link all proposals.`,
+                            ].join('\n')
+                        )
+                        .setColor(EmbedColors.Warning)
+                        .setFooter(footer),
+                ],
+            });
             return;
         }
 
@@ -143,13 +174,23 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
             }
         }
 
-        const lines = [
+        const descriptionLines = [
             `Successfully linked **${successCount}** of **${proposals.length}** proposed channel pair${proposals.length !== 1 ? 's' : ''}.`,
         ];
         if (errors.length > 0) {
-            lines.push('', 'Failures:');
-            errors.forEach((e) => lines.push(`> ${e}`));
+            descriptionLines.push('', 'Failures:');
+            errors.forEach((e) => descriptionLines.push(`> ${e}`));
         }
-        await message.reply(lines.join('\n'));
+
+        const summaryColor = errors.length > 0 ? EmbedColors.Warning : EmbedColors.Success;
+
+        await message.reply({
+            embeds: [
+                new EmbedBuilder()
+                    .setDescription(descriptionLines.join('\n'))
+                    .setColor(summaryColor)
+                    .setFooter(footer),
+            ],
+        });
     }
 }

@@ -1,7 +1,8 @@
-import { Client } from 'discord.js';
+import { Client, EmbedBuilder } from 'discord.js';
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import logger from '../../../utils/logging/logger';
+import { EmbedColors } from '../../../utils/embeds';
 
 export default class ListAllDiscordCommandHandler extends DiscordCommandHandler {
     constructor(
@@ -23,7 +24,14 @@ export default class ListAllDiscordCommandHandler extends DiscordCommandHandler 
             const guildLinks = await this.linkService.getAllGuildLinks();
 
             if (guildLinks.length === 0) {
-                await message.reply('No guild bridges configured.');
+                await message.reply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setDescription('No guild bridges configured.')
+                            .setColor(EmbedColors.Warning)
+                            .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                    ]
+                });
                 return;
             }
 
@@ -45,9 +53,24 @@ export default class ListAllDiscordCommandHandler extends DiscordCommandHandler 
                 }
             }
 
-            await message.reply(sections.join('\n\n'));
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('All Guild Bridges')
+                        .setDescription(sections.join('\n\n'))
+                        .setColor(EmbedColors.Info)
+                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                ]
+            });
         } catch (err: any) {
-            await message.reply(`Failed to list all links: ${err.message}`);
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription(`Failed to list all links: ${err.message}`)
+                        .setColor(EmbedColors.Error)
+                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                ]
+            });
             logger.error('Error listing all links:', err);
         }
     }

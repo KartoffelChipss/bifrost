@@ -111,7 +111,14 @@ export default abstract class FluxerCommandHandler extends CommandHandler<
 
     protected async requireOwner(message: Message): Promise<boolean> {
         if ((message.guild as any)?.ownerId !== message.author.id) {
-            await message.reply('Only the server owner can use this command.');
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription('Only the server owner can use this command.')
+                        .setColor(EmbedColors.Error)
+                        .setFooter({ text: `${message.content} | ${message.author.username}#${message.author.discriminator}` }),
+                ],
+            });
             return false;
         }
         return true;

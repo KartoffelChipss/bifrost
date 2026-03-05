@@ -1,4 +1,4 @@
-import { ChannelType, Client } from 'discord.js';
+import { ChannelType, Client, EmbedBuilder } from 'discord.js';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import FluxerEntityResolver from '../../../services/entityResolver/FluxerEntityResolver';
@@ -6,6 +6,7 @@ import { matchChannels, ChannelInfo } from '../../../utils/channelMatcher';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import { COMMAND_PREFIX } from '../../../utils/env';
 import logger from '../../../utils/logging/logger';
+import { EmbedColors } from '../../../utils/embeds';
 
 export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
@@ -39,9 +40,16 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
             guildLink = await this.linkService.getGuildLinkForDiscordGuild(message.guildId!);
             if (!guildLink) throw new Error('this guild is not linked to a Fluxer guild');
         } catch (error: any) {
-            await message.reply(
-                `Cannot run autolink: ${error.message}. Use \`${COMMAND_PREFIX}linkguild\` first.`
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription(
+                            `Cannot run autolink: ${error.message}. Use \`${COMMAND_PREFIX}linkguild\` first.`
+                        )
+                        .setColor(EmbedColors.Error)
+                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                ]
+            });
             return;
         }
 
@@ -64,7 +72,14 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
         // Fetch all Fluxer text channels in the linked Fluxer guild
         const fluxerGuild = await this.fluxerEntityResolver.fetchGuild(guildLink.fluxerGuildId);
         if (!fluxerGuild) {
-            await message.reply('Could not fetch the linked Fluxer guild.');
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription('Could not fetch the linked Fluxer guild.')
+                        .setColor(EmbedColors.Error)
+                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                ]
+            });
             return;
         }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,10 +91,17 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
         const proposals = matchChannels(discordTextChannels, fluxerTextChannels);
 
         if (proposals.length === 0) {
-            await message.reply(
-                `No confident channel name matches found among **${discordTextChannels.length}** unlinked Discord` +
-                    ` and **${fluxerTextChannels.length}** unlinked Fluxer text channels.`
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription(
+                            `No confident channel name matches found among **${discordTextChannels.length}** unlinked Discord` +
+                                ` and **${fluxerTextChannels.length}** unlinked Fluxer text channels.`
+                        )
+                        .setColor(EmbedColors.Warning)
+                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                ]
+            });
             return;
         }
 
@@ -92,18 +114,26 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
             const unmatchedFluxer = fluxerTextChannels.length - proposals.length;
             const unmatchedTotal = unmatchedDiscord + unmatchedFluxer;
 
-            await message.reply(
-                [
-                    `**Auto-link Wizard** — ${proposals.length} proposal${proposals.length !== 1 ? 's' : ''} found`,
-                    '',
-                    lines.join('\n'),
-                    '',
-                    unmatchedTotal > 0
-                        ? `${unmatchedTotal} channel${unmatchedTotal !== 1 ? 's' : ''} had no confident match.`
-                        : 'All unlinked channels were matched.',
-                    `Run \`${COMMAND_PREFIX}autolink confirm\` to link all proposals.`,
-                ].join('\n')
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Auto-link Wizard')
+                        .setDescription(
+                            [
+                                `${proposals.length} proposal${proposals.length !== 1 ? 's' : ''} found`,
+                                '',
+                                lines.join('\n'),
+                                '',
+                                unmatchedTotal > 0
+                                    ? `${unmatchedTotal} channel${unmatchedTotal !== 1 ? 's' : ''} had no confident match.`
+                                    : 'All unlinked channels were matched.',
+                                `Run \`${COMMAND_PREFIX}autolink confirm\` to link all proposals.`,
+                            ].join('\n')
+                        )
+                        .setColor(EmbedColors.Warning)
+                        .setFooter({ text: `${message.content} | ${message.author.tag}` })
+                ]
+            });
             return;
         }
 
@@ -142,13 +172,22 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
             }
         }
 
-        const lines = [
+        const isPartial = errors.length > 0;
+        const summaryLines = [
             `Successfully linked **${successCount}** of **${proposals.length}** proposed channel pair${proposals.length !== 1 ? 's' : ''}.`,
         ];
-        if (errors.length > 0) {
-            lines.push('', 'Failures:');
-            errors.forEach((e) => lines.push(`> ${e}`));
+        if (isPartial) {
+            summaryLines.push('', 'Failures:');
+            errors.forEach((e) => summaryLines.push(`> ${e}`));
         }
-        await message.reply(lines.join('\n'));
+
+        await message.reply({
+            embeds: [
+                new EmbedBuilder()
+                    .setDescription(summaryLines.join('\n'))
+                    .setColor(isPartial ? EmbedColors.Warning : EmbedColors.Success)
+                    .setFooter({ text: `${message.content} | ${message.author.tag}` })
+            ]
+        });
     }
 }

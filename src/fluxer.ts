@@ -12,6 +12,7 @@ import {
     parseCommandString,
 } from './commands/parseCommandString';
 import './utils/env';
+import { EmbedColors } from './utils/embeds';
 import logger from './utils/logging/logger';
 import FluxerCommandHandler from './commands/fluxer/FluxerCommandHandler';
 import { COMMAND_PREFIX, FLUXER_TOKEN } from './utils/env';
@@ -325,6 +326,12 @@ const startFluxerClient = async ({
                         authorId: message.author.id,
                     },
                     error
+                );
+            }
+
+            if (DELETE_INVOCATION) {
+                message.delete().catch((err: any) =>
+                    logger.error('Failed to delete invocation message:', err)
                 );
             }
         }

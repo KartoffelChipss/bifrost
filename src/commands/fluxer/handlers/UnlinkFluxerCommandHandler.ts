@@ -1,9 +1,10 @@
-import { Client, Message } from '@fluxerjs/core';
+import { Client, EmbedBuilder, Message } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import { COMMAND_PREFIX } from '../../../utils/env';
 import logger from '../../../utils/logging/logger';
+import { EmbedColors } from '../../../utils/embeds';
 
 type PendingUnlink =
     | { type: 'guild'; discordGuildId: string }
@@ -52,13 +53,20 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
         const isOwner = await this.requireOwner(message);
         if (!isOwner) return;
 
+        const footer = { text: `${message.content} | ${message.author.username}#${message.author.discriminator}` };
+
         // Confirm flow
         if (args[0]?.toLowerCase() === 'confirm') {
             const pending = this.takePending(message.author.id);
             if (!pending) {
-                await message.reply(
-                    `No pending unlink action. Run \`${COMMAND_PREFIX}unlink <id>\` first.`
-                );
+                await message.reply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setDescription(`No pending unlink action. Run \`${COMMAND_PREFIX}unlink <id>\` first.`)
+                            .setColor(EmbedColors.Error)
+                            .setFooter(footer),
+                    ],
+                });
                 return;
             }
 
@@ -77,9 +85,23 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                             .catch((err) => logger.error('Failed to delete Fluxer webhook during guild unlink:', err));
                     }
                     await this.linkService.removeGuildLinkFromFluxer(message.guildId!);
-                    await message.reply(`Server bridge removed. All channel links have been deleted.`);
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription(`Server bridge removed. All channel links have been deleted.`)
+                                .setColor(EmbedColors.Success)
+                                .setFooter(footer),
+                        ],
+                    });
                 } catch (err: any) {
-                    await message.reply(`Failed to unlink guild: ${err.message}`);
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription(`Failed to unlink guild: ${err.message}`)
+                                .setColor(EmbedColors.Error)
+                                .setFooter(footer),
+                        ],
+                    });
                     logger.error('Unlink guild failed:', err);
                 }
             } else {
@@ -91,9 +113,23 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                         .deleteFluxerWebhook(pending.fluxerWebhookId, pending.fluxerWebhookToken)
                         .catch((err) => logger.error('Failed to delete Fluxer webhook during channel unlink:', err));
                     await this.linkService.removeChannelLinkForFluxer(message.guildId!, pending.linkId);
-                    await message.reply(`Channel bridge removed.`);
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription(`Channel bridge removed.`)
+                                .setColor(EmbedColors.Success)
+                                .setFooter(footer),
+                        ],
+                    });
                 } catch (err: any) {
-                    await message.reply(`Failed to unlink channel: ${err.message}`);
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription(`Failed to unlink channel: ${err.message}`)
+                                .setColor(EmbedColors.Error)
+                                .setFooter(footer),
+                        ],
+                    });
                     logger.error('Unlink channel failed:', err);
                 }
             }
@@ -103,12 +139,19 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
         // Detection phase
         const id = args[0];
         if (!id) {
-            await message.reply(
-                `Usage: \`${COMMAND_PREFIX}unlink <id>\`\n` +
-                `> Provide the Discord guild ID to unbridge servers, or a Discord channel ID to remove a channel link.\n` +
-                `> Then run \`${COMMAND_PREFIX}unlink confirm\` to proceed.\n` +
-                `> Use \`${COMMAND_PREFIX}list\` to see active links and their IDs.`
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription(
+                            `Usage: \`${COMMAND_PREFIX}unlink <id>\`\n` +
+                            `> Provide the Discord guild ID to unbridge servers, or a Discord channel ID to remove a channel link.\n` +
+                            `> Then run \`${COMMAND_PREFIX}unlink confirm\` to proceed.\n` +
+                            `> Use \`${COMMAND_PREFIX}list\` to see active links and their IDs.`
+                        )
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer),
+                ],
+            });
             return;
         }
 
@@ -116,11 +159,18 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
         const guildLink = await this.linkService.getGuildLinkForDiscordGuild(id).catch(() => null);
         if (guildLink) {
             this.setPending(message.author.id, { type: 'guild', discordGuildId: id });
-            await message.reply(
-                `This will remove the bridge between this Fluxer server and Discord guild \`${id}\`, ` +
-                `including **all** channel links.\n` +
-                `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription(
+                            `This will remove the bridge between this Fluxer server and Discord guild \`${id}\`, ` +
+                            `including **all** channel links.\n` +
+                            `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
+                        )
+                        .setColor(EmbedColors.Warning)
+                        .setFooter(footer),
+                ],
+            });
             return;
         }
 
@@ -137,16 +187,30 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                 fluxerWebhookId: channelLink.fluxerWebhookId,
                 fluxerWebhookToken: channelLink.fluxerWebhookToken,
             });
-            await message.reply(
-                `This will remove the channel bridge for Discord channel \`${id}\` ↔ <#${channelLink.fluxerChannelId}>.\n` +
-                `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription(
+                            `This will remove the channel bridge for Discord channel \`${id}\` ↔ <#${channelLink.fluxerChannelId}>.\n` +
+                            `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
+                        )
+                        .setColor(EmbedColors.Warning)
+                        .setFooter(footer),
+                ],
+            });
             return;
         }
 
-        await message.reply(
-            `No active link found for ID \`${id}\`.\n` +
-            `Use \`${COMMAND_PREFIX}list\` to see active links.`
-        );
+        await message.reply({
+            embeds: [
+                new EmbedBuilder()
+                    .setDescription(
+                        `No active link found for ID \`${id}\`.\n` +
+                        `Use \`${COMMAND_PREFIX}list\` to see active links.`
+                    )
+                    .setColor(EmbedColors.Error)
+                    .setFooter(footer),
+            ],
+        });
     }
 }

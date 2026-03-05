@@ -37,6 +37,19 @@ const commandList: Command[] = [
         },
     },
     {
+        name: 'autolink',
+        discord: {
+            description:
+                'Compares unlinked channels across both guilds and proposes links based on name similarity. Run with `confirm` to execute all proposals.',
+            usageArgs: ['[confirm]'],
+        },
+        fluxer: {
+            description:
+                'Compares unlinked channels across both guilds and proposes links based on name similarity. Run with `confirm` to execute all proposals.',
+            usageArgs: ['[confirm]'],
+        },
+    },
+    {
         name: 'link',
         discord: {
             description:
@@ -112,19 +125,6 @@ const commandList: Command[] = [
             description:
                 'Shows statistics about the bot, such as number of linked guilds and channels.',
             usageArgs: [],
-        },
-    },
-    {
-        name: 'autolink',
-        discord: {
-            description:
-                'Compares unlinked channels across both guilds and proposes links based on name similarity. Run with `confirm` to execute all proposals.',
-            usageArgs: ['[confirm]'],
-        },
-        fluxer: {
-            description:
-                'Compares unlinked channels across both guilds and proposes links based on name similarity. Run with `confirm` to execute all proposals.',
-            usageArgs: ['[confirm]'],
         },
     },
 ];
