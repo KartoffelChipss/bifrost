@@ -9,6 +9,8 @@ services:
             DISCORD_BOT_TOKEN_FILE: /root/.creds/bf_discord
             FLUXER_APPLICATION_ID: 1478333491047665698
             DISCORD_APPLICATION_ID: 1478331623853260892
+            FLUX_USERID: 1475309609460187238
+            DISCORD_USERID: 391124319444533249
             COMMAND_PREFIX: "%"
             CONFIG_PATH: /config
             DISCORD_HEALTH_PUSH_URL: https://status.sou1.dev/api/push

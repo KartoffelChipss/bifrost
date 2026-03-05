@@ -12,7 +12,6 @@ import { LinkService } from './services/LinkService';
 import LinkDiscordCommandHandler from './commands/discord/handlers/LinkDiscordCommandHandler';
 import UnlinkDiscordCommandHandler from './commands/discord/handlers/UnlinkDiscordCommandHandler';
 import ListDiscordCommandHandler from './commands/discord/handlers/ListDiscordCommandHandler';
-import ListAllDiscordCommandHandler from './commands/discord/handlers/ListAllDiscordCommandHandler';
 import { WebhookService } from './services/WebhookService';
 import DiscordToFluxerMessageRelay from './services/messageRelay/DiscordToFluxerMessageRelay';
 import HelpDiscordCommandHandler from './commands/discord/handlers/HelpDiscordCommandHandler';

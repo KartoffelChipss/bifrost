@@ -22,7 +22,6 @@ import { LinkService } from './services/LinkService';
 import LinkFluxerCommandHandler from './commands/fluxer/handlers/LinkFluxerCommandHandler';
 import UnlinkFluxerCommandHandler from './commands/fluxer/handlers/UnlinkFluxerCommandHandler';
 import ListFluxerCommandHandler from './commands/fluxer/handlers/ListFluxerCommandHandler';
-import ListAllFluxerCommandHandler from './commands/fluxer/handlers/ListAllFluxerCommandHandler';
 import { WebhookService } from './services/WebhookService';
 import FluxerToDiscordMessageRelay from './services/messageRelay/FluxerToDiscordMessageRelay';
 import HelpFluxerCommandHandler from './commands/fluxer/handlers/HelpFluxerCommandHandler';
