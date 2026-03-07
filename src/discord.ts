@@ -188,7 +188,6 @@ const startDiscordClient = async ({
         );
         if (!guildLink) return;
 
-        //console.log('Deleting Fluxer message with ID:', messageLink.fluxerMessageId);
         const msg = await fluxerEntityResolver.fetchMessage(
             guildLink.fluxerGuildId,
             channelLink.fluxerChannelId,
@@ -224,41 +223,6 @@ const startDiscordClient = async ({
             );
         }
     });
-
-    // client.on('messageUpdate', async (oldMessage, newMessage) => {
-    //     if (!newMessage.inGuild()) return;
-
-    //     const messageLink = await linkService.getMessageLinkByDiscordMessageId(newMessage.id);
-    //     if (!messageLink) return;
-
-    //     const channelLink = await linkService.getChannelLinkById(messageLink.channelLinkId);
-    //     if (!channelLink) return;
-
-    //     const guildLink = await linkService.getGuildLinkById(channelLink.guildLinkId);
-    //     if (!guildLink) return;
-
-    //     const msg = await fluxerEntityResolver.fetchMessage(
-    //         guildLink.fluxerGuildId,
-    //         channelLink.fluxerChannelId,
-    //         messageLink.fluxerMessageId
-    //     );
-
-    //     if (!msg) {
-    //         logger.error(
-    //             'Could not find linked Fluxer message to edit for Discord message ID:',
-    //             newMessage.id
-    //         );
-    //         return;
-    //     }
-
-    //     try {
-    //         await msg.edit({
-    //             content: newMessage.content,
-    //         });
-    //     } catch (error) {
-    //         logger.error('Error editing message in Fluxer:', error);
-    //     }
-    // });
 
     client.on('messageCreate', async (message) => {
         if (message.author.id === client.user?.id) return;

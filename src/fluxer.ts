@@ -178,7 +178,6 @@ const startFluxerClient = async ({
         );
         if (!guildLink) return;
 
-        //console.log('Deleting Discord message with ID:', messageLink.discordMessageId);
         const msg = await discordEntityResolver.fetchMessage(
             guildLink.discordGuildId,
             channelLink.discordChannelId,

@@ -10,20 +10,13 @@ import logger from '../../../utils/logging/logger';
 import { EmbedColors } from '../../../utils/embeds';
 
 export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
-    private readonly linkService: LinkService;
-    private readonly webhookService: WebhookService;
-    private readonly discordEntityResolver: DiscordEntityResolver;
-
     constructor(
         client: Client,
-        linkService: LinkService,
-        webhookService: WebhookService,
-        discordEntityResolver: DiscordEntityResolver
+        private readonly linkService: LinkService,
+        private readonly webhookService: WebhookService,
+        private readonly discordEntityResolver: DiscordEntityResolver
     ) {
         super(client);
-        this.linkService = linkService;
-        this.webhookService = webhookService;
-        this.discordEntityResolver = discordEntityResolver;
     }
 
     public async handleCommand(
@@ -46,7 +39,7 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
                 embeds: [
                     new EmbedBuilder()
                         .setDescription(
-                            `Cannot run autolink: ${error.message}. Use \`${COMMAND_PREFIX}linkguild\` first.`
+                            `Cannot run autolink: ${error.message}. Use \`${COMMAND_PREFIX}link <discord-guild-id>\` first.`
                         )
                         .setColor(EmbedColors.Error)
                         .setFooter(footer).setTimestamp(),
@@ -182,13 +175,11 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
             errors.forEach((e) => descriptionLines.push(`> ${e}`));
         }
 
-        const summaryColor = errors.length > 0 ? EmbedColors.Warning : EmbedColors.Success;
-
         await message.reply({
             embeds: [
                 new EmbedBuilder()
                     .setDescription(descriptionLines.join('\n'))
-                    .setColor(summaryColor)
+                    .setColor(errors.length > 0 ? EmbedColors.Warning : EmbedColors.Success)
                     .setFooter(footer).setTimestamp(),
             ],
         });

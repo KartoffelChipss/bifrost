@@ -4,7 +4,7 @@ import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordC
 import FluxerEntityResolver from '../../../services/entityResolver/FluxerEntityResolver';
 import logger from '../../../utils/logging/logger';
 import { EmbedColors } from '../../../utils/embeds';
-import { DISCORD_USERID } from '../../../utils/env';
+import { DISCORD_OWNER_ID } from '../../../utils/env';
 
 export default class ListDiscordCommandHandler extends DiscordCommandHandler {
     constructor(
@@ -28,7 +28,8 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                 const fluxerName = (fluxerChannel as any)?.name ?? link.fluxerChannelId;
                 const fluxerUrl = `https://fluxer.app/channels/${fluxerGuildId}/${link.fluxerChannelId}`;
                 const suffix = showLinkId ? ` | \`${link.linkId}\`` : '';
-                return `[#${fluxerName}](${fluxerUrl}) ←→ <#${link.discordChannelId}>${suffix}\n  └ \`${link.fluxerChannelId}\` · \`${link.discordChannelId}\``;
+                // Discord on left, Fluxer on right (viewing from Discord)
+                return `<#${link.discordChannelId}> ←→ [#${fluxerName}](${fluxerUrl})${suffix}\n  └ \`${link.discordChannelId}\` · \`${link.fluxerChannelId}\``;
             })
         );
     }
@@ -42,7 +43,7 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
         if (!isOwner) return;
 
         if (args[0]?.toLowerCase() === 'all') {
-            if (!DISCORD_USERID || message.author.id !== DISCORD_USERID) {
+            if (!DISCORD_OWNER_ID || message.author.id !== DISCORD_OWNER_ID) {
                 await message.reply({
                     embeds: [
                         new EmbedBuilder()
@@ -80,7 +81,8 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
 
                     const fluxerGuildName = (fluxerGuild as any)?.name ?? guildLink.fluxerGuildId;
                     const discordGuildName = (discordGuild as any)?.name ?? guildLink.discordGuildId;
-                    const title = `Fluxer: ${fluxerGuildName} (${guildLink.fluxerGuildId}) | Discord: ${discordGuildName} (${guildLink.discordGuildId})`;
+                    // Discord on left, Fluxer on right
+                    const title = `Discord: ${discordGuildName} (${guildLink.discordGuildId}) | Fluxer: ${fluxerGuildName} (${guildLink.fluxerGuildId})`;
 
                     let description: string;
                     if (channelLinks.length === 0) {
@@ -100,7 +102,28 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
 
                 embeds[embeds.length - 1].setFooter(this.footer(message)).setTimestamp();
 
-                await message.reply({ embeds });
+                try {
+                    const dm = await message.author.createDM();
+                    await dm.send({ embeds });
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription('Results sent to your DMs.')
+                                .setColor(EmbedColors.Success)
+                                .setFooter(this.footer(message)).setTimestamp()
+                        ]
+                    });
+                } catch {
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription('Could not send DM — ensure your DMs are open.')
+                                .setColor(EmbedColors.Error)
+                                .setFooter(this.footer(message)).setTimestamp()
+                        ]
+                    });
+                    logger.error('Failed to DM %list all output to Discord user:', message.author.id);
+                }
             } catch (err: any) {
                 await message.reply({
                     embeds: [

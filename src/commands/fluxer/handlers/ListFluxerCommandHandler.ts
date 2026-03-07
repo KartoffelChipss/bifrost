@@ -4,7 +4,7 @@ import FluxerCommandHandler from '../FluxerCommandHandler';
 import DiscordEntityResolver from '../../../services/entityResolver/DiscordEntityResolver';
 import logger from '../../../utils/logging/logger';
 import { EmbedColors } from '../../../utils/embeds';
-import { FLUX_USERID } from '../../../utils/env';
+import { FLUXER_OWNER_ID } from '../../../utils/env';
 
 export default class ListFluxerCommandHandler extends FluxerCommandHandler {
     constructor(
@@ -42,7 +42,7 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
         if (!isOwner) return;
 
         if (args[0]?.toLowerCase() === 'all') {
-            if (!FLUX_USERID || message.author.id !== FLUX_USERID) {
+            if (!FLUXER_OWNER_ID || message.author.id !== FLUXER_OWNER_ID) {
                 await message.reply({
                     embeds: [
                         new EmbedBuilder()
@@ -100,7 +100,29 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
 
                 embeds[embeds.length - 1].setFooter(this.footer(message)).setTimestamp();
 
-                await message.reply({ embeds });
+                try {
+                    const dm = await (message.author as any).createDM?.();
+                    if (!dm) throw new Error('DM not supported');
+                    await dm.send({ embeds });
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription('Results sent to your DMs.')
+                                .setColor(EmbedColors.Success)
+                                .setFooter(this.footer(message)).setTimestamp(),
+                        ],
+                    });
+                } catch {
+                    await message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setDescription('Could not send DM — ensure your DMs are open.')
+                                .setColor(EmbedColors.Error)
+                                .setFooter(this.footer(message)).setTimestamp(),
+                        ],
+                    });
+                    logger.error('Failed to DM %list all output to Fluxer user:', message.author.id);
+                }
             } catch (err: any) {
                 await message.reply({
                     embeds: [

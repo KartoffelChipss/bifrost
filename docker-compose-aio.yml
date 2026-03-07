@@ -4,22 +4,22 @@ services:
         container_name: bifrost
         restart: unless-stopped
         environment:
-            DB_DIALECT: sqlite
-            FLUXER_BOT_TOKEN_FILE: /root/.creds/bf_flux
-            DISCORD_BOT_TOKEN_FILE: /root/.creds/bf_discord
-            FLUXER_APPLICATION_ID: 1478333491047665698
-            DISCORD_APPLICATION_ID: 1478331623853260892
-            FLUX_USERID: 1475309609460187238
-            DISCORD_USERID: 391124319444533249
-            COMMAND_PREFIX: "%"
-            CONFIG_PATH: /config
-            DISCORD_HEALTH_PUSH_URL: https://status.sou1.dev/api/push
-            DISCORD_HEALTH_PUSH_TOKEN_FILE: /root/.creds/bf_hc_discord
-            FLUXER_HEALTH_PUSH_URL: https://status.sou1.dev/api/push
-            FLUXER_HEALTH_PUSH_TOKEN_FILE: /root/.creds/bf_hc_flux
+            BF_DB_DIALECT: sqlite
+            BF_FLUXER_TOKEN_FILE: /root/.creds/bf_flux
+            BF_DISCORD_TOKEN_FILE: /root/.creds/bf_discord
+            BF_FLUXER_APP_ID: 1478333491047665698
+            BF_DISCORD_APP_ID: 1478331623853260892
+            BF_FLUXER_OWNER_ID: 1475309609460187238
+            BF_DISCORD_OWNER_ID: 391124319444533249
+            BF_COMMAND_PREFIX: "%"
+            BF_CONFIG_PATH: /config
+            BF_DISCORD_HEALTH_URL: https://status.sou1.dev/api/push
+            BF_DISCORD_HEALTH_TOKEN_FILE: /root/.creds/bf_hc_discord
+            BF_FLUXER_HEALTH_URL: https://status.sou1.dev/api/push
+            BF_FLUXER_HEALTH_TOKEN_FILE: /root/.creds/bf_hc_flux
             NODE_ENV: development
-            METRICS_PORT: "9091"
-            DELETE_INVOCATION: "true"
+            BF_METRICS_PORT: "9091"
+            BF_DELETE_INVOCATION: "true"
         volumes:
             - bifrost:/config
             - /root/.creds/bf_flux:/root/.creds/bf_flux:ro

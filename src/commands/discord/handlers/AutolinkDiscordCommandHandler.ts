@@ -9,20 +9,13 @@ import logger from '../../../utils/logging/logger';
 import { EmbedColors } from '../../../utils/embeds';
 
 export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler {
-    private readonly linkService: LinkService;
-    private readonly webhookService: WebhookService;
-    private readonly fluxerEntityResolver: FluxerEntityResolver;
-
     constructor(
         client: Client,
-        linkService: LinkService,
-        webhookService: WebhookService,
-        fluxerEntityResolver: FluxerEntityResolver
+        private readonly linkService: LinkService,
+        private readonly webhookService: WebhookService,
+        private readonly fluxerEntityResolver: FluxerEntityResolver
     ) {
         super(client);
-        this.linkService = linkService;
-        this.webhookService = webhookService;
-        this.fluxerEntityResolver = fluxerEntityResolver;
     }
 
     public async handleCommand(
@@ -33,6 +26,7 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
         const isOwner = await this.requireOwner(message);
         if (!isOwner) return;
 
+        const footer = this.footer(message);
         const doConfirm = args[0]?.toLowerCase() === 'confirm';
 
         let guildLink;
@@ -44,10 +38,10 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                 embeds: [
                     new EmbedBuilder()
                         .setDescription(
-                            `Cannot run autolink: ${error.message}. Use \`${COMMAND_PREFIX}linkguild\` first.`
+                            `Cannot run autolink: ${error.message}. Use \`${COMMAND_PREFIX}link <fluxer-guild-id>\` first.`
                         )
                         .setColor(EmbedColors.Error)
-                        .setFooter(this.footer(message)).setTimestamp()
+                        .setFooter(footer).setTimestamp()
                 ]
             });
             return;
@@ -77,7 +71,7 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                     new EmbedBuilder()
                         .setDescription('Could not fetch the linked Fluxer guild.')
                         .setColor(EmbedColors.Error)
-                        .setFooter(this.footer(message)).setTimestamp()
+                        .setFooter(footer).setTimestamp()
                 ]
             });
             return;
@@ -99,7 +93,7 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                                 ` and **${fluxerTextChannels.length}** unlinked Fluxer text channels.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(this.footer(message)).setTimestamp()
+                        .setFooter(footer).setTimestamp()
                 ]
             });
             return;
@@ -131,7 +125,7 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                             ].join('\n')
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(this.footer(message)).setTimestamp()
+                        .setFooter(footer).setTimestamp()
                 ]
             });
             return;
@@ -172,21 +166,20 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
             }
         }
 
-        const isPartial = errors.length > 0;
-        const summaryLines = [
+        const descriptionLines = [
             `Successfully linked **${successCount}** of **${proposals.length}** proposed channel pair${proposals.length !== 1 ? 's' : ''}.`,
         ];
-        if (isPartial) {
-            summaryLines.push('', 'Failures:');
-            errors.forEach((e) => summaryLines.push(`> ${e}`));
+        if (errors.length > 0) {
+            descriptionLines.push('', 'Failures:');
+            errors.forEach((e) => descriptionLines.push(`> ${e}`));
         }
 
         await message.reply({
             embeds: [
                 new EmbedBuilder()
-                    .setDescription(summaryLines.join('\n'))
-                    .setColor(isPartial ? EmbedColors.Warning : EmbedColors.Success)
-                    .setFooter(this.footer(message)).setTimestamp()
+                    .setDescription(descriptionLines.join('\n'))
+                    .setColor(errors.length > 0 ? EmbedColors.Warning : EmbedColors.Success)
+                    .setFooter(footer).setTimestamp()
             ]
         });
     }

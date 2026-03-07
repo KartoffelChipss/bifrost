@@ -46,6 +46,8 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
         const isOwner = await this.requireOwner(message);
         if (!isOwner) return;
 
+        const footer = this.footer(message);
+
         // Confirm flow
         if (args[0]?.toLowerCase() === 'confirm') {
             const pending = this.takePending(message.author.id);
@@ -55,7 +57,7 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
                         new EmbedBuilder()
                             .setDescription(`No pending link action. Run \`${COMMAND_PREFIX}link <id>\` first.`)
                             .setColor(EmbedColors.Error)
-                            .setFooter(this.footer(message)).setTimestamp()
+                            .setFooter(footer).setTimestamp()
                     ]
                 });
                 return;
@@ -72,7 +74,7 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
                                     `Use \`${COMMAND_PREFIX}link <fluxer-channel-id>\` in any channel to start linking channels.`
                                 )
                                 .setColor(EmbedColors.Success)
-                                .setFooter(this.footer(message)).setTimestamp()
+                                .setFooter(footer).setTimestamp()
                         ]
                     });
                 } catch (err: any) {
@@ -81,7 +83,7 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Failed to link guild: ${err.message}`)
                                 .setColor(EmbedColors.Error)
-                                .setFooter(this.footer(message)).setTimestamp()
+                                .setFooter(footer).setTimestamp()
                         ]
                     });
                     logger.error('Link guild failed:', err);
@@ -112,7 +114,7 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
                                     `Linked <#${pending.discordChannelId}> ↔ **#${pending.channelName}** successfully.`
                                 )
                                 .setColor(EmbedColors.Success)
-                                .setFooter(this.footer(message)).setTimestamp()
+                                .setFooter(footer).setTimestamp()
                         ]
                     });
                 } catch (err: any) {
@@ -121,7 +123,7 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
                             new EmbedBuilder()
                                 .setDescription(`Failed to link channel: ${err.message}`)
                                 .setColor(EmbedColors.Error)
-                                .setFooter(this.footer(message)).setTimestamp()
+                                .setFooter(footer).setTimestamp()
                         ]
                     });
                     logger.error('Link channel failed:', err);
@@ -142,7 +144,7 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
                             `> Then run \`${COMMAND_PREFIX}link confirm\` to proceed.`
                         )
                         .setColor(EmbedColors.Error)
-                        .setFooter(this.footer(message)).setTimestamp()
+                        .setFooter(footer).setTimestamp()
                 ]
             });
             return;
@@ -161,7 +163,7 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
                             `Run \`${COMMAND_PREFIX}link confirm\` to bridge this Discord server to it.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(this.footer(message)).setTimestamp()
+                        .setFooter(footer).setTimestamp()
                 ]
             });
             return;
@@ -188,7 +190,7 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
                                 `Run \`${COMMAND_PREFIX}link confirm\` to link <#${message.channelId}> to it.`
                             )
                             .setColor(EmbedColors.Warning)
-                            .setFooter(this.footer(message)).setTimestamp()
+                            .setFooter(footer).setTimestamp()
                     ]
                 });
                 return;
@@ -204,7 +206,7 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
                 new EmbedBuilder()
                     .setDescription(`Could not find a Fluxer guild or channel with ID \`${id}\`.${hint}`)
                     .setColor(EmbedColors.Error)
-                    .setFooter(this.footer(message)).setTimestamp()
+                    .setFooter(footer).setTimestamp()
             ]
         });
     }
