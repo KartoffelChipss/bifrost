@@ -26,4 +26,14 @@ export default defineConfig({
 
         socialLinks: [{ icon: 'github', link: 'https://github.com/KartoffelChipss/bifrost' }],
     },
+    head: [
+        [
+            'script',
+            {
+                defer: '',
+                src: 'https://umami.jan.run/script.js',
+                'data-website-id': '2393e86d-771a-469c-bcd2-bb3d372b12f0',
+            },
+        ],
+    ],
 });
