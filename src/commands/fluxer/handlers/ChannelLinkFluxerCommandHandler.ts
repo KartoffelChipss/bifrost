@@ -42,7 +42,8 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
             return;
         }
 
-        const discordChannelId = args[0];
+        const rawChannelId = args[0];
+        const discordChannelId = rawChannelId.replace(/^<|>$/g, '');
 
         let guildLink = null;
         try {

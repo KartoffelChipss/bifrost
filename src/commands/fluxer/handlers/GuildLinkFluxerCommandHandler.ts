@@ -40,7 +40,8 @@ export default class GuildLinkFluxerCommandHandler extends FluxerCommandHandler 
             return;
         }
 
-        const [discordGuildId] = args;
+        const [rawGuildId] = args;
+        const discordGuildId = rawGuildId.replace(/^<|>$/g, '');
 
         try {
             const discordGuild = await this.discordEntityResolver.fetchGuild(discordGuildId);
