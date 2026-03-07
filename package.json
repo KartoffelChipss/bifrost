@@ -1,31 +1,35 @@
 {
-    "name": "bifrost",
-    "version": "1.1.0",
-    "description": "",
-    "main": "index.ts",
-    "scripts": {
-        "build": "tsc",
-        "start": "tsc && node dist/index.js"
-    },
-    "keywords": [],
-    "author": "",
-    "license": "ISC",
-    "packageManager": "pnpm@10.27.0",
-    "dependencies": {
-        "@fluxerjs/core": "^1.2.3",
-        "discord.js": "^14.25.1",
-        "dotenv": "^17.3.1",
-        "lru-cache": "^11.2.6",
-        "nanoid": "^5.1.6",
-        "node-cache": "^5.1.2",
-        "pg": "^8.19.0",
-        "pg-hstore": "^2.3.4",
-        "sequelize": "^6.37.7",
-        "sqlite3": "^5.1.7",
-        "winston": "^3.19.0"
-    },
-    "devDependencies": {
-        "@types/node": "^25.3.0",
-        "typescript": "^5.9.3"
-    }
+  "name": "bifrost",
+  "version": "1.1.0",
+  "description": "",
+  "main": "index.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsc && node dist/index.js",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.27.0",
+  "dependencies": {
+    "@fluxerjs/core": "^1.2.3",
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.3.1",
+    "lru-cache": "^11.2.6",
+    "nanoid": "^5.1.6",
+    "node-cache": "^5.1.2",
+    "pg": "^8.19.0",
+    "pg-hstore": "^2.3.4",
+    "sequelize": "^6.37.7",
+    "sqlite3": "^5.1.7",
+    "winston": "^3.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "typescript": "^5.9.3",
+    "vitepress": "2.0.0-alpha.16"
+  }
 }
