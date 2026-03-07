@@ -4,6 +4,7 @@ import { formatDuration } from '../../../utils/duration';
 import StatsService from '../../../services/statsService/StatsService';
 import { getHeapUsageMB } from '../../../utils/memory';
 import { defaultEmbedColor } from '../../../utils/embeds';
+import { APP_VERSION, GIT_COMMIT_HASH } from '../../../utils/env';
 
 export default class StatsFluxerCommandHandler extends FluxerCommandHandler {
     constructor(
@@ -25,6 +26,8 @@ export default class StatsFluxerCommandHandler extends FluxerCommandHandler {
         const discordUserCount = this.discordStatsService.getUserCount();
         const readableUptime = formatDuration(process.uptime());
         const usedHeap = getHeapUsageMB();
+
+        const commitUrl = `https://github.com/KartoffelChipss/bifrost/commit/${GIT_COMMIT_HASH}`;
 
         await message.reply({
             embeds: [
@@ -52,7 +55,13 @@ export default class StatsFluxerCommandHandler extends FluxerCommandHandler {
                             inline: true,
                         },
                         { name: 'Uptime', value: readableUptime, inline: true },
-                        { name: 'Memory Usage', value: `${usedHeap} MB`, inline: true }
+                        { name: 'Memory Usage', value: `${usedHeap} MB`, inline: true },
+                        { name: 'Version', value: APP_VERSION, inline: true },
+                        {
+                            name: 'Git Commit Hash',
+                            value: `[${GIT_COMMIT_HASH}](${commitUrl})`,
+                            inline: true,
+                        }
                     )
                     .setColor(defaultEmbedColor),
             ],

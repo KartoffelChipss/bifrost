@@ -57,6 +57,9 @@ jobs:
           context: .
           push: true
           platforms: ${{ matrix.platform }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            APP_VERSION=${{ github.ref_name }}
           tags: |
             ${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}-${{ env.PLATFORM_PAIR }}
             ${{ env.DOCKER_IMAGE }}:latest-${{ env.PLATFORM_PAIR }}

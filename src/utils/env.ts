@@ -49,6 +49,9 @@ export const DISCORD_APPLICATION_ID = process.env.DISCORD_APPLICATION_ID || '';
 export const DISCORD_HEALTH_PUSH_URL = process.env.DISCORD_HEALTH_PUSH_URL || null;
 export const FLUXER_HEALTH_PUSH_URL = process.env.FLUXER_HEALTH_PUSH_URL || null;
 
+export const APP_VERSION = process.env.APP_VERSION || 'N/A';
+export const GIT_COMMIT_HASH = process.env.GIT_COMMIT_HASH || 'N/A';
+
 export const DB_DIALECT = process.env.DB_DIALECT || 'sqlite';
 export const DB_NAME = process.env.DB_NAME || 'bifrost';
 export const DB_USER = process.env.DB_USER || 'root';
