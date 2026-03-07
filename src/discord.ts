@@ -226,7 +226,6 @@ const startDiscordClient = async ({
 
     client.on('messageCreate', async (message) => {
         if (message.author.id === client.user?.id) return;
-        if (!message.inGuild()) return;
 
         if (message.webhookId) {
             const webhookLink =
@@ -280,7 +279,7 @@ const startDiscordClient = async ({
                 );
             }
 
-            if (DELETE_INVOCATION) {
+            if (DELETE_INVOCATION && message.inGuild()) {
                 message.delete().catch((err) =>
                     logger.error('Failed to delete invocation message:', err)
                 );

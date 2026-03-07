@@ -272,7 +272,6 @@ const startFluxerClient = async ({
 
     client.on(Events.MessageCreate, async (message) => {
         if (message.author.id === client.user?.id) return;
-        if (!message.guildId) return;
 
         if (message.webhookId) {
             const webhookLink =
@@ -323,7 +322,7 @@ const startFluxerClient = async ({
                 );
             }
 
-            if (DELETE_INVOCATION) {
+            if (DELETE_INVOCATION && message.guildId) {
                 message.delete().catch((err: any) =>
                     logger.error('Failed to delete invocation message:', err)
                 );
@@ -331,6 +330,7 @@ const startFluxerClient = async ({
         }
 
         if (
+            message.guildId &&
             message.channel instanceof TextChannel &&
             !isCommandString(message.content, COMMAND_PREFIX)
         ) {

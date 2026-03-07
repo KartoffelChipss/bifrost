@@ -38,8 +38,7 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
         _command: string,
         ...args: string[]
     ): Promise<void> {
-        const isOwner = await this.requireOwner(message);
-        if (!isOwner) return;
+        const footer = this.footer(message);
 
         if (args[0]?.toLowerCase() === 'all') {
             if (!FLUXER_OWNER_ID || message.author.id !== FLUXER_OWNER_ID) {
@@ -48,7 +47,7 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                         new EmbedBuilder()
                             .setDescription('You do not have permission to use this command.')
                             .setColor(EmbedColors.Error)
-                            .setFooter(this.footer(message)).setTimestamp(),
+                            .setFooter(footer).setTimestamp(),
                     ],
                 });
                 return;
@@ -63,7 +62,7 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                             new EmbedBuilder()
                                 .setDescription('No guild bridges configured.')
                                 .setColor(EmbedColors.Warning)
-                                .setFooter(this.footer(message)).setTimestamp(),
+                                .setFooter(footer).setTimestamp(),
                         ],
                     });
                     return;
@@ -98,30 +97,26 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                     );
                 }
 
-                embeds[embeds.length - 1].setFooter(this.footer(message)).setTimestamp();
+                embeds[embeds.length - 1].setFooter(footer).setTimestamp();
 
-                try {
-                    const dm = await (message.author as any).createDM?.();
-                    if (!dm) throw new Error('DM not supported');
-                    await dm.send({ embeds });
-                    await message.reply({
-                        embeds: [
-                            new EmbedBuilder()
-                                .setDescription('Results sent to your DMs.')
-                                .setColor(EmbedColors.Success)
-                                .setFooter(this.footer(message)).setTimestamp(),
-                        ],
-                    });
-                } catch {
-                    await message.reply({
-                        embeds: [
-                            new EmbedBuilder()
-                                .setDescription('Could not send DM — ensure your DMs are open.')
-                                .setColor(EmbedColors.Error)
-                                .setFooter(this.footer(message)).setTimestamp(),
-                        ],
-                    });
-                    logger.error('Failed to DM %list all output to Fluxer user:', message.author.id);
+                if (!message.guildId) {
+                    await message.reply({ embeds });
+                } else {
+                    try {
+                        const dm = await (message.author as any).createDM?.();
+                        if (!dm) throw new Error('DM not supported');
+                        await dm.send({ embeds });
+                    } catch {
+                        await message.reply({
+                            embeds: [
+                                new EmbedBuilder()
+                                    .setDescription('Could not send DM — ensure your DMs are open.')
+                                    .setColor(EmbedColors.Error)
+                                    .setFooter(footer).setTimestamp(),
+                            ],
+                        });
+                        logger.error('Failed to DM %list all output to Fluxer user:', message.author.id);
+                    }
                 }
             } catch (err: any) {
                 await message.reply({
@@ -129,13 +124,28 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                         new EmbedBuilder()
                             .setDescription(`Failed to list all links: ${err.message}`)
                             .setColor(EmbedColors.Error)
-                            .setFooter(this.footer(message)).setTimestamp(),
+                            .setFooter(footer).setTimestamp(),
                     ],
                 });
                 logger.error('Error listing all links:', err);
             }
             return;
         }
+
+        if (!message.guildId) {
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription('This command must be used in a server.')
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
+            return;
+        }
+
+        const isOwner = await this.requireOwner(message);
+        if (!isOwner) return;
 
         try {
             const guildLink = await this.linkService.getGuildLinkForFluxerGuild(message.guildId!);
@@ -146,7 +156,7 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                         new EmbedBuilder()
                             .setDescription('No guild bridge found for this server.')
                             .setColor(EmbedColors.Warning)
-                            .setFooter(this.footer(message)).setTimestamp(),
+                            .setFooter(footer).setTimestamp(),
                     ],
                 });
                 return;
@@ -160,7 +170,7 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                         new EmbedBuilder()
                             .setDescription('No channel links found for this server.')
                             .setColor(EmbedColors.Warning)
-                            .setFooter(this.footer(message)).setTimestamp(),
+                            .setFooter(footer).setTimestamp(),
                     ],
                 });
                 return;
@@ -174,7 +184,7 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                         .setTitle('Fluxer ↔ Discord | Linked Channels')
                         .setDescription(lines.join('\n\n'))
                         .setColor(EmbedColors.Info)
-                        .setFooter(this.footer(message)).setTimestamp(),
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
         } catch (err: any) {
@@ -183,7 +193,7 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                     new EmbedBuilder()
                         .setDescription(`Failed to list channel links: ${err.message}`)
                         .setColor(EmbedColors.Error)
-                        .setFooter(this.footer(message)).setTimestamp(),
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
             logger.error('Error listing channel links:', err);
