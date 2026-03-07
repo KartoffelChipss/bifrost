@@ -18,6 +18,10 @@
 
 Join out community Fluxer server for support, updates and to share your feedback: https://fluxer.gg/TN8FkpdQ
 
+## Docs
+
+You can find the docs here: https://bifrost-bot.com/
+
 ## Getting Started
 
 ### Hosted Bot
@@ -34,7 +38,7 @@ Join out community Fluxer server for support, updates and to share your feedback
 4. That's it! Your channels are now linked and messages will be synced between them. 🎉
 
 > [!NOTE]  
-> You can check the uptime of the hosted instance [here](https://bifrost-status.jan.run)
+> You can check the uptime of the hosted instance [here](https://status.bifrost-bot.com)
 
 ### Self-Hosting with Docker
 
