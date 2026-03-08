@@ -1,10 +1,11 @@
-import { Client, EmbedBuilder } from 'discord.js';
+import { Client, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import { formatDuration } from '../../../utils/duration';
 import { getHeapUsageMB } from '../../../utils/memory';
 import StatsService from '../../../services/statsService/StatsService';
-import { defaultEmbedColor } from '../../../utils/embeds';
-import { APP_VERSION, GIT_COMMIT_HASH } from '../../../utils/env';
+import { EmbedColors } from '../../../utils/embeds';
+import { DISCORD_APP_ID, FLUXER_APP_ID, GIT_COMMIT, REPO_URL } from '../../../utils/env';
+import { generateDiscordBotInviteLink, generateFluxerBotInviteLink } from '../../../utils/generateBotInvite';
 
 export default class StatsDiscordCommandHandler extends DiscordCommandHandler {
     constructor(
@@ -17,22 +18,33 @@ export default class StatsDiscordCommandHandler extends DiscordCommandHandler {
 
     public async handleCommand(
         message: DiscordCommandHandlerMessage,
-        command: string,
-        ...args: string[]
+        _command: string,
+        ..._args: string[]
     ): Promise<void> {
+        const hasPerms = await this.requirePermission(message, PermissionFlagsBits.ManageWebhooks, 'Manage Webhooks');
+        if (!hasPerms) return;
         const fluxerGuildCount = this.fluxerStatsService.getGuildCount();
         const discordGuildCount = this.discordStatsService.getGuildCount();
         const fluxerUserCount = this.fluxerStatsService.getUserCount();
         const discordUserCount = this.discordStatsService.getUserCount();
+        const discordPing = this.discordStatsService.getPing();
+        const fluxerPing = this.fluxerStatsService.getPing();
         const readableUptime = formatDuration(process.uptime());
         const usedHeap = getHeapUsageMB();
 
-        const commitUrl = `https://github.com/KartoffelChipss/bifrost/commit/${GIT_COMMIT_HASH}`;
+        const perms = '536947712';
+        const inviteValue = `[Fluxer](${generateFluxerBotInviteLink(FLUXER_APP_ID, perms)}) | [Discord](${generateDiscordBotInviteLink(DISCORD_APP_ID, perms)})`;
+
+        const buildValue = GIT_COMMIT
+            ? REPO_URL
+                ? `[\`${GIT_COMMIT.slice(0, 7)}\`](${REPO_URL}/commit/${GIT_COMMIT})`
+                : `\`${GIT_COMMIT.slice(0, 7)}\``
+            : 'N/A';
 
         await message.reply({
             embeds: [
                 new EmbedBuilder()
-                    .setTitle('Fluxer Bot Stats')
+                    .setTitle('Bifrost Stats')
                     .addFields(
                         {
                             name: 'Fluxer Guilds',
@@ -54,16 +66,18 @@ export default class StatsDiscordCommandHandler extends DiscordCommandHandler {
                             value: `${isNaN(discordUserCount) ? 'N/A' : discordUserCount}`,
                             inline: true,
                         },
+                        {
+                            name: 'Latency',
+                            value: `Discord: ${isNaN(discordPing) ? 'N/A' : `${discordPing}ms`} | Fluxer: ${isNaN(fluxerPing) ? 'Not Yet Supported' : `${fluxerPing}ms`}`,
+                            inline: false,
+                        },
                         { name: 'Uptime', value: readableUptime, inline: true },
                         { name: 'Memory Usage', value: `${usedHeap} MB`, inline: true },
-                        { name: 'Version', value: APP_VERSION, inline: true },
-                        {
-                            name: 'Git Commit Hash',
-                            value: `[${GIT_COMMIT_HASH}](${commitUrl})`,
-                            inline: true,
-                        }
+                        { name: 'Build', value: buildValue, inline: true },
+                        { name: 'Invite', value: inviteValue, inline: false }
                     )
-                    .setColor(defaultEmbedColor),
+                    .setColor(EmbedColors.Info)
+                    .setFooter(this.footer(message)).setTimestamp(),
             ],
         });
     }

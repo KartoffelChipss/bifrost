@@ -2,10 +2,9 @@ import { EmbedBuilder as DiscordEmbedBuilder, MessageReplyOptions } from 'discor
 import { COMMAND_PREFIX } from '../utils/env';
 import {
     MessageSendOptions,
-    ReplyOptions,
     EmbedBuilder as FluxerEmbedBuilder,
 } from '@fluxerjs/core';
-import { defaultEmbedColor } from '../utils/embeds';
+import { EmbedColors } from '../utils/embeds';
 
 export interface CommandInfo {
     description: string;
@@ -117,18 +116,18 @@ export function getDiscordCommandUsage(commandName: string): MessageReplyOptions
             new DiscordEmbedBuilder()
                 .setTitle('Command Usage')
                 .setDescription(usageMessage)
-                .setColor(defaultEmbedColor),
+                .setColor(EmbedColors.Info),
         ],
     };
 }
-export function getFluxerCommandUsage(commandName: string): ReplyOptions & MessageSendOptions {
+export function getFluxerCommandUsage(commandName: string): MessageSendOptions {
     const usageMessage = getStringCommandUsage(commandName, 'fluxer');
     return {
         embeds: [
             new FluxerEmbedBuilder()
                 .setTitle('Command Usage')
                 .setDescription(usageMessage)
-                .setColor(defaultEmbedColor),
+                .setColor(EmbedColors.Info),
         ],
     };
 }

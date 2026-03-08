@@ -1,5 +1,5 @@
-import { Client, GatewayIntentBits, Partials } from 'discord.js';
-import { COMMAND_PREFIX, DISCORD_BOT_TOKEN } from './utils/env';
+import { Client, EmbedBuilder, GatewayIntentBits, Partials } from 'discord.js';
+import { COMMAND_PREFIX, DISCORD_TOKEN } from './utils/env';
 import logger from './utils/logging/logger';
 import CommandRegistry from './commands/CommandRegistry';
 import DiscordCommandHandler from './commands/discord/DiscordCommandHandler';
@@ -21,7 +21,7 @@ import DiscordMessageTransformer from './services/messageTransformer/DiscordMess
 import FluxerStatsService from './services/statsService/FluxerStatsService';
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import StatsDiscordCommandHandler from './commands/discord/handlers/StatsDiscordCommandHandler';
-import { createDiscordErrorReply } from './utils/embeds';
+import { EmbedColors } from './utils/embeds';
 
 const startDiscordClient = async ({
     linkService,
@@ -227,12 +227,14 @@ const startDiscordClient = async ({
             const { command, args } = parseCommandString(message.content, COMMAND_PREFIX);
             const handler = commandRegistry.getCommandHandler(command);
             if (!handler) {
-                await message.reply(
-                    createDiscordErrorReply(
-                        `Unknown command: \`${command}\`.\nUse \`${COMMAND_PREFIX}help\` to see the list of available commands.`,
-                        'Unknown Command'
-                    )
-                );
+                await message.reply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setTitle('Unknown Command')
+                            .setDescription(`Unknown command: \`${command}\`.\nUse \`${COMMAND_PREFIX}help\` to see the list of available commands.`)
+                            .setColor(EmbedColors.Error),
+                    ],
+                });
                 return;
             }
 
@@ -265,7 +267,7 @@ const startDiscordClient = async ({
         }
     });
 
-    await client.login(DISCORD_BOT_TOKEN);
+    await client.login(DISCORD_TOKEN);
 
     return client;
 };

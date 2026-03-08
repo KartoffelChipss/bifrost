@@ -3,7 +3,7 @@ import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import logger from '../../../utils/logging/logger';
 import { getFluxerCommandUsage } from '../../../commands/commandList';
-import { defaultEmbedColor } from '../../../utils/embeds';
+import { EmbedColors } from '../../../utils/embeds';
 
 export default class ListChannelsFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
@@ -18,6 +18,8 @@ export default class ListChannelsFluxerCommandHandler extends FluxerCommandHandl
         command: string,
         ...args: string[]
     ): Promise<void> {
+        const footer = this.footer(message);
+
         try {
             const hasPerms = await this.requirePermission(
                 message,
@@ -37,7 +39,14 @@ export default class ListChannelsFluxerCommandHandler extends FluxerCommandHandl
             );
 
             if (channelLinks.length === 0) {
-                await message.reply('No channel links found for this guild.');
+                await message.reply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setDescription('No channel links found for this guild.')
+                            .setColor(EmbedColors.Warning)
+                            .setFooter(footer).setTimestamp(),
+                    ],
+                });
                 return;
             }
 
@@ -53,11 +62,19 @@ export default class ListChannelsFluxerCommandHandler extends FluxerCommandHandl
                     new EmbedBuilder()
                         .setTitle('Linked Channels')
                         .setDescription(linksList)
-                        .setColor(defaultEmbedColor),
+                        .setColor(EmbedColors.Info)
+                        .setFooter(footer).setTimestamp(),
                 ],
             });
         } catch (error: any) {
-            await message.reply(`Failed to list channel links: ${error.message}`);
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setDescription(`Failed to list channel links: ${error.message}`)
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
             logger.error(
                 'Failed listing channel links for Fluxer guild',
                 {

@@ -1,9 +1,9 @@
-import { Client, Message, PermissionFlags } from '@fluxerjs/core';
+import { Client, EmbedBuilder, Message, PermissionFlags } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import logger from '../../../utils/logging/logger';
 import { getFluxerCommandUsage } from '../../../commands/commandList';
-import { createFluxerErrorReply, createFluxerSuccessReply } from '../../../utils/embeds';
+import { EmbedColors } from '../../../utils/embeds';
 
 export default class GuildUnlinkFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
@@ -18,6 +18,7 @@ export default class GuildUnlinkFluxerCommandHandler extends FluxerCommandHandle
         command: string,
         ...args: string[]
     ): Promise<void> {
+        const footer = this.footer(message);
         const fluxerGuildId = message.guildId!;
 
         const hasPerms = await this.requirePermission(
@@ -35,25 +36,31 @@ export default class GuildUnlinkFluxerCommandHandler extends FluxerCommandHandle
 
         try {
             await this.linkService.removeGuildLinkFromFluxer(fluxerGuildId);
-            await message.reply(
-                createFluxerSuccessReply(
-                    `Successfully unlinked this Fluxer guild from its linked Discord guild.`,
-                    'Guild Unlinked'
-                )
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Guild Unlinked')
+                        .setDescription('Successfully unlinked this Fluxer guild from its linked Discord guild.')
+                        .setColor(EmbedColors.Success)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
         } catch (error: any) {
-            await message.reply(
-                createFluxerErrorReply(
-                    `Failed to unlink guild: ${error.message}`,
-                    'Error Unlinking Guild'
-                )
-            );
-            logger.error(
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Error Unlinking Guild')
+                        .setDescription(`Failed to unlink guild: ${error.message}`)
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
                 'Failed unlinking guild from Fluxer command',
+            logger.error(
                 {
                     command,
-                    fluxerGuildId,
                 },
+                    fluxerGuildId,
                 error
             );
         }

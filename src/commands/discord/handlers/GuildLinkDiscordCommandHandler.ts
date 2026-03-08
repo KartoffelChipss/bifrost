@@ -1,10 +1,10 @@
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
-import { Client, PermissionFlagsBits } from 'discord.js';
+import { Client, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import logger from '../../../utils/logging/logger';
 import { getDiscordCommandUsage } from '../../../commands/commandList';
 import FluxerEntityResolver from '../../../services/entityResolver/FluxerEntityResolver';
-import { createDiscordErrorReply, createDiscordSuccessReply } from '../../../utils/embeds';
+import { EmbedColors } from '../../../utils/embeds';
 
 export default class GuildLinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
@@ -25,6 +25,7 @@ export default class GuildLinkDiscordCommandHandler extends DiscordCommandHandle
         command: string,
         ...args: string[]
     ): Promise<void> {
+        const footer = this.footer(message);
         const discordGuildId = message.guildId!;
 
         const hasPerms = await this.requirePermission(
@@ -46,21 +47,27 @@ export default class GuildLinkDiscordCommandHandler extends DiscordCommandHandle
         try {
             const fluxerGuild = await this.fluxerEntityResolver.fetchGuild(fluxerGuildId);
             if (!fluxerGuild) {
-                await message.reply(
-                    createDiscordErrorReply(
-                        `Could not find Fluxer guild with ID \`${fluxerGuildId}\`.`,
-                        'Fluxer Guild Not Found'
-                    )
-                );
+                await message.reply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setTitle('Fluxer Guild Not Found')
+                            .setDescription(`Could not find Fluxer guild with ID \`${fluxerGuildId}\`.`)
+                            .setColor(EmbedColors.Error)
+                            .setFooter(footer).setTimestamp(),
+                    ],
+                });
                 return;
             }
         } catch (error: any) {
-            await message.reply(
-                createDiscordErrorReply(
-                    `Failed to verify Fluxer guild: ${error.message}`,
-                    'Error Verifying Fluxer Guild'
-                )
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Error Verifying Fluxer Guild')
+                        .setDescription(`Failed to verify Fluxer guild: ${error.message}`)
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
             logger.error(
                 'Failed verifying Fluxer guild for Discord guild link command',
                 {
@@ -75,28 +82,26 @@ export default class GuildLinkDiscordCommandHandler extends DiscordCommandHandle
 
         try {
             await this.linkService.createGuildLink(discordGuildId, fluxerGuildId);
-            await message.reply(
-                createDiscordSuccessReply(
-                    `Successfully linked Discord guild \`${discordGuildId}\` with Fluxer guild \`${fluxerGuildId}\`.`,
-                    'Guild Linked'
-                )
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Guild Linked')
+                        .setDescription(`Successfully linked Discord guild \`${discordGuildId}\` with Fluxer guild \`${fluxerGuildId}\`.`)
+                        .setColor(EmbedColors.Success)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
         } catch (error: any) {
-            await message.reply(
-                createDiscordErrorReply(
-                    `Failed to create guild link: ${error.message}`,
-                    'Error Creating Guild Link'
-                )
-            );
-            logger.error(
-                'Failed creating guild link from Discord command',
-                {
-                    command,
-                    discordGuildId,
-                    fluxerGuildId,
-                },
-                error
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Error Creating Guild Link')
+                        .setDescription(`Failed to create guild link: ${error.message}`)
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
+            logger.error('Error creating guild link:', error);
         }
     }
 }

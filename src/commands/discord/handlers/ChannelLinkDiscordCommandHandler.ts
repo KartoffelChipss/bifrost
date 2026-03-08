@@ -1,11 +1,11 @@
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
-import { Client, PermissionFlagsBits } from 'discord.js';
+import { Client, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import logger from '../../../utils/logging/logger';
 import { WebhookService } from '../../../services/WebhookService';
 import { getDiscordCommandUsage } from '../../../commands/commandList';
 import FluxerEntityResolver from '../../../services/entityResolver/FluxerEntityResolver';
-import { createDiscordErrorReply, createDiscordSuccessReply } from '../../../utils/embeds';
+import { EmbedColors } from '../../../utils/embeds';
 
 export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
@@ -29,6 +29,8 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
         command: string,
         ...args: string[]
     ): Promise<void> {
+        const footer = this.footer(message);
+
         const hasPerms = await this.requirePermission(
             message,
             PermissionFlagsBits.ManageChannels,
@@ -52,12 +54,15 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
                 throw new Error('Guild not linked');
             }
         } catch (error: any) {
-            await message.reply(
-                createDiscordErrorReply(
-                    `Failed to get guild link: ${error.message}`,
-                    'Error Fetching Guild Link'
-                )
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Error Fetching Guild Link')
+                        .setDescription(`Failed to get guild link: ${error.message}`)
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
             logger.error(
                 'Failed fetching guild link for Discord channel link command',
                 {
@@ -78,23 +83,16 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
             );
             if (!c) throw new Error('Channel not found');
         } catch (error: any) {
-            await message.reply(
-                createDiscordErrorReply(
-                    `Linking failed: Could not find Fluxer channel with ID \`${fluxerChannelId}\`.`,
-                    'Channel Not Found'
-                )
-            );
-            logger.error(
-                'Failed fetching Fluxer channel for Discord channel link command',
-                {
-                    command,
-                    discordGuildId: message.guildId,
-                    discordChannelId: message.channelId,
-                    fluxerGuildId: guildLink.fluxerGuildId,
-                    fluxerChannelId,
-                },
-                error
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Channel Not Found')
+                        .setDescription(`Linking failed: Could not find Fluxer channel with ID \`${fluxerChannelId}\`.`)
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
+            logger.error('Error fetching Fluxer channel:', error);
             return;
         }
 
@@ -105,22 +103,16 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
                 `Fluxer Bridge Webhook for channel ${message.channelId}`
             );
         } catch (error: any) {
-            await message.reply(
-                createDiscordErrorReply(
-                    `Failed to create Discord webhook: ${error.message}`,
-                    'Error Creating Discord Webhook'
-                )
-            );
-            logger.error(
-                'Failed creating Discord webhook for channel link',
-                {
-                    command,
-                    discordGuildId: message.guildId,
-                    discordChannelId: message.channelId,
-                    fluxerChannelId,
-                },
-                error
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Error Creating Discord Webhook')
+                        .setDescription(`Failed to create Discord webhook: ${error.message}`)
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
+            logger.error('Error creating Discord webhook:', error);
             return;
         }
 
@@ -131,22 +123,16 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
                 `Discord Bridge Webhook for channel ${fluxerChannelId}`
             );
         } catch (error: any) {
-            await message.reply(
-                createDiscordErrorReply(
-                    `Failed to create Fluxer webhook: ${error.message}`,
-                    'Error Creating Fluxer Webhook'
-                )
-            );
-            logger.error(
-                'Failed creating Fluxer webhook for channel link',
-                {
-                    command,
-                    discordGuildId: message.guildId,
-                    discordChannelId: message.channelId,
-                    fluxerChannelId,
-                },
-                error
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Error Creating Fluxer Webhook')
+                        .setDescription(`Failed to create Fluxer webhook: ${error.message}`)
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
+            logger.error('Error creating Fluxer webhook:', error);
             return;
         }
 
@@ -160,29 +146,26 @@ export default class ChannelLinkDiscordCommandHandler extends DiscordCommandHand
                 fluxerWebhookId: fluxerWebhook.id,
                 fluxerWebhookToken: fluxerWebhook.token,
             });
-            await message.reply(
-                createDiscordSuccessReply(
-                    `Successfully linked this Discord channel to Fluxer channel ID \`${fluxerChannelId}\`.`,
-                    'Channel Linked'
-                )
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Channel Linked')
+                        .setDescription(`Successfully linked this Discord channel to Fluxer channel ID \`${fluxerChannelId}\`.`)
+                        .setColor(EmbedColors.Success)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
         } catch (error: any) {
-            await message.reply(
-                createDiscordErrorReply(
-                    `Failed to create channel link: ${error.message}`,
-                    'Error Creating Channel Link'
-                )
-            );
-            logger.error(
-                'Failed creating channel link from Discord command',
-                {
-                    command,
-                    discordGuildId: message.guildId,
-                    discordChannelId: message.channelId,
-                    fluxerChannelId,
-                },
-                error
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Error Creating Channel Link')
+                        .setDescription(`Failed to create channel link: ${error.message}`)
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
+            logger.error('Error creating channel link:', error);
         }
     }
 }

@@ -1,9 +1,9 @@
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
-import { Client, PermissionFlagsBits } from 'discord.js';
+import { Client, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import logger from '../../../utils/logging/logger';
 import { getDiscordCommandUsage } from '../../../commands/commandList';
-import { createDiscordErrorReply, createDiscordSuccessReply } from '../../../utils/embeds';
+import { EmbedColors } from '../../../utils/embeds';
 
 export default class ChannelUnlinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
@@ -18,6 +18,8 @@ export default class ChannelUnlinkDiscordCommandHandler extends DiscordCommandHa
         command: string,
         ...args: string[]
     ): Promise<void> {
+        const footer = this.footer(message);
+
         const hasPerms = await this.requirePermission(
             message,
             PermissionFlagsBits.ManageChannels,
@@ -33,22 +35,30 @@ export default class ChannelUnlinkDiscordCommandHandler extends DiscordCommandHa
 
         try {
             await this.linkService.removeChannelLinkForDiscord(message.guildId!, message.channelId);
-            await message.reply(
-                createDiscordSuccessReply(`Successfully unlinked channel link.`, 'Channel Unlinked')
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Channel Unlinked')
+                        .setDescription('Successfully unlinked channel link.')
+                        .setColor(EmbedColors.Success)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
         } catch (error: any) {
-            await message.reply(
-                createDiscordErrorReply(
-                    'An error occurred while unlinking the channel: **' + error.message + '**' ||
-                        'An error occurred while unlinking the channel.',
-                    'Failed to Unlink Channel'
-                )
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Failed to Unlink Channel')
+                        .setDescription('An error occurred while unlinking the channel: **' + error.message + '**')
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
             logger.error(
                 'Failed unlinking channel from Discord command',
                 {
-                    command,
                     discordGuildId: message.guildId,
+                    command,
                     discordChannelId: message.channelId,
                 },
                 error

@@ -1,9 +1,9 @@
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
-import { Client, PermissionFlagsBits } from 'discord.js';
+import { Client, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import logger from '../../../utils/logging/logger';
 import { getDiscordCommandUsage } from '../../../commands/commandList';
-import { createDiscordErrorReply, createDiscordSuccessReply } from '../../../utils/embeds';
+import { EmbedColors } from '../../../utils/embeds';
 
 export default class GuildUnlinkDiscordCommandHandler extends DiscordCommandHandler {
     private readonly linkService: LinkService;
@@ -18,6 +18,7 @@ export default class GuildUnlinkDiscordCommandHandler extends DiscordCommandHand
         command: string,
         ...args: string[]
     ): Promise<void> {
+        const footer = this.footer(message);
         const discordGuildId = message.guildId!;
 
         const hasPerms = await this.requirePermission(
@@ -35,17 +36,29 @@ export default class GuildUnlinkDiscordCommandHandler extends DiscordCommandHand
 
         try {
             await this.linkService.removeGuildLinkFromDiscord(discordGuildId);
-            await message.reply(
-                createDiscordSuccessReply(
-                    `Successfully unlinked this Discord guild from its linked Fluxer guild.`,
-                    'Guild Unlinked'
-                )
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Guild Unlinked')
+                        .setDescription('Successfully unlinked this Discord guild from its linked Fluxer guild.')
+                        .setColor(EmbedColors.Success)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
         } catch (error: any) {
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Error Unlinking Guild')
+                        .setDescription(`Failed to unlink guild: ${error.message}`)
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
             await message.reply(
                 createDiscordErrorReply(
-                    `Failed to unlink guild: ${error.message}`,
                     'Error Unlinking Guild'
+                    `Failed to unlink guild: ${error.message}`,
                 )
             );
             logger.error(

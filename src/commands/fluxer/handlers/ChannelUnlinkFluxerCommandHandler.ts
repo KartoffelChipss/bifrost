@@ -1,9 +1,9 @@
-import { Client, GuildMember, Message, PermissionFlags } from '@fluxerjs/core';
+import { Client, EmbedBuilder, Message, PermissionFlags } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import logger from '../../../utils/logging/logger';
 import { getFluxerCommandUsage } from '../../../commands/commandList';
-import { createFluxerErrorReply, createFluxerSuccessReply } from '../../../utils/embeds';
+import { EmbedColors } from '../../../utils/embeds';
 
 export default class ChannelUnlinkFluxerCommandHandler extends FluxerCommandHandler {
     private readonly linkService: LinkService;
@@ -18,6 +18,8 @@ export default class ChannelUnlinkFluxerCommandHandler extends FluxerCommandHand
         command: string,
         ...args: string[]
     ): Promise<void> {
+        const footer = this.footer(message);
+
         const hasPerms = await this.requirePermission(
             message,
             PermissionFlags.ManageChannels,
@@ -33,23 +35,31 @@ export default class ChannelUnlinkFluxerCommandHandler extends FluxerCommandHand
 
         try {
             await this.linkService.removeChannelLinkForFluxer(message.guildId!, message.channelId);
-            await message.reply(
-                createFluxerSuccessReply(`Successfully unlinked channel link.`, 'Channel Unlinked')
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Channel Unlinked')
+                        .setDescription('Successfully unlinked channel link.')
+                        .setColor(EmbedColors.Success)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
         } catch (error: any) {
-            await message.reply(
-                createFluxerErrorReply(
-                    'An error occurred while unlinking the channel: ' + error.message ||
-                        'An error occurred while unlinking the channel.',
-                    'Failed to Unlink Channel'
-                )
-            );
+            await message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('Failed to Unlink Channel')
+                        .setDescription('An error occurred while unlinking the channel: ' + error.message)
+                        .setColor(EmbedColors.Error)
+                        .setFooter(footer).setTimestamp(),
+                ],
+            });
             logger.error(
                 'Failed unlinking channel from Fluxer command',
                 {
+                    fluxerChannelId: message.channelId,
                     command,
                     fluxerGuildId: message.guildId,
-                    fluxerChannelId: message.channelId,
                 },
                 error
             );

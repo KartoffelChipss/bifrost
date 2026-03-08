@@ -13,10 +13,10 @@ import HealthCheckService from './services/HealthCheckService';
 import { LinkService } from './services/LinkService';
 import { WebhookService } from './services/WebhookService';
 import {
-    DISCORD_APPLICATION_ID,
-    DISCORD_HEALTH_PUSH_URL,
-    FLUXER_APPLICATION_ID,
-    FLUXER_HEALTH_PUSH_URL,
+    DISCORD_APP_ID,
+    DISCORD_HEALTH_URL,
+    FLUXER_APP_ID,
+    FLUXER_HEALTH_URL,
 } from './utils/env';
 import {
     generateDiscordBotInviteLink,
@@ -30,8 +30,8 @@ const main = async () => {
     await initDatabase();
 
     const healthCheckService = new HealthCheckService(
-        DISCORD_HEALTH_PUSH_URL || null,
-        FLUXER_HEALTH_PUSH_URL || null
+        DISCORD_HEALTH_URL || null,
+        FLUXER_HEALTH_URL || null
     );
 
     const guildLinkRepo = new SequelizeGuildLinkRepository();
@@ -54,9 +54,9 @@ const main = async () => {
     const fluxerStatsService = new FluxerStatsService();
 
     const perms = '536947712';
-    const discordBotInviteLink = generateDiscordBotInviteLink(DISCORD_APPLICATION_ID, perms);
+    const discordBotInviteLink = generateDiscordBotInviteLink(DISCORD_APP_ID, perms);
     logger.info(`Discord Bot Invite Link: ${discordBotInviteLink}`);
-    const fluxerBotInviteLink = generateFluxerBotInviteLink(FLUXER_APPLICATION_ID, perms);
+    const fluxerBotInviteLink = generateFluxerBotInviteLink(FLUXER_APP_ID, perms);
     logger.info(`Fluxer Bot Invite Link: ${fluxerBotInviteLink}`);
 
     await Promise.all([
