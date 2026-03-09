@@ -40,9 +40,12 @@ export default class GuildUnlinkFluxerCommandHandler extends FluxerCommandHandle
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Guild Unlinked')
-                        .setDescription('Successfully unlinked this Fluxer guild from its linked Discord guild.')
+                        .setDescription(
+                            'Successfully unlinked this Fluxer guild from its linked Discord guild.'
+                        )
                         .setColor(EmbedColors.Success)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
         } catch (error: any) {
@@ -52,15 +55,16 @@ export default class GuildUnlinkFluxerCommandHandler extends FluxerCommandHandle
                         .setTitle('Error Unlinking Guild')
                         .setDescription(`Failed to unlink guild: ${error.message}`)
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
-                'Failed unlinking guild from Fluxer command',
             logger.error(
+                'Failed unlinking guild from Fluxer command',
                 {
                     command,
                 },
-                    fluxerGuildId,
+                fluxerGuildId,
                 error
             );
         }

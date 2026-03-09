@@ -40,9 +40,12 @@ export default class GuildUnlinkDiscordCommandHandler extends DiscordCommandHand
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Guild Unlinked')
-                        .setDescription('Successfully unlinked this Discord guild from its linked Fluxer guild.')
+                        .setDescription(
+                            'Successfully unlinked this Discord guild from its linked Fluxer guild.'
+                        )
                         .setColor(EmbedColors.Success)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
         } catch (error: any) {
@@ -52,15 +55,10 @@ export default class GuildUnlinkDiscordCommandHandler extends DiscordCommandHand
                         .setTitle('Error Unlinking Guild')
                         .setDescription(`Failed to unlink guild: ${error.message}`)
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
-            await message.reply(
-                createDiscordErrorReply(
-                    'Error Unlinking Guild'
-                    `Failed to unlink guild: ${error.message}`,
-                )
-            );
             logger.error(
                 'Failed unlinking guild from Discord command',
                 {
