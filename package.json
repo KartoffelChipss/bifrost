@@ -12,7 +12,7 @@
         "lint": "eslint src",
         "lint:fix": "eslint src --fix",
         "format": "prettier --write src",
-        "format:check": "prettier --check ."
+        "format:check": "prettier --check src"
     },
     "keywords": [],
     "author": "",
