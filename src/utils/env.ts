@@ -48,6 +48,9 @@ export const isProduction = process.env.NODE_ENV === 'production';
 
 export const CONFIG_PATH = process.env.BF_CONFIG_PATH || './config';
 export const COMMAND_PREFIX = process.env.BF_COMMAND_PREFIX || '!b ';
+export const DELETE_INVOCATION = ['true', '1', 'yes'].includes(
+    (process.env.BF_DELETE_INVOCATION ?? '').toLowerCase()
+);
 
 export const FLUXER_TOKEN = process.env.BF_FLUXER_TOKEN || '';
 export const DISCORD_TOKEN = process.env.BF_DISCORD_TOKEN || '';

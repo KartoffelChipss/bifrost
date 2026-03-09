@@ -1,6 +1,7 @@
 import { Client, EmbedBuilder, Message, OmitPartialGroupDMChannel, PermissionResolvable } from 'discord.js';
 import CommandHandler from '../CommandHandler';
 import { EmbedColors } from '../../utils/embeds';
+import { DELETE_INVOCATION } from '../../utils/env';
 
 export type DiscordCommandHandlerMessage = OmitPartialGroupDMChannel<Message<boolean>>;
 
@@ -9,6 +10,7 @@ export default abstract class DiscordCommandHandler extends CommandHandler<
     DiscordCommandHandlerMessage
 > {
     protected footer(message: DiscordCommandHandlerMessage) {
+        if (!DELETE_INVOCATION) return null;
         return {
             text: `${message.author.username} used ${message.content}`,
             iconURL: message.author.displayAvatarURL(),

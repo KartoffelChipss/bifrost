@@ -2,9 +2,11 @@ import { Client, EmbedBuilder, GuildMember, Message, PermissionResolvable } from
 import CommandHandler from '../CommandHandler';
 import logger from '../../utils/logging/logger';
 import { EmbedColors } from '../../utils/embeds';
+import { DELETE_INVOCATION } from '../../utils/env';
 
 export default abstract class FluxerCommandHandler extends CommandHandler<Client, Message> {
     protected footer(message: Message) {
+        if (!DELETE_INVOCATION) return null;
         const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
         return {
             text: `${message.author.username} used ${message.content} • ${time}`,
