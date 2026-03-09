@@ -22,7 +22,7 @@ export default abstract class FluxerCommandHandler extends CommandHandler<
         });
         return {
             text: `${message.author.username} used ${message.content} • ${time}`,
-            iconURL: (message.author as any).avatarURL?.() ?? undefined,
+            iconURL: message.author.avatarURL?.() ?? undefined,
         };
     }
 
@@ -31,7 +31,7 @@ export default abstract class FluxerCommandHandler extends CommandHandler<
         permission: PermissionResolvable,
         permissionDisplayName?: string
     ): Promise<boolean> {
-        let authorMember: GuildMember | null = null;
+        let authorMember: GuildMember | null;
         try {
             authorMember =
                 (await message.guild?.fetchMember(message.author.id)) || null;
@@ -92,7 +92,7 @@ export default abstract class FluxerCommandHandler extends CommandHandler<
     }
 
     protected async requireOwner(message: Message): Promise<boolean> {
-        if ((message.guild as any)?.ownerId !== message.author.id) {
+        if (message.guild?.ownerId !== message.author.id) {
             await message.reply({
                 embeds: [
                     new EmbedBuilder()

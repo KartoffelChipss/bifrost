@@ -64,13 +64,15 @@ export default class GuildLinkDiscordCommandHandler extends DiscordCommandHandle
                 });
                 return;
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error ? error.message : 'Unknown error';
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Error Verifying Fluxer Guild')
                         .setDescription(
-                            `Failed to verify Fluxer guild: ${error.message}`
+                            `Failed to verify Fluxer guild: ${errorMessage}`
                         )
                         .setColor(EmbedColors.Error)
                         .setFooter(footer)
@@ -106,13 +108,15 @@ export default class GuildLinkDiscordCommandHandler extends DiscordCommandHandle
                         .setTimestamp(),
                 ],
             });
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error ? error.message : 'Unknown error';
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Error Creating Guild Link')
                         .setDescription(
-                            `Failed to create guild link: ${error.message}`
+                            `Failed to create guild link: ${errorMessage}`
                         )
                         .setColor(EmbedColors.Error)
                         .setFooter(footer)

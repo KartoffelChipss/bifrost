@@ -71,12 +71,14 @@ export default class ListChannelsFluxerCommandHandler extends FluxerCommandHandl
                         .setTimestamp(),
                 ],
             });
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error ? error.message : 'Unknown error';
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setDescription(
-                            `Failed to list channel links: ${error.message}`
+                            `Failed to list channel links: ${errorMessage}`
                         )
                         .setColor(EmbedColors.Error)
                         .setFooter(footer)

@@ -33,7 +33,7 @@ export default class FluxerEntityResolver implements EntityResolver<
         guildOrId: string | Guild,
         channelId: string
     ): Promise<Channel | null> {
-        const client = this.ensureClient();
+        this.ensureClient();
 
         try {
             const guild =

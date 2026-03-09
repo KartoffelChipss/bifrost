@@ -33,7 +33,7 @@ export default class DiscordEntityResolver implements EntityResolver<
         guildOrId: string | Guild,
         channelId: string
     ): Promise<Channel | null> {
-        const client = this.ensureClient();
+        this.ensureClient();
 
         try {
             const guild =
@@ -54,7 +54,7 @@ export default class DiscordEntityResolver implements EntityResolver<
         channelOrId: string | Channel,
         messageId: string
     ): Promise<Message<boolean>> {
-        const client = this.ensureClient();
+        this.ensureClient();
 
         const channel =
             typeof channelOrId === 'string'

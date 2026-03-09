@@ -3,11 +3,7 @@ import FluxerCommandHandler from '../FluxerCommandHandler';
 import { EmbedColors } from '../../../utils/embeds';
 
 export default class PingFluxerCommandHandler extends FluxerCommandHandler {
-    public async handleCommand(
-        message: Message,
-        _command: string,
-        ..._args: string[]
-    ): Promise<void> {
+    public async handleCommand(message: Message): Promise<void> {
         await message.reply({
             embeds: [
                 new EmbedBuilder()

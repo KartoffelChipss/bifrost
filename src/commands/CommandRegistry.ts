@@ -1,5 +1,6 @@
 import CommandHandler from './CommandHandler';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export default class CommandRegistry<T extends CommandHandler<any, any>> {
     private readonly commandHandlers: Map<string, T>;
 

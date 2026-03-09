@@ -8,11 +8,7 @@ export default class HelpFluxerCommandHandler extends FluxerCommandHandler {
         super(client);
     }
 
-    async handleCommand(
-        message: Message,
-        _command: string,
-        ..._args: string[]
-    ): Promise<void> {
+    async handleCommand(message: Message): Promise<void> {
         const hasPerms = await this.requirePermission(
             message,
             PermissionFlags.ManageWebhooks,

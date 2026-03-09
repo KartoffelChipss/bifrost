@@ -6,9 +6,7 @@ import { EmbedColors } from '../../../utils/embeds';
 
 export default class PingDiscordCommandHandler extends DiscordCommandHandler {
     public async handleCommand(
-        message: DiscordCommandHandlerMessage,
-        _command: string,
-        ..._args: string[]
+        message: DiscordCommandHandlerMessage
     ): Promise<void> {
         await message.reply({
             embeds: [

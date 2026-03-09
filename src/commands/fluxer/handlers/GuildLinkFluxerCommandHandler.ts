@@ -62,13 +62,15 @@ export default class GuildLinkFluxerCommandHandler extends FluxerCommandHandler 
                 });
                 return;
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error ? error.message : 'Unknown error';
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Error Verifying Guild')
                         .setDescription(
-                            `Failed to verify Discord guild: ${error.message}`
+                            `Failed to verify Discord guild: ${errorMessage}`
                         )
                         .setColor(EmbedColors.Error)
                         .setFooter(footer)
@@ -104,13 +106,15 @@ export default class GuildLinkFluxerCommandHandler extends FluxerCommandHandler 
                         .setTimestamp(),
                 ],
             });
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error ? error.message : 'Unknown error';
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Error Creating Guild Link')
                         .setDescription(
-                            `Failed to create guild link: ${error.message}`
+                            `Failed to create guild link: ${errorMessage}`
                         )
                         .setColor(EmbedColors.Error)
                         .setFooter(footer)

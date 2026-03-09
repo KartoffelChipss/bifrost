@@ -47,7 +47,7 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
         const rawChannelId = args[0];
         const discordChannelId = rawChannelId.replace(/^<|>$/g, '');
 
-        let guildLink = null;
+        let guildLink;
         try {
             guildLink = await this.linkService.getGuildLinkForFluxerGuild(
                 message.guildId!
@@ -55,13 +55,15 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
             if (!guildLink) {
                 throw new Error('Guild not linked');
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error ? error.message : 'Unknown error';
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Error Fetching Guild Link')
                         .setDescription(
-                            `Failed to get guild link: ${error.message}`
+                            `Failed to get guild link: ${errorMessage}`
                         )
                         .setColor(EmbedColors.Error)
                         .setFooter(footer)
@@ -90,7 +92,7 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
             if (!discordChannel) {
                 throw new Error('Discord channel not found');
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
@@ -107,19 +109,21 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
             return;
         }
 
-        let discordWebhook = null;
+        let discordWebhook;
         try {
             discordWebhook = await this.webhookService.createDiscordWebhook(
                 discordChannelId,
                 `Fluxer Bridge Webhook for channel ${message.channelId}`
             );
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error ? error.message : 'Unknown error';
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Error Creating Discord Webhook')
                         .setDescription(
-                            `Failed to create Discord webhook: ${error.message}`
+                            `Failed to create Discord webhook: ${errorMessage}`
                         )
                         .setColor(EmbedColors.Error)
                         .setFooter(footer)
@@ -130,19 +134,21 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
             return;
         }
 
-        let fluxerWebhook = null;
+        let fluxerWebhook;
         try {
             fluxerWebhook = await this.webhookService.createFluxerWebhook(
                 message.channelId,
                 `Discord Bridge Webhook for channel ${message.channelId}`
             );
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error ? error.message : 'Unknown error';
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Error Creating Fluxer Webhook')
                         .setDescription(
-                            `Failed to create Fluxer webhook: ${error.message}`
+                            `Failed to create Fluxer webhook: ${errorMessage}`
                         )
                         .setColor(EmbedColors.Error)
                         .setFooter(footer)
@@ -175,13 +181,15 @@ export default class ChannelLinkFluxerCommandHandler extends FluxerCommandHandle
                         .setTimestamp(),
                 ],
             });
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error ? error.message : 'Unknown error';
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Error Creating Channel Link')
                         .setDescription(
-                            `Failed to create channel link: ${error.message}`
+                            `Failed to create channel link: ${errorMessage}`
                         )
                         .setColor(EmbedColors.Error)
                         .setFooter(footer)

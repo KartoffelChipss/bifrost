@@ -18,17 +18,15 @@ import {
 export default class StatsFluxerCommandHandler extends FluxerCommandHandler {
     constructor(
         client: Client,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         private discordStatsService: StatsService<any>,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         private fluxerStatsService: StatsService<any>
     ) {
         super(client);
     }
 
-    public async handleCommand(
-        message: Message,
-        _command: string,
-        ..._args: string[]
-    ): Promise<void> {
+    public async handleCommand(message: Message): Promise<void> {
         const hasPerms = await this.requirePermission(
             message,
             PermissionFlags.ManageWebhooks,

@@ -10,11 +10,7 @@ export default class HelpDiscordCommandHandler extends DiscordCommandHandler {
         super(client);
     }
 
-    async handleCommand(
-        message: DiscordCommandHandlerMessage,
-        _command: string,
-        ..._args: string[]
-    ): Promise<void> {
+    async handleCommand(message: DiscordCommandHandlerMessage): Promise<void> {
         const hasPerms = await this.requirePermission(
             message,
             PermissionFlagsBits.ManageWebhooks,

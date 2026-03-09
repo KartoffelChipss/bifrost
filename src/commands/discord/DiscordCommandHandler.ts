@@ -30,13 +30,13 @@ export default abstract class DiscordCommandHandler extends CommandHandler<
         permission: PermissionResolvable,
         permissionDisplayName?: string
     ): Promise<boolean> {
-        let member = null;
+        let member;
         try {
             member = await message.guild?.members.fetch(message.author.id);
             if (!member) {
                 throw new Error('Member not found');
             }
-        } catch (error) {
+        } catch {
             await message.reply({
                 embeds: [
                     new EmbedBuilder()

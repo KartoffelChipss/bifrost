@@ -48,13 +48,15 @@ export default class GuildUnlinkFluxerCommandHandler extends FluxerCommandHandle
                         .setTimestamp(),
                 ],
             });
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error ? error.message : 'Unknown error';
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Error Unlinking Guild')
                         .setDescription(
-                            `Failed to unlink guild: ${error.message}`
+                            `Failed to unlink guild: ${errorMessage}`
                         )
                         .setColor(EmbedColors.Error)
                         .setFooter(footer)

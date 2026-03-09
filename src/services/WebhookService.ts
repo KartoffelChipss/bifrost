@@ -61,7 +61,7 @@ export class WebhookService {
 
             const webhook = await channel.createWebhook({ name });
             return { id: webhook.id, token: webhook.token! };
-        } catch (error: any) {
+        } catch (error: unknown) {
             logger.error(
                 'Failed creating Discord webhook',
                 { operation: 'createDiscordWebhook', channelId, name },
@@ -90,7 +90,7 @@ export class WebhookService {
                 token: webhookToken,
             });
             return webhookClient;
-        } catch (error: any) {
+        } catch (error: unknown) {
             logger.error(
                 'Failed fetching Discord webhook',
                 { operation: 'getDiscordWebhook', webhookId },
@@ -123,7 +123,7 @@ export class WebhookService {
             });
 
             return { messageId: id };
-        } catch (error: any) {
+        } catch (error: unknown) {
             logger.error(
                 'Failed sending message via Discord webhook',
                 {
@@ -158,7 +158,7 @@ export class WebhookService {
                 embeds:
                     data.embeds?.map((embed) => embed.toDiscordEmbed()) || [],
             });
-        } catch (error: any) {
+        } catch (error: unknown) {
             logger.error(
                 'Failed editing message via Discord webhook',
                 {
@@ -188,7 +188,7 @@ export class WebhookService {
             )) as FluxerTextChannel;
             const webhook = await channel.createWebhook({ name });
             return { id: webhook.id, token: webhook.token! };
-        } catch (error: any) {
+        } catch (error: unknown) {
             logger.error(
                 'Failed creating Fluxer webhook',
                 { operation: 'createFluxerWebhook', channelId, name },
@@ -213,7 +213,7 @@ export class WebhookService {
                 webhookToken
             );
             return webhook;
-        } catch (error: any) {
+        } catch (error: unknown) {
             logger.error(
                 'Failed creating Fluxer webhook instance from token',
                 { operation: 'getFluxerWebhook', webhookId },
@@ -262,7 +262,7 @@ export class WebhookService {
             }
 
             return { messageId: msg.id };
-        } catch (error: any) {
+        } catch (error: unknown) {
             logger.error(
                 'Failed sending message via Fluxer webhook',
                 {

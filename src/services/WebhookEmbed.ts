@@ -112,6 +112,7 @@ export default class WebhookEmbed {
         });
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     public static fromFluxerEmbed(embed: any): WebhookEmbed {
         return new WebhookEmbed({
             title: embed.title ?? null,
@@ -120,6 +121,7 @@ export default class WebhookEmbed {
             color: embed.color ?? null,
             timestamp: embed.timestamp ? new Date(embed.timestamp) : null,
             fields:
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 embed.fields?.map((f: any) => ({
                     name: f.name,
                     value: f.value,

@@ -87,7 +87,9 @@ const main = async () => {
         healthCheckService.resetFluxerDownCount();
         try {
             fluxerClientRef.current?.destroy?.();
-        } catch {}
+        } catch (err) {
+            logger.error('Error destroying Fluxer client during restart:', err);
+        }
         await new Promise((r) => setTimeout(r, 3_000));
         try {
             fluxerClientRef.current = await startFluxerClient(fluxerArgs);

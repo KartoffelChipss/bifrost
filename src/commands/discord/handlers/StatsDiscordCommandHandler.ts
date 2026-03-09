@@ -20,16 +20,16 @@ import {
 export default class StatsDiscordCommandHandler extends DiscordCommandHandler {
     constructor(
         client: Client,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         private discordStatsService: StatsService<any>,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         private fluxerStatsService: StatsService<any>
     ) {
         super(client);
     }
 
     public async handleCommand(
-        message: DiscordCommandHandlerMessage,
-        _command: string,
-        ..._args: string[]
+        message: DiscordCommandHandlerMessage
     ): Promise<void> {
         const hasPerms = await this.requirePermission(
             message,

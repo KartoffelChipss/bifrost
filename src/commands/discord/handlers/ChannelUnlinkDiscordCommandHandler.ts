@@ -50,14 +50,16 @@ export default class ChannelUnlinkDiscordCommandHandler extends DiscordCommandHa
                         .setTimestamp(),
                 ],
             });
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error ? error.message : 'Unknown error';
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setTitle('Failed to Unlink Channel')
                         .setDescription(
                             'An error occurred while unlinking the channel: **' +
-                                error.message +
+                                errorMessage +
                                 '**'
                         )
                         .setColor(EmbedColors.Error)
