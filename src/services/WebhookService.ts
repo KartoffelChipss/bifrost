@@ -227,33 +227,30 @@ export class WebhookService {
         webhook: FluxerWebhook,
         data: WebhookMessageData
     ): Promise<{ messageId: string }> {
+        const msgData = {
+            content: data.content,
+            username: data.username,
+            avatar_url: data.avatarURL || undefined,
+            files:
+                data.attachments?.map((attachment) => ({
+                    url: attachment.url,
+                    name: attachment.name,
+                    filename: attachment.name,
+                })) || [],
+            attachments:
+                data.attachments?.map((attachment, index) => ({
+                    id: index,
+                    name: attachment.name,
+                    filename: attachment.name,
+                    flags: attachment.spoiler
+                        ? MessageAttachmentFlags.IS_SPOILER
+                        : undefined,
+                })) || [],
+            embeds: data.embeds?.map((embed) => embed.toFluxerEmbed()) || [],
+        };
+
         try {
-            const msg = await webhook.send(
-                {
-                    content: data.content,
-                    username: data.username,
-                    avatar_url: data.avatarURL,
-                    files:
-                        data.attachments?.map((attachment) => ({
-                            url: attachment.url,
-                            name: attachment.name,
-                            filename: attachment.name,
-                        })) || [],
-                    attachments:
-                        data.attachments?.map((attachment, index) => ({
-                            id: index,
-                            name: attachment.name,
-                            filename: attachment.name,
-                            flags: attachment.spoiler
-                                ? MessageAttachmentFlags.IS_SPOILER
-                                : undefined,
-                        })) || [],
-                    embeds:
-                        data.embeds?.map((embed) => embed.toFluxerEmbed()) ||
-                        [],
-                },
-                true
-            );
+            const msg = await webhook.send(msgData, true);
 
             if (!msg) {
                 throw new Error(
@@ -270,6 +267,7 @@ export class WebhookService {
                     hasContent: Boolean(data.content),
                     attachmentCount: data.attachments?.length || 0,
                     embedCount: data.embeds?.length || 0,
+                    messageTriedToSend: msgData,
                 },
                 error
             );

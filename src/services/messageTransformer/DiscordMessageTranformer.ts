@@ -96,16 +96,19 @@ export default class DiscordMessageTransformer implements MessageTransformer<
         if (message.reference) {
             const repliedMessage = await message.fetchReference();
             const content = this.sanitizeContent(repliedMessage);
-            embeds.unshift(
-                new WebhookEmbed({
-                    description: `${content}`,
-                    color: 0x0b0d0e,
-                    author: {
-                        name: repliedMessage.author.username + ' ↩️',
-                        iconURL: repliedMessage.author.avatarURL() || undefined,
-                    },
-                })
-            );
+            if (content && content.trim() !== '') {
+                embeds.unshift(
+                    new WebhookEmbed({
+                        description: `${content}`,
+                        color: 0x0b0d0e,
+                        author: {
+                            name: repliedMessage.author.username + ' ↩️',
+                            iconURL:
+                                repliedMessage.author.avatarURL() || undefined,
+                        },
+                    })
+                );
+            }
         }
 
         return {
