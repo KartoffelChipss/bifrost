@@ -39,12 +39,12 @@ Open it and add your credentials:
 
 ```env
 # Fluxer
-FLUXER_BOT_TOKEN="Your Fluxer Bot Token"
-FLUXER_APPLICATION_ID="Your Fluxer Application ID"
+BF_FLUXER_TOKEN="Your Fluxer Bot Token"
+BF_FLUXER_APP_ID="Your Fluxer Application ID"
 
 # Discord
-DISCORD_BOT_TOKEN="Your Discord Bot Token"
-DISCORD_APPLICATION_ID="Your Discord Application ID"
+BF_DISCORD_TOKEN="Your Discord Bot Token"
+BF_DISCORD_APP_ID="Your Discord Application ID"
 ```
 
 You can also use `.env.example` as a reference for all environment variables.
