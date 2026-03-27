@@ -59,6 +59,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
+            REPO_URL=https://github.com/${{ github.repository }}
             APP_VERSION=${{ github.ref_name }}
           tags: |
             ${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}-${{ env.PLATFORM_PAIR }}
