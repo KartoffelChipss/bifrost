@@ -1,4 +1,9 @@
-import { Message, OmitPartialGroupDMChannel, TextChannel } from 'discord.js';
+import {
+    Message,
+    MessageFlags,
+    OmitPartialGroupDMChannel,
+    TextChannel,
+} from 'discord.js';
 import { WebhookMessageData } from '../WebhookService';
 import MessageTransformer from './MessageTransformer';
 import { sanitizeMentions } from '../../utils/sanitizeMentions';
@@ -98,17 +103,22 @@ export default class DiscordMessageTransformer extends MessageTransformer<
         );
 
         if (message.reference) {
-            const repliedMessage = await message.fetchReference();
-            const content = this.sanitizeContent(repliedMessage);
+            const referencedMessage = await message.fetchReference();
+            const content = this.sanitizeContent(referencedMessage);
+            const isForwarded = message.flags.has(MessageFlags.HasSnapshot);
+            const refrenceEmoji = isForwarded ? '⏩' : '↩️';
             if (content && content.trim() !== '') {
                 embeds.unshift(
                     new WebhookEmbed({
                         description: `${content}`,
                         color: 0x0b0d0e,
                         author: {
-                            name: repliedMessage.author.username + ' ↩️',
+                            name:
+                                referencedMessage.author.username +
+                                ` ${refrenceEmoji}`,
                             iconURL:
-                                repliedMessage.author.avatarURL() || undefined,
+                                referencedMessage.author.avatarURL() ||
+                                undefined,
                         },
                     })
                 );
