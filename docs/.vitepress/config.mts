@@ -5,6 +5,7 @@ export default defineConfig({
     lang: 'en-US',
     title: 'Bifröst',
     description: 'A bridge between Discord and Fluxer',
+    appearance: 'force-dark',
     themeConfig: {
         // https://vitepress.dev/reference/default-theme-config
         logo: '/logo.svg',
@@ -24,7 +25,12 @@ export default defineConfig({
             },
         ],
 
-        socialLinks: [{ icon: 'github', link: 'https://github.com/KartoffelChipss/bifrost' }],
+        socialLinks: [
+            {
+                icon: 'github',
+                link: 'https://github.com/KartoffelChipss/bifrost',
+            },
+        ],
     },
     head: [
         [
