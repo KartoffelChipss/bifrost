@@ -49,5 +49,10 @@ ChannelLinkModel.init(
             allowNull: false,
         },
     },
-    { sequelize, tableName: 'channel_links', createdAt: 'createdAt', updatedAt: false }
+    {
+        sequelize,
+        tableName: 'channel_links',
+        createdAt: 'createdAt',
+        updatedAt: false,
+    }
 );

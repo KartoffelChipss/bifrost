@@ -1,34 +1,64 @@
-import { Client, EmbedBuilder, Message } from '@fluxerjs/core';
+import { Client, EmbedBuilder, Message, PermissionFlags } from '@fluxerjs/core';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import { formatDuration } from '../../../utils/duration';
 import StatsService from '../../../services/statsService/StatsService';
 import { getHeapUsageMB } from '../../../utils/memory';
+import { EmbedColors } from '../../../utils/embeds';
+import {
+    DISCORD_APP_ID,
+    FLUXER_APP_ID,
+    GIT_COMMIT,
+    REPO_URL,
+} from '../../../utils/env';
+import {
+    generateDiscordBotInviteLink,
+    generateFluxerBotInviteLink,
+} from '../../../utils/generateBotInvite';
+import { DbStatsService } from '../../../services/DbStatsService';
 
 export default class StatsFluxerCommandHandler extends FluxerCommandHandler {
     constructor(
         client: Client,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         private discordStatsService: StatsService<any>,
-        private fluxerStatsService: StatsService<any>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        private fluxerStatsService: StatsService<any>,
+        private dbStatsService: DbStatsService
     ) {
         super(client);
     }
 
-    public async handleCommand(
-        message: Message,
-        command: string,
-        ...args: string[]
-    ): Promise<void> {
+    public async handleCommand(message: Message): Promise<void> {
+        const hasPerms = await this.requirePermission(
+            message,
+            PermissionFlags.ManageWebhooks,
+            'Manage Webhooks'
+        );
+        if (!hasPerms) return;
         const fluxerGuildCount = this.fluxerStatsService.getGuildCount();
         const discordGuildCount = this.discordStatsService.getGuildCount();
         const fluxerUserCount = this.fluxerStatsService.getUserCount();
         const discordUserCount = this.discordStatsService.getUserCount();
+        const discordPing = await this.discordStatsService.getPing();
+        const fluxerPing = await this.fluxerStatsService.getPing();
         const readableUptime = formatDuration(process.uptime());
         const usedHeap = getHeapUsageMB();
+
+        const perms = '536947712';
+        const inviteValue = `[Fluxer](${generateFluxerBotInviteLink(FLUXER_APP_ID, perms)}) | [Discord](${generateDiscordBotInviteLink(DISCORD_APP_ID, perms)})`;
+
+        const buildValue = GIT_COMMIT
+            ? REPO_URL
+                ? `[\`${GIT_COMMIT.slice(0, 7)}\`](${REPO_URL}/commit/${GIT_COMMIT})`
+                : `\`${GIT_COMMIT.slice(0, 7)}\``
+            : 'N/A';
+
+        const dbStats = await this.dbStatsService.getStats();
 
         await message.reply({
             embeds: [
                 new EmbedBuilder()
-                    .setTitle('Fluxer Bot Stats')
+                    .setTitle('Bifröst Stats')
                     .addFields(
                         {
                             name: 'Fluxer Guilds',
@@ -50,10 +80,33 @@ export default class StatsFluxerCommandHandler extends FluxerCommandHandler {
                             value: `${isNaN(discordUserCount) ? 'N/A' : discordUserCount}`,
                             inline: true,
                         },
+                        {
+                            name: 'Channel Links',
+                            value: `${dbStats.channelLinksCount}`,
+                            inline: true,
+                        },
+                        {
+                            name: 'Message Links',
+                            value: `${dbStats.messageLinksCount}`,
+                            inline: true,
+                        },
+                        {
+                            name: 'Latency',
+                            value: `Discord: ${isNaN(discordPing) ? 'N/A' : `${discordPing}ms`} | Fluxer: ${isNaN(fluxerPing) ? 'Not Yet Supported' : `${fluxerPing}ms`}`,
+                            inline: false,
+                        },
                         { name: 'Uptime', value: readableUptime, inline: true },
-                        { name: 'Memory Usage', value: `${usedHeap} MB`, inline: true }
+                        {
+                            name: 'Memory Usage',
+                            value: `${usedHeap} MB`,
+                            inline: true,
+                        },
+                        { name: 'Build', value: buildValue, inline: true },
+                        { name: 'Invite', value: inviteValue, inline: false }
                     )
-                    .setColor(0x252529),
+                    .setColor(EmbedColors.Info)
+                    .setFooter(this.footer(message))
+                    .setTimestamp(),
             ],
         });
     }

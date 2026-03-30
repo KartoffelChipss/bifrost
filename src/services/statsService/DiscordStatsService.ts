@@ -8,4 +8,7 @@ export default class DiscordStatsService extends StatsService<Client> {
     getUserCount(): number {
         return this.getClient()?.users.cache.size || NaN;
     }
+    getPing(): number {
+        return this.getClient()?.ws.ping ?? NaN;
+    }
 }

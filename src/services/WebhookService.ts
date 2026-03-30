@@ -152,6 +152,28 @@ export class WebhookService {
         }
     }
 
+    async deleteDiscordWebhook(webhookId: string, webhookToken: string): Promise<void> {
+        if (!this.discordClient) return;
+        try {
+            const webhook = await this.discordClient.fetchWebhook(webhookId, webhookToken);
+            await webhook.delete();
+        } catch (error) {
+            logger.error('Error deleting Discord webhook:', error);
+            throw error;
+        }
+    }
+
+    async deleteFluxerWebhook(webhookId: string, webhookToken: string): Promise<void> {
+        if (!this.fluxerClient) return;
+        try {
+            const webhook = FluxerWebhook.fromToken(this.fluxerClient, webhookId, webhookToken);
+            await webhook.delete();
+        } catch (error) {
+            logger.error('Error deleting Fluxer webhook:', error);
+            throw error;
+        }
+    }
+
     async getFluxerWebhook(webhookId: string, webhookToken: string): Promise<FluxerWebhook> {
         if (!this.fluxerClient) {
             throw new Error('Fluxer client not set in WebhookService');

@@ -1,27 +1,28 @@
-import { Client, Events, Message, PartialMessage, TextChannel } from '@fluxerjs/core';
+import { Client, EmbedBuilder, Events, PartialMessage, TextChannel } from '@fluxerjs/core';
 import CommandRegistry from './commands/CommandRegistry';
-import PingFluxerCommandHandler from './commands/fluxer/handlers/PingFluxerCommandHandler';
 import { isCommandString, parseCommandString } from './commands/parseCommandString';
-import './utils/env';
+import { EmbedColors } from './utils/embeds';
 import logger from './utils/logging/logger';
 import FluxerCommandHandler from './commands/fluxer/FluxerCommandHandler';
-import { COMMAND_PREFIX } from './utils/env';
-import GuildLinkFluxerCommandHandler from './commands/fluxer/handlers/GuildLinkFluxerCommandHandler';
-import GuildUnlinkFluxerCommandHandler from './commands/fluxer/handlers/GuildUnlinkFluxerCommandHandler';
+import { COMMAND_PREFIX, DELETE_INVOCATION, FLUXER_TOKEN } from './utils/env';
 import { LinkService } from './services/LinkService';
-import ChannelLinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelLinkFluxerCommandHandler';
-import ListChannelsFluxerCommandHandler from './commands/fluxer/handlers/ListChannelsFluxerCommandHandler';
-import ChannelUnlinkFluxerCommandHandler from './commands/fluxer/handlers/ChannelUnlinkFluxerCommandHandler';
+import LinkFluxerCommandHandler from './commands/fluxer/handlers/LinkFluxerCommandHandler';
+import UnlinkFluxerCommandHandler from './commands/fluxer/handlers/UnlinkFluxerCommandHandler';
+import ListFluxerCommandHandler from './commands/fluxer/handlers/ListFluxerCommandHandler';
 import { WebhookService } from './services/WebhookService';
 import FluxerToDiscordMessageRelay from './services/messageRelay/FluxerToDiscordMessageRelay';
 import HelpFluxerCommandHandler from './commands/fluxer/handlers/HelpFluxerCommandHandler';
+import AutolinkFluxerCommandHandler from './commands/fluxer/handlers/AutolinkFluxerCommandHandler';
 import HealthCheckService from './services/HealthCheckService';
 import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
 import FluxerMessageTransformer from './services/messageTransformer/FluxerMessageTransformer';
+import MetricsService from './services/MetricsService';
+import MessageQueueService from './services/MessageQueueService';
 import StatsFluxerCommandHandler from './commands/fluxer/handlers/StatsFluxerCommandHandler';
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import FluxerStatsService from './services/statsService/FluxerStatsService';
+import { DbStatsService } from './services/DbStatsService';
 
 const startFluxerClient = async ({
     linkService,
@@ -29,16 +30,22 @@ const startFluxerClient = async ({
     healthCheckService,
     discordEntityResolver,
     fluxerEntityResolver,
+    metricsService,
+    queueService,
     discordStatsService,
     fluxerStatsService,
+    dbStatsService,
 }: {
     linkService: LinkService;
     webhookService: WebhookService;
     healthCheckService: HealthCheckService;
     discordEntityResolver: DiscordEntityResolver;
     fluxerEntityResolver: FluxerEntityResolver;
+    metricsService?: MetricsService;
+    queueService?: MessageQueueService;
     discordStatsService: DiscordStatsService;
     fluxerStatsService: FluxerStatsService;
+    dbStatsService: DbStatsService;
 }): Promise<Client> => {
     const client = new Client({
         intents: 0,
@@ -61,48 +68,21 @@ const startFluxerClient = async ({
         linkService,
         webhookService,
         messageTransformer,
+        metricsService,
+        queueService,
     });
 
     const commandRegistry = new CommandRegistry<FluxerCommandHandler>();
-    commandRegistry.registerCommand('ping', new PingFluxerCommandHandler(client));
     commandRegistry.registerCommand('help', new HelpFluxerCommandHandler(client));
-    commandRegistry.registerCommand(
-        'stats',
-        new StatsFluxerCommandHandler(client, discordStatsService, fluxerStatsService)
-    );
-    commandRegistry.registerCommand(
-        'linkguild',
-        new GuildLinkFluxerCommandHandler(client, linkService, discordEntityResolver)
-    );
-    commandRegistry.registerCommand(
-        'unlinkguild',
-        new GuildUnlinkFluxerCommandHandler(client, linkService)
-    );
-    commandRegistry.registerCommand(
-        'linkchannel',
-        new ChannelLinkFluxerCommandHandler(
-            client,
-            linkService,
-            webhookService,
-            discordEntityResolver
-        )
-    );
-    commandRegistry.registerCommand(
-        'listchannels',
-        new ListChannelsFluxerCommandHandler(client, linkService)
-    );
-    commandRegistry.registerCommand(
-        'unlinkchannel',
-        new ChannelUnlinkFluxerCommandHandler(client, linkService)
-    );
+    commandRegistry.registerCommand('stats', new StatsFluxerCommandHandler(client, discordStatsService, fluxerStatsService, dbStatsService));  
+    commandRegistry.registerCommand('link', new LinkFluxerCommandHandler(client, linkService, webhookService, discordEntityResolver));
+    commandRegistry.registerCommand('unlink', new UnlinkFluxerCommandHandler(client, linkService, webhookService));
+    commandRegistry.registerCommand('list', new ListFluxerCommandHandler(client, linkService, discordEntityResolver));
+    commandRegistry.registerCommand('autolink', new AutolinkFluxerCommandHandler(client, linkService, webhookService, discordEntityResolver));
 
     client.once(Events.Ready, () => {
         logger.info('Fluxer bot is ready!');
-        logger.info(`Fluxer bot is in ${client.guilds.size} guilds`);
-
-        setInterval(async () => {
-            await healthCheckService.pushFluxerHealthStatus();
-        }, 30_000);
+        healthCheckService.pushFluxerHealthStatus();
     });
 
     client.on(Events.Error, (error) => {
@@ -125,7 +105,6 @@ const startFluxerClient = async ({
         const guildLink = await linkService.getGuildLinkById(channelLink.guildLinkId);
         if (!guildLink) return;
 
-        //console.log('Deleting Discord message with ID:', messageLink.discordMessageId);
         const msg = await discordEntityResolver.fetchMessage(
             guildLink.discordGuildId,
             channelLink.discordChannelId,
@@ -146,7 +125,7 @@ const startFluxerClient = async ({
         }
     });
 
-    client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
+    client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
         const linkedMessage = await linkService.getMessageLinkByFluxerMessageId(newMessage.id);
         if (!linkedMessage) return;
 
@@ -178,9 +157,8 @@ const startFluxerClient = async ({
 
     client.on(Events.MessageCreate, async (message) => {
         if (message.author.id === client.user?.id) return;
-        if (!message.guildId) return;
 
-        if (message.webhookId) {
+        if (message.guildId && message.webhookId) {
             const webhookLink = await linkService.getChannelLinkByFluxerChannelId(
                 message.channelId
             );
@@ -191,9 +169,14 @@ const startFluxerClient = async ({
             const { command, args } = parseCommandString(message.content, COMMAND_PREFIX);
             const handler = commandRegistry.getCommandHandler(command);
             if (!handler) {
-                await message.reply(
-                    `Unknown command: \`${command}\`\nUse \`${COMMAND_PREFIX}help\` to see available commands.`
-                );
+                await message.reply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setDescription(`Unknown command: \`${command}\`\nUse \`${COMMAND_PREFIX}help\` to see available commands.`)
+                            .setColor(EmbedColors.Error)
+                            .setFooter({ text: `${message.author.username} used ${message.content} • ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`, iconURL: (message.author as any).avatarURL?.() ?? undefined }).setTimestamp(),
+                    ],
+                });
                 return;
             }
 
@@ -202,9 +185,16 @@ const startFluxerClient = async ({
             } catch (error) {
                 logger.error(`Error executing fluxer command "${command}":`, error);
             }
+
+            if (DELETE_INVOCATION && message.guildId) {
+                message.delete().catch((err: any) =>
+                    logger.error('Failed to delete invocation message:', err)
+                );
+            }
         }
 
         if (
+            message.guildId &&
             message.channel instanceof TextChannel &&
             !isCommandString(message.content, COMMAND_PREFIX)
         ) {
@@ -212,7 +202,7 @@ const startFluxerClient = async ({
         }
     });
 
-    await client.login(process.env.FLUXER_BOT_TOKEN!);
+    await client.login(FLUXER_TOKEN);
 
     return client;
 };

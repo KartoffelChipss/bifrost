@@ -1,6 +1,14 @@
 import { Sequelize } from 'sequelize';
 import path from 'path';
-import { CONFIG_PATH, DB_DIALECT, DB_HOST, DB_NAME, DB_PASS, DB_PORT, DB_USER } from '../utils/env';
+import {
+    CONFIG_PATH,
+    DB_DIALECT,
+    DB_HOST,
+    DB_NAME,
+    DB_PASS,
+    DB_PORT,
+    DB_USER,
+} from '../utils/env';
 import logger from '../utils/logging/logger';
 
 let sequelize: Sequelize;
@@ -30,7 +38,16 @@ export const initDatabase = async () => {
         await sequelize.sync();
         logger.info('Database synchronized successfully.');
     } catch (error) {
-        logger.error('Unable to connect to the database:', error);
+        logger.error(
+            'Unable to initialize database connection',
+            {
+                dialect: DB_DIALECT,
+                host: DB_HOST,
+                port: DB_PORT,
+                database: DB_NAME,
+            },
+            error
+        );
         process.exit(1);
     }
 };

@@ -28,6 +28,10 @@ export class CachedChannelLinkRepository implements ChannelLinkRepository {
         return `fluxer:${fluxerChannelId}`;
     }
 
+    private countKey() {
+        return 'channel_links:count';
+    }
+
     async create(data: {
         guildLinkId: string;
         discordChannelId: string;
@@ -39,22 +43,32 @@ export class CachedChannelLinkRepository implements ChannelLinkRepository {
     }): Promise<ChannelLink> {
         const created = await this.repository.create(data);
 
-        this.cache.set(this.guildKey(created.guildLinkId, created.linkId), created);
+        this.cache.set(
+            this.guildKey(created.guildLinkId, created.linkId),
+            created
+        );
         this.cache.set(this.discordKey(created.discordChannelId), created);
         this.cache.set(this.fluxerKey(created.fluxerChannelId), created);
 
         this.cache.del(this.guildAllKey(created.guildLinkId));
+        this.cache.del(this.countKey());
 
         return created;
     }
 
-    async findByGuildAndLinkId(guildLinkId: string, linkId: string): Promise<ChannelLink | null> {
+    async findByGuildAndLinkId(
+        guildLinkId: string,
+        linkId: string
+    ): Promise<ChannelLink | null> {
         const key = this.guildKey(guildLinkId, linkId);
 
         const cached = this.cache.get<ChannelLink>(key);
         if (cached) return cached;
 
-        const result = await this.repository.findByGuildAndLinkId(guildLinkId, linkId);
+        const result = await this.repository.findByGuildAndLinkId(
+            guildLinkId,
+            linkId
+        );
 
         if (result) {
             this.cache.set(key, result);
@@ -87,13 +101,16 @@ export class CachedChannelLinkRepository implements ChannelLinkRepository {
         return result;
     }
 
-    async findByDiscordChannelId(discordChannelId: string): Promise<ChannelLink | null> {
+    async findByDiscordChannelId(
+        discordChannelId: string
+    ): Promise<ChannelLink | null> {
         const key = this.discordKey(discordChannelId);
 
         const cached = this.cache.get<ChannelLink>(key);
         if (cached) return cached;
 
-        const result = await this.repository.findByDiscordChannelId(discordChannelId);
+        const result =
+            await this.repository.findByDiscordChannelId(discordChannelId);
 
         if (result) {
             this.cache.set(key, result);
@@ -102,13 +119,16 @@ export class CachedChannelLinkRepository implements ChannelLinkRepository {
         return result;
     }
 
-    async findByFluxerChannelId(fluxerChannelId: string): Promise<ChannelLink | null> {
+    async findByFluxerChannelId(
+        fluxerChannelId: string
+    ): Promise<ChannelLink | null> {
         const key = this.fluxerKey(fluxerChannelId);
 
         const cached = this.cache.get<ChannelLink>(key);
         if (cached) return cached;
 
-        const result = await this.repository.findByFluxerChannelId(fluxerChannelId);
+        const result =
+            await this.repository.findByFluxerChannelId(fluxerChannelId);
 
         if (result) {
             this.cache.set(key, result);
@@ -127,6 +147,7 @@ export class CachedChannelLinkRepository implements ChannelLinkRepository {
         this.cache.del(this.discordKey(existing.discordChannelId));
         this.cache.del(this.fluxerKey(existing.fluxerChannelId));
         this.cache.del(this.guildAllKey(existing.guildLinkId));
+        this.cache.del(this.countKey());
     }
 
     async deleteByGuildLinkId(guildLinkId: string): Promise<void> {
@@ -140,5 +161,17 @@ export class CachedChannelLinkRepository implements ChannelLinkRepository {
             this.cache.del(this.fluxerKey(link.fluxerChannelId));
         });
         this.cache.del(this.guildAllKey(guildLinkId));
+        this.cache.del(this.countKey());
+    }
+
+    async getChannelLinksCount(): Promise<number> {
+        const key = this.countKey();
+
+        const cached = this.cache.get<number>(key);
+        if (cached !== undefined) return cached;
+
+        const count = await this.repository.getChannelLinksCount();
+        this.cache.set(key, count);
+        return count;
     }
 }

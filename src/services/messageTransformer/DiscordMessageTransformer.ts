@@ -1,14 +1,20 @@
-import { Message, OmitPartialGroupDMChannel, TextChannel } from 'discord.js';
+import {
+    Message,
+    MessageFlags,
+    OmitPartialGroupDMChannel,
+    TextChannel,
+} from 'discord.js';
 import { WebhookMessageData } from '../WebhookService';
 import MessageTransformer from './MessageTransformer';
 import { sanitizeMentions } from '../../utils/sanitizeMentions';
 import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
 import { getPollMessage } from '../../utils/pollMessageFormatter';
 import WebhookEmbed from '../WebhookEmbed';
+import { GeneralEmoji } from '../../utils/emojis';
 
 type DiscordMessage = OmitPartialGroupDMChannel<Message<boolean>>;
 
-export default class DiscordMessageTransformer implements MessageTransformer<
+export default class DiscordMessageTransformer extends MessageTransformer<
     DiscordMessage,
     WebhookMessageData
 > {
@@ -49,10 +55,15 @@ export default class DiscordMessageTransformer implements MessageTransformer<
         });
     }
 
-    public async transformMessage(message: DiscordMessage): Promise<WebhookMessageData> {
-        // console.log('Transforming Discord message:', message.toJSON());
-
+    public async transformMessage(
+        message: DiscordMessage,
+        fluxerEmojis: GeneralEmoji[] = []
+    ): Promise<WebhookMessageData> {
         const sanitizedContent = this.sanitizeContent(message);
+        const emojiReplacedContent = this.replaceEmojis(
+            sanitizedContent,
+            fluxerEmojis
+        );
 
         const attachments = message.attachments.map((attachment) => ({
             url: attachment.url,
@@ -63,7 +74,10 @@ export default class DiscordMessageTransformer implements MessageTransformer<
         message.stickers.forEach((sticker) => {
             attachments.push({
                 url: buildDiscordStickerUrl(sticker.id, 160),
-                name: sticker.name + '.' + this.stickerFormatToExtension(sticker.format),
+                name:
+                    sticker.name +
+                    '.' +
+                    this.stickerFormatToExtension(sticker.format),
                 spoiler: false,
             });
         });
@@ -77,28 +91,38 @@ export default class DiscordMessageTransformer implements MessageTransformer<
         const messageContent = isPollPresent
             ? getPollMessage(
                   message.poll!.question.text!,
-                  message.poll!.answers.map((a) => a.text).filter((t): t is string => !!t),
+                  message
+                      .poll!.answers.map((a) => a.text)
+                      .filter((t): t is string => !!t),
                   message.poll!.expiresTimestamp!
               )
-            : sanitizedContent;
+            : emojiReplacedContent;
 
         const embeds: WebhookEmbed[] = message.embeds.map((embed) =>
             WebhookEmbed.fromDiscordEmbed(embed)
         );
 
         if (message.reference) {
-            const repliedMessage = await message.fetchReference();
-            const content = this.sanitizeContent(repliedMessage);
-            embeds.unshift(
-                new WebhookEmbed({
-                    description: `${content}`,
-                    color: 0x0b0d0e,
-                    author: {
-                        name: repliedMessage.author.username + ' ↩️',
-                        iconURL: repliedMessage.author.avatarURL() || undefined,
-                    },
-                })
-            );
+            const referencedMessage = await message.fetchReference();
+            const content = this.sanitizeContent(referencedMessage);
+            const isForwarded = message.flags.has(MessageFlags.HasSnapshot);
+            const refrenceEmoji = isForwarded ? '⏩' : '↩️';
+            if (content && content.trim() !== '') {
+                embeds.unshift(
+                    new WebhookEmbed({
+                        description: `${content}`,
+                        color: 0x0b0d0e,
+                        author: {
+                            name:
+                                referencedMessage.author.username +
+                                ` ${refrenceEmoji}`,
+                            iconURL:
+                                referencedMessage.author.avatarURL() ||
+                                undefined,
+                        },
+                    })
+                );
+            }
         }
 
         return {

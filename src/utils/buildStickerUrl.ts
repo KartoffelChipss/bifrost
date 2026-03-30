@@ -1,4 +1,8 @@
-export const buildFluxerStickerUrl = (id: string, animated: boolean, size?: number) => {
+export const buildFluxerStickerUrl = (
+    id: string,
+    animated: boolean,
+    size?: number
+) => {
     const url = `https://fluxerusercontent.com/stickers/${id}?size=${size || 320}&animated=${animated}`;
     return url;
 };

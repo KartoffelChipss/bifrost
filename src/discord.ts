@@ -1,26 +1,28 @@
-import { Client, GatewayIntentBits, Partials, TextChannel } from 'discord.js';
-import { COMMAND_PREFIX, DISCORD_BOT_TOKEN } from './utils/env';
+import { Client, EmbedBuilder, Events, GatewayIntentBits, Partials, TextChannel } from 'discord.js';
+import { COMMAND_PREFIX, DELETE_INVOCATION, DISCORD_TOKEN } from './utils/env';
+import { EmbedColors } from './utils/embeds';
 import logger from './utils/logging/logger';
 import CommandRegistry from './commands/CommandRegistry';
 import DiscordCommandHandler from './commands/discord/DiscordCommandHandler';
 import { isCommandString, parseCommandString } from './commands/parseCommandString';
-import PingDiscordCommandHandler from './commands/discord/handlers/PingDiscordCommandHandler';
 import { LinkService } from './services/LinkService';
-import GuildLinkDiscordCommandHandler from './commands/discord/handlers/GuildLinkDiscordCommandHandler';
-import GuildUnlinkDiscordCommandHandler from './commands/discord/handlers/GuildUnlinkDiscordCommandHandler';
-import ChannelLinkDiscordCommandHandler from './commands/discord/handlers/ChannelLinkDiscordCommandHandler';
-import ListChannelsDiscordCommandHandler from './commands/discord/handlers/ListChannelsDiscordCommandHandler';
-import ChannelUnlinkDiscordCommandHandler from './commands/discord/handlers/ChannelUnlinkDiscordCommandHandler';
+import LinkDiscordCommandHandler from './commands/discord/handlers/LinkDiscordCommandHandler';
+import UnlinkDiscordCommandHandler from './commands/discord/handlers/UnlinkDiscordCommandHandler';
+import ListDiscordCommandHandler from './commands/discord/handlers/ListDiscordCommandHandler';
 import { WebhookService } from './services/WebhookService';
 import DiscordToFluxerMessageRelay from './services/messageRelay/DiscordToFluxerMessageRelay';
 import HelpDiscordCommandHandler from './commands/discord/handlers/HelpDiscordCommandHandler';
+import AutolinkDiscordCommandHandler from './commands/discord/handlers/AutolinkDiscordCommandHandler';
 import HealthCheckService from './services/HealthCheckService';
 import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
-import DiscordMessageTransformer from './services/messageTransformer/DiscordMessageTranformer';
+import DiscordMessageTransformer from './services/messageTransformer/DiscordMessageTransformer';
+import MetricsService from './services/MetricsService';
+import MessageQueueService from './services/MessageQueueService';
 import FluxerStatsService from './services/statsService/FluxerStatsService';
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import StatsDiscordCommandHandler from './commands/discord/handlers/StatsDiscordCommandHandler';
+import { DbStatsService } from './services/DbStatsService';
 
 const startDiscordClient = async ({
     linkService,
@@ -28,16 +30,22 @@ const startDiscordClient = async ({
     healthCheckService,
     discordEntityResolver,
     fluxerEntityResolver,
+    metricsService,
+    queueService,
     discordStatsService,
     fluxerStatsService,
+    dbStatsService,
 }: {
     linkService: LinkService;
     webhookService: WebhookService;
     healthCheckService: HealthCheckService;
     discordEntityResolver: DiscordEntityResolver;
     fluxerEntityResolver: FluxerEntityResolver;
+    metricsService?: MetricsService;
+    queueService?: MessageQueueService;
     discordStatsService: DiscordStatsService;
     fluxerStatsService: FluxerStatsService;
+    dbStatsService: DbStatsService;
 }): Promise<Client> => {
     const client = new Client({
         intents: [
@@ -67,54 +75,39 @@ const startDiscordClient = async ({
         linkService,
         webhookService,
         messageTransformer,
+        metricsService,
+        queueService,
     });
 
     const commandRegistry = new CommandRegistry<DiscordCommandHandler>();
-    commandRegistry.registerCommand('ping', new PingDiscordCommandHandler(client));
     commandRegistry.registerCommand('help', new HelpDiscordCommandHandler(client));
-    commandRegistry.registerCommand(
-        'stats',
-        new StatsDiscordCommandHandler(client, discordStatsService, fluxerStatsService)
-    );
-    commandRegistry.registerCommand(
-        'linkguild',
-        new GuildLinkDiscordCommandHandler(client, linkService, fluxerEntityResolver)
-    );
-    commandRegistry.registerCommand(
-        'unlinkguild',
-        new GuildUnlinkDiscordCommandHandler(client, linkService)
-    );
-    commandRegistry.registerCommand(
-        'linkchannel',
-        new ChannelLinkDiscordCommandHandler(
-            client,
-            linkService,
-            webhookService,
-            fluxerEntityResolver
-        )
-    );
-    commandRegistry.registerCommand(
-        'listchannels',
-        new ListChannelsDiscordCommandHandler(client, linkService)
-    );
-    commandRegistry.registerCommand(
-        'unlinkchannel',
-        new ChannelUnlinkDiscordCommandHandler(client, linkService)
-    );
+    commandRegistry.registerCommand('stats', new StatsDiscordCommandHandler(client, discordStatsService, fluxerStatsService, dbStatsService));
+    commandRegistry.registerCommand('link', new LinkDiscordCommandHandler(client, linkService, webhookService, fluxerEntityResolver));
+    commandRegistry.registerCommand('unlink', new UnlinkDiscordCommandHandler(client, linkService, webhookService));
+    commandRegistry.registerCommand('list', new ListDiscordCommandHandler(client, linkService, fluxerEntityResolver));
+    commandRegistry.registerCommand('autolink', new AutolinkDiscordCommandHandler(client, linkService, webhookService, fluxerEntityResolver));
 
-    client.once('clientReady', () => {
+    client.once(Events.ClientReady, () => {
         logger.info(`Discord bot logged in as ${client.user?.tag}`);
 
+        if (queueService) {
+            queueService.drain(webhookService, linkService).catch((err) =>
+                logger.error('Startup queue drain error:', err)
+            );
+            queueService.startDrainInterval(webhookService, linkService);
+        }
+
+        healthCheckService.pushDiscordHealthStatus();
         setInterval(async () => {
             await healthCheckService.pushDiscordHealthStatus();
         }, 30_000);
     });
 
-    client.on('error', (error) => {
+    client.on(Events.Error, (error) => {
         logger.error('Discord client error:', error);
     });
 
-    client.on('messageDelete', async (message) => {
+    client.on(Events.MessageDelete, async (message) => {
         if (!message.inGuild()) return;
 
         const messageLink = await linkService.getMessageLinkByDiscordMessageId(message.id);
@@ -132,7 +125,6 @@ const startDiscordClient = async ({
         const guildLink = await linkService.getGuildLinkById(channelLink.guildLinkId);
         if (!guildLink) return;
 
-        //console.log('Deleting Fluxer message with ID:', messageLink.fluxerMessageId);
         const msg = await fluxerEntityResolver.fetchMessage(
             guildLink.fluxerGuildId,
             channelLink.fluxerChannelId,
@@ -153,46 +145,10 @@ const startDiscordClient = async ({
         }
     });
 
-    // client.on('messageUpdate', async (oldMessage, newMessage) => {
-    //     if (!newMessage.inGuild()) return;
-
-    //     const messageLink = await linkService.getMessageLinkByDiscordMessageId(newMessage.id);
-    //     if (!messageLink) return;
-
-    //     const channelLink = await linkService.getChannelLinkById(messageLink.channelLinkId);
-    //     if (!channelLink) return;
-
-    //     const guildLink = await linkService.getGuildLinkById(channelLink.guildLinkId);
-    //     if (!guildLink) return;
-
-    //     const msg = await fluxerEntityResolver.fetchMessage(
-    //         guildLink.fluxerGuildId,
-    //         channelLink.fluxerChannelId,
-    //         messageLink.fluxerMessageId
-    //     );
-
-    //     if (!msg) {
-    //         logger.error(
-    //             'Could not find linked Fluxer message to edit for Discord message ID:',
-    //             newMessage.id
-    //         );
-    //         return;
-    //     }
-
-    //     try {
-    //         await msg.edit({
-    //             content: newMessage.content,
-    //         });
-    //     } catch (error) {
-    //         logger.error('Error editing message in Fluxer:', error);
-    //     }
-    // });
-
-    client.on('messageCreate', async (message) => {
+    client.on(Events.MessageCreate, async (message) => {
         if (message.author.id === client.user?.id) return;
-        if (!message.inGuild()) return;
 
-        if (message.webhookId) {
+        if (message.inGuild() && message.webhookId) {
             const webhookLink = await linkService.getChannelLinkByDiscordChannelId(
                 message.channelId
             );
@@ -203,9 +159,14 @@ const startDiscordClient = async ({
             const { command, args } = parseCommandString(message.content, COMMAND_PREFIX);
             const handler = commandRegistry.getCommandHandler(command);
             if (!handler) {
-                await message.reply(
-                    `Unknown command: \`${command}\`\nUse \`${COMMAND_PREFIX}help\` to see available commands.`
-                );
+                await message.reply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setDescription(`Unknown command: \`${command}\`\nUse \`${COMMAND_PREFIX}help\` to see available commands.`)
+                            .setColor(EmbedColors.Error)
+                            .setFooter({ text: `${message.author.username} used ${message.content}`, iconURL: message.author.displayAvatarURL() }).setTimestamp(),
+                    ],
+                });
                 return;
             }
 
@@ -214,9 +175,16 @@ const startDiscordClient = async ({
             } catch (error) {
                 logger.error(`Error executing discord command "${command}":`, error);
             }
+
+            if (DELETE_INVOCATION && message.inGuild()) {
+                message.delete().catch((err) =>
+                    logger.error('Failed to delete invocation message:', err)
+                );
+            }
         }
 
         if (
+            message.inGuild() &&
             message.channel instanceof TextChannel &&
             !isCommandString(message.content, COMMAND_PREFIX)
         ) {
@@ -224,7 +192,7 @@ const startDiscordClient = async ({
         }
     });
 
-    await client.login(DISCORD_BOT_TOKEN);
+    await client.login(DISCORD_TOKEN);
 
     return client;
 };

@@ -5,7 +5,11 @@ export default abstract class CommandHandler<T, U> {
         this.client = client;
     }
 
-    public abstract handleCommand(message: U, command: string, ...args: string[]): Promise<void>;
+    public abstract handleCommand(
+        message: U,
+        command: string,
+        ...args: string[]
+    ): Promise<void>;
 
     protected getClient(): T {
         return this.client;

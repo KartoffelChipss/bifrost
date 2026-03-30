@@ -9,20 +9,26 @@
 
 - Link channels between Discord and Fluxer
 - Sync messages between linked channels
-- Support for messgages, replies, attachements, stickers, embeds, join messages and polls
+- Support for messages, replies, attachments, emojis¹, stickers, embeds, join messages and polls
 - Bridge messages using webhooks
 - Easy setup using our hosted bot or self-hosting with Docker
 - Customizable bot prefix and settings
 
+¹ Emoji support is limited to custom emojis from the linked Discord server and standard Unicode emojis. Emojis from the servers must have matching names to be replaced correctly.
+
 ## Community
 
-Join out community Fluxer server for support, updates and to share your feedback: https://fluxer.gg/TN8FkpdQ
+Join out community Fluxer server for support, updates and to share your feedback: https://bifrost-bot.com/community/fluxer
+
+## Docs
+
+You can find the docs here: https://bifrost-bot.com/
 
 ## Getting Started
 
 ### Hosted Bot
 
-1. Invite the Bifröst bot to your Fluxer server using [this link](https://web.fluxer.app/oauth2/authorize?client_id=1475208219145040215&scope=bot&permissions=536947712) and to your Discord server using [this link](https://discord.com/oauth2/authorize?client_id=1475436995697180845&permissions=536947712&integration_type=0&scope=bot).
+1. Invite the Bifröst bot to your Fluxer server using [this link](https://bifrost-bot.com/invite/fluxer) and to your Discord server using [this link](https://bifrost-bot.com/invite/discord).
 2. Use the `!b linkguild <discordGuildId>` command in your Fluxer server to link your Discord server.
 
     You can find your Discord Guild ID by enabling Developer Mode in Discord settings and right-clicking on your server name. (Alternatively you can also use `!b linkguild <fluxerGuildId>` on your Discord server to link your Fluxer server)
@@ -34,7 +40,7 @@ Join out community Fluxer server for support, updates and to share your feedback
 4. That's it! Your channels are now linked and messages will be synced between them. 🎉
 
 > [!NOTE]  
-> You can check the uptime of the hosted instance [here](https://bifrost-status.jan.run)
+> You can check the uptime of the hosted instance [here](https://status.bifrost-bot.com)
 
 ### Self-Hosting with Docker
 
@@ -81,12 +87,12 @@ Open it and add your credentials:
 
 ```env
 # Fluxer
-FLUXER_BOT_TOKEN="Your Fluxer Bot Token"
-FLUXER_APPLICATION_ID="Your Fluxer Application ID"
+BF_FLUXER_TOKEN="Your Fluxer Bot Token"
+BF_FLUXER_APP_ID="Your Fluxer Application ID"
 
 # Discord
-DISCORD_BOT_TOKEN="Your Discord Bot Token"
-DISCORD_APPLICATION_ID="Your Discord Application ID"
+BF_DISCORD_TOKEN="Your Discord Bot Token"
+BF_DISCORD_APP_ID="Your Discord Application ID"
 ```
 
 You can also use `.env.example` as a reference for all environment variables.

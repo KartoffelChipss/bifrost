@@ -11,17 +11,24 @@ export interface ChannelLinkRepository {
         fluxerWebhookToken: string;
     }): Promise<ChannelLink>;
 
-    findByGuildAndLinkId(guildLinkId: string, linkId: string): Promise<ChannelLink | null>;
+    findByGuildAndLinkId(
+        guildLinkId: string,
+        linkId: string
+    ): Promise<ChannelLink | null>;
 
     findAllByGuild(guildLinkId: string): Promise<ChannelLink[]>;
 
     findById(id: string): Promise<ChannelLink | null>;
 
-    findByDiscordChannelId(discordChannelId: string): Promise<ChannelLink | null>;
+    findByDiscordChannelId(
+        discordChannelId: string
+    ): Promise<ChannelLink | null>;
 
     findByFluxerChannelId(fluxerChannelId: string): Promise<ChannelLink | null>;
 
     deleteById(id: string): Promise<void>;
 
     deleteByGuildLinkId(guildLinkId: string): Promise<void>;
+
+    getChannelLinksCount(): Promise<number>;
 }

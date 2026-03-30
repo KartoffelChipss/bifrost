@@ -4,6 +4,7 @@ import { MessageLinkRepository } from '../repositories/MessageLinkRepository';
 
 export class CachedMessageLinkRepository implements MessageLinkRepository {
     private cache: LRUCache<string, MessageLink>;
+    private metaCache: LRUCache<string, number>;
 
     constructor(
         private readonly repository: MessageLinkRepository,
@@ -11,6 +12,10 @@ export class CachedMessageLinkRepository implements MessageLinkRepository {
     ) {
         this.cache = new LRUCache<string, MessageLink>({
             max: maxEntries,
+        });
+        this.metaCache = new LRUCache<string, number>({
+            max: 100,
+            ttl: 60_000,
         });
     }
 
@@ -39,11 +44,16 @@ export class CachedMessageLinkRepository implements MessageLinkRepository {
             fluxerMessageId
         );
 
-        const created = await this.repository.getMessageLinkByDiscordMessageId(discordMessageId);
+        const created =
+            await this.repository.getMessageLinkByDiscordMessageId(
+                discordMessageId
+            );
 
         if (created) {
             this.primeCache(created);
         }
+
+        this.metaCache.delete('count');
     }
 
     async deleteMessageLink(id: string): Promise<void> {
@@ -56,6 +66,7 @@ export class CachedMessageLinkRepository implements MessageLinkRepository {
         this.cache.delete(this.idKey(existing.id));
         this.cache.delete(this.discordKey(existing.discordMessageId));
         this.cache.delete(this.fluxerKey(existing.fluxerMessageId));
+        this.metaCache.delete('count');
     }
 
     async deleteByGuildLinkId(guildLinkId: string): Promise<void> {
@@ -69,6 +80,7 @@ export class CachedMessageLinkRepository implements MessageLinkRepository {
                 this.cache.delete(this.fluxerKey(value.fluxerMessageId));
             }
         }
+        this.metaCache.delete('count');
     }
 
     async deleteByChannelLinkId(channelLinkId: string): Promise<void> {
@@ -82,6 +94,7 @@ export class CachedMessageLinkRepository implements MessageLinkRepository {
                 this.cache.delete(this.fluxerKey(value.fluxerMessageId));
             }
         }
+        this.metaCache.delete('count');
     }
 
     async getMessageLinkById(id: string): Promise<MessageLink | null> {
@@ -96,12 +109,17 @@ export class CachedMessageLinkRepository implements MessageLinkRepository {
         return result;
     }
 
-    async getMessageLinkByDiscordMessageId(discordMessageId: string): Promise<MessageLink | null> {
+    async getMessageLinkByDiscordMessageId(
+        discordMessageId: string
+    ): Promise<MessageLink | null> {
         const key = this.discordKey(discordMessageId);
         const cached = this.cache.get(key);
         if (cached) return cached;
 
-        const result = await this.repository.getMessageLinkByDiscordMessageId(discordMessageId);
+        const result =
+            await this.repository.getMessageLinkByDiscordMessageId(
+                discordMessageId
+            );
 
         if (!result) return null;
 
@@ -109,17 +127,31 @@ export class CachedMessageLinkRepository implements MessageLinkRepository {
         return result;
     }
 
-    async getMessageLinkByFluxerMessageId(fluxerMessageId: string): Promise<MessageLink | null> {
+    async getMessageLinkByFluxerMessageId(
+        fluxerMessageId: string
+    ): Promise<MessageLink | null> {
         const key = this.fluxerKey(fluxerMessageId);
         const cached = this.cache.get(key);
         if (cached) return cached;
 
-        const result = await this.repository.getMessageLinkByFluxerMessageId(fluxerMessageId);
+        const result =
+            await this.repository.getMessageLinkByFluxerMessageId(
+                fluxerMessageId
+            );
 
         if (!result) return null;
 
         this.primeCache(result);
         return result;
+    }
+
+    async getMessageLinksCount(): Promise<number> {
+        const cached = this.metaCache.get('count');
+        if (cached !== undefined) return cached;
+
+        const count = await this.repository.getMessageLinksCount();
+        this.metaCache.set('count', count);
+        return count;
     }
 
     private primeCache(entity: MessageLink) {

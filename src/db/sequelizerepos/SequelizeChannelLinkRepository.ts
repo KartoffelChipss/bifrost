@@ -26,7 +26,10 @@ export class SequelizeChannelLinkRepository implements ChannelLinkRepository {
         return model.toJSON() as ChannelLink;
     }
 
-    async findByGuildAndLinkId(guildLinkId: string, linkId: string): Promise<ChannelLink | null> {
+    async findByGuildAndLinkId(
+        guildLinkId: string,
+        linkId: string
+    ): Promise<ChannelLink | null> {
         const model = await ChannelLinkModel.findOne({
             where: { guildLinkId, linkId },
         });
@@ -54,7 +57,9 @@ export class SequelizeChannelLinkRepository implements ChannelLinkRepository {
         return model.toJSON() as ChannelLink;
     }
 
-    async findByDiscordChannelId(discordChannelId: string): Promise<ChannelLink | null> {
+    async findByDiscordChannelId(
+        discordChannelId: string
+    ): Promise<ChannelLink | null> {
         const model = await ChannelLinkModel.findOne({
             where: { discordChannelId },
         });
@@ -64,7 +69,9 @@ export class SequelizeChannelLinkRepository implements ChannelLinkRepository {
         return model.toJSON() as ChannelLink;
     }
 
-    async findByFluxerChannelId(fluxerChannelId: string): Promise<ChannelLink | null> {
+    async findByFluxerChannelId(
+        fluxerChannelId: string
+    ): Promise<ChannelLink | null> {
         const model = await ChannelLinkModel.findOne({
             where: { fluxerChannelId },
         });
@@ -84,5 +91,9 @@ export class SequelizeChannelLinkRepository implements ChannelLinkRepository {
         await ChannelLinkModel.destroy({
             where: { guildLinkId },
         });
+    }
+
+    async getChannelLinksCount(): Promise<number> {
+        return await ChannelLinkModel.count();
     }
 }

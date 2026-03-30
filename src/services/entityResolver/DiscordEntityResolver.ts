@@ -1,10 +1,11 @@
-import { Channel, Client, Guild, Message } from 'discord.js';
+import { Channel, Client, Guild, GuildEmoji, Message } from 'discord.js';
 import EntityResolver from '../entityResolver/EntityResolver';
 
 export default class DiscordEntityResolver implements EntityResolver<
     Guild,
     Channel,
-    Message<boolean>
+    Message<boolean>,
+    GuildEmoji
 > {
     private discordClient: Client | null = null;
 
@@ -29,12 +30,17 @@ export default class DiscordEntityResolver implements EntityResolver<
         }
     }
 
-    async fetchChannel(guildOrId: string | Guild, channelId: string): Promise<Channel | null> {
-        const client = this.ensureClient();
+    async fetchChannel(
+        guildOrId: string | Guild,
+        channelId: string
+    ): Promise<Channel | null> {
+        this.ensureClient();
 
         try {
             const guild =
-                typeof guildOrId === 'string' ? await this.fetchGuild(guildOrId) : guildOrId;
+                typeof guildOrId === 'string'
+                    ? await this.fetchGuild(guildOrId)
+                    : guildOrId;
 
             if (!guild) return null;
 
@@ -49,7 +55,7 @@ export default class DiscordEntityResolver implements EntityResolver<
         channelOrId: string | Channel,
         messageId: string
     ): Promise<Message<boolean>> {
-        const client = this.ensureClient();
+        this.ensureClient();
 
         const channel =
             typeof channelOrId === 'string'
@@ -61,5 +67,21 @@ export default class DiscordEntityResolver implements EntityResolver<
         }
 
         return await channel.messages.fetch(messageId);
+    }
+
+    async fetchEmojis(guildOrId: string | Guild): Promise<GuildEmoji[]> {
+        this.ensureClient();
+
+        const guild =
+            typeof guildOrId === 'string'
+                ? await this.fetchGuild(guildOrId)
+                : guildOrId;
+
+        if (!guild) {
+            throw new Error('Discord guild not found');
+        }
+
+        const emojiCollection = await guild.emojis.fetch();
+        return emojiCollection.map((emoji) => emoji);
     }
 }

@@ -18,5 +18,10 @@ GuildLinkModel.init(
             unique: true,
         },
     },
-    { sequelize, tableName: 'guild_links', createdAt: 'createdAt', updatedAt: false }
+    {
+        sequelize,
+        tableName: 'guild_links',
+        createdAt: 'createdAt',
+        updatedAt: false,
+    }
 );

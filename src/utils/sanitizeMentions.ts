@@ -4,9 +4,16 @@ type MentionResolver = {
     resolveChannel: (id: string) => string | null;
 };
 
-export function sanitizeMentions(content: string, resolver: MentionResolver): string {
+export function sanitizeMentions(
+    content: string,
+    resolver: MentionResolver
+): string {
     return content.replace(/<@!?\d+>|<@&\d+>|<#\d+>/g, (match) => {
-        if (match.startsWith('<@') && !match.startsWith('<@&') && !match.startsWith('<#')) {
+        if (
+            match.startsWith('<@') &&
+            !match.startsWith('<@&') &&
+            !match.startsWith('<#')
+        ) {
             const id = match.replace(/[<@!>]/g, '');
             const username = resolver.resolveUser(id);
             return username ? `@${username}` : '@unknown-user';

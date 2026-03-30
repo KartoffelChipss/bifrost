@@ -11,4 +11,5 @@ export default abstract class StatsService<Client> {
 
     abstract getGuildCount(): number;
     abstract getUserCount(): number;
+    abstract getPing(): number | Promise<number>;
 }

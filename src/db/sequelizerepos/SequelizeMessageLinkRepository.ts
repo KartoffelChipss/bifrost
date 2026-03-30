@@ -27,7 +27,9 @@ export class SequelizeMessageLinkRepository implements MessageLinkRepository {
         return model.toJSON() as MessageLink;
     }
 
-    async getMessageLinkByDiscordMessageId(discordMessageId: string): Promise<MessageLink | null> {
+    async getMessageLinkByDiscordMessageId(
+        discordMessageId: string
+    ): Promise<MessageLink | null> {
         const model = await MessageLinkModel.findOne({
             where: { discordMessageId },
         });
@@ -37,7 +39,9 @@ export class SequelizeMessageLinkRepository implements MessageLinkRepository {
         return model.toJSON() as MessageLink;
     }
 
-    async getMessageLinkByFluxerMessageId(fluxerMessageId: string): Promise<MessageLink | null> {
+    async getMessageLinkByFluxerMessageId(
+        fluxerMessageId: string
+    ): Promise<MessageLink | null> {
         const model = await MessageLinkModel.findOne({
             where: { fluxerMessageId },
         });
@@ -63,5 +67,9 @@ export class SequelizeMessageLinkRepository implements MessageLinkRepository {
         await MessageLinkModel.destroy({
             where: { channelLinkId },
         });
+    }
+
+    async getMessageLinksCount(): Promise<number> {
+        return await MessageLinkModel.count();
     }
 }

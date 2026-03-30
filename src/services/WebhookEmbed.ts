@@ -1,5 +1,8 @@
 import { EmbedBuilder as FluxerEmbedBuilder } from '@fluxerjs/core';
-import { Embed as DiscordEmbed, EmbedBuilder as DiscordEmbedBuilder } from 'discord.js';
+import {
+    Embed as DiscordEmbed,
+    EmbedBuilder as DiscordEmbedBuilder,
+} from 'discord.js';
 
 export interface WebhookEmbedField {
     name: string;
@@ -109,6 +112,7 @@ export default class WebhookEmbed {
         });
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     public static fromFluxerEmbed(embed: any): WebhookEmbed {
         return new WebhookEmbed({
             title: embed.title ?? null,
@@ -117,6 +121,7 @@ export default class WebhookEmbed {
             color: embed.color ?? null,
             timestamp: embed.timestamp ? new Date(embed.timestamp) : null,
             fields:
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 embed.fields?.map((f: any) => ({
                     name: f.name,
                     value: f.value,
@@ -194,6 +199,39 @@ export default class WebhookEmbed {
         }
 
         return builder;
+    }
+
+    public toPlainObject(): {
+        fields: WebhookEmbedField[];
+        footer?: WebhookEmbedFooter | null;
+        title?: string | null;
+        description?: string | null;
+        url?: string | null;
+        color?: number | null;
+        timestamp?: string | null;
+        author?: WebhookEmbedAuthor | null;
+        image?: WebhookEmbedImage | null;
+        thumbnail?: WebhookEmbedThumbnail | null;
+    } {
+        return {
+            fields: this.fields,
+            footer: this.footer,
+            title: this.title,
+            description: this.description,
+            url: this.url,
+            color: this.color,
+            timestamp: this.timestamp?.toISOString() ?? null,
+            author: this.author,
+            image: this.image,
+            thumbnail: this.thumbnail,
+        };
+    }
+
+    public static fromPlainObject(obj: ReturnType<WebhookEmbed['toPlainObject']>): WebhookEmbed {
+        return new WebhookEmbed({
+            ...obj,
+            timestamp: obj.timestamp ? new Date(obj.timestamp) : null,
+        });
     }
 
     public toFluxerEmbed(): FluxerEmbedBuilder {
