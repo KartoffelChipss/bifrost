@@ -1,4 +1,4 @@
-import { Client, EmbedBuilder, Message } from '@fluxerjs/core';
+import { Client, EmbedBuilder, Message, PermissionsBitField } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
@@ -50,9 +50,6 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
         _command: string,
         ...args: string[]
     ): Promise<void> {
-        const isOwner = await this.requireOwner(message);
-        if (!isOwner) return;
-
         const footer = this.footer(message);
 
         // Confirm flow
@@ -71,6 +68,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
             }
 
             if (pending.type === 'guild') {
+                if (!await this.requireOwner(message)) return;
                 try {
                     // Clean up webhooks for all channel links before removing the guild link
                     const channelLinks = await this.linkService
@@ -105,6 +103,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                     logger.error('Unlink guild failed:', err);
                 }
             } else {
+                if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
                 try {
                     await this.webhookService
                         .deleteDiscordWebhook(pending.discordWebhookId, pending.discordWebhookToken)
@@ -158,6 +157,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
         // 1. Check if ID matches a guild link by Discord guild ID
         const guildLink = await this.linkService.getGuildLinkForDiscordGuild(id).catch(() => null);
         if (guildLink) {
+            if (!await this.requireOwner(message)) return;
             this.setPending(message.author.id, { type: 'guild', discordGuildId: id });
             await message.reply({
                 embeds: [
@@ -177,6 +177,7 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
         // 2. Check if ID matches a channel link by Discord channel ID
         const channelLink = await this.linkService.getChannelLinkByDiscordChannelId(id).catch(() => null);
         if (channelLink) {
+            if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
             this.setPending(message.author.id, {
                 type: 'channel',
                 linkId: channelLink.linkId,

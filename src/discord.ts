@@ -1,4 +1,4 @@
-import { Client, EmbedBuilder, GatewayIntentBits, Partials, TextChannel } from 'discord.js';
+import { Client, EmbedBuilder, Events, GatewayIntentBits, Partials, TextChannel } from 'discord.js';
 import { COMMAND_PREFIX, DELETE_INVOCATION, DISCORD_TOKEN } from './utils/env';
 import { EmbedColors } from './utils/embeds';
 import logger from './utils/logging/logger';
@@ -16,7 +16,7 @@ import AutolinkDiscordCommandHandler from './commands/discord/handlers/AutolinkD
 import HealthCheckService from './services/HealthCheckService';
 import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
-import DiscordMessageTransformer from './services/messageTransformer/DiscordMessageTranformer';
+import DiscordMessageTransformer from './services/messageTransformer/DiscordMessageTransformer';
 import MetricsService from './services/MetricsService';
 import MessageQueueService from './services/MessageQueueService';
 import FluxerStatsService from './services/statsService/FluxerStatsService';
@@ -87,7 +87,7 @@ const startDiscordClient = async ({
     commandRegistry.registerCommand('list', new ListDiscordCommandHandler(client, linkService, fluxerEntityResolver));
     commandRegistry.registerCommand('autolink', new AutolinkDiscordCommandHandler(client, linkService, webhookService, fluxerEntityResolver));
 
-    client.once('clientReady', () => {
+    client.once(Events.ClientReady, () => {
         logger.info(`Discord bot logged in as ${client.user?.tag}`);
 
         if (queueService) {
@@ -103,11 +103,11 @@ const startDiscordClient = async ({
         }, 30_000);
     });
 
-    client.on('error', (error) => {
+    client.on(Events.Error, (error) => {
         logger.error('Discord client error:', error);
     });
 
-    client.on('messageDelete', async (message) => {
+    client.on(Events.MessageDelete, async (message) => {
         if (!message.inGuild()) return;
 
         const messageLink = await linkService.getMessageLinkByDiscordMessageId(message.id);
@@ -145,7 +145,7 @@ const startDiscordClient = async ({
         }
     });
 
-    client.on('messageCreate', async (message) => {
+    client.on(Events.MessageCreate, async (message) => {
         if (message.author.id === client.user?.id) return;
 
         if (message.inGuild() && message.webhookId) {

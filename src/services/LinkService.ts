@@ -1,4 +1,4 @@
-import { MessageLinkRepository } from 'src/db/repositories/MessageLinkRepository';
+import { MessageLinkRepository } from '../db/repositories/MessageLinkRepository';
 import { ChannelLinkRepository } from '../db/repositories/ChannelLinkRepository';
 import { GuildLinkRepository } from '../db/repositories/GuildLinkRepository';
 

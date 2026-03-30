@@ -1,5 +1,5 @@
 import { ChannelType } from 'discord.js';
-import { Client, EmbedBuilder, Message } from '@fluxerjs/core';
+import { Client, EmbedBuilder, Message, PermissionsBitField } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import DiscordEntityResolver from '../../../services/entityResolver/DiscordEntityResolver';
@@ -24,8 +24,7 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
         _command: string,
         ...args: string[]
     ): Promise<void> {
-        const isOwner = await this.requireOwner(message);
-        if (!isOwner) return;
+        if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
 
         const footer = this.footer(message);
         const doConfirm = args[0]?.toLowerCase() === 'confirm';

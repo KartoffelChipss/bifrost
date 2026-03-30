@@ -1,4 +1,4 @@
-import { Client, EmbedBuilder, Message } from '@fluxerjs/core';
+import { Client, EmbedBuilder, Message, PermissionsBitField } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import DiscordEntityResolver from '../../../services/entityResolver/DiscordEntityResolver';
@@ -43,9 +43,6 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
         _command: string,
         ...args: string[]
     ): Promise<void> {
-        const isOwner = await this.requireOwner(message);
-        if (!isOwner) return;
-
         const footer = this.footer(message);
 
         // Confirm flow
@@ -64,6 +61,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
             }
 
             if (pending.type === 'guild') {
+                if (!await this.requireOwner(message)) return;
                 try {
                     await this.linkService.createGuildLink(pending.discordGuildId, message.guildId!);
                     await message.reply({
@@ -89,6 +87,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                     logger.error('Link guild failed:', err);
                 }
             } else {
+                if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
                 try {
                     const discordWebhook = await this.webhookService.createDiscordWebhook(
                         pending.discordChannelId,
@@ -153,6 +152,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
         // 1. Try Discord guild
         const discordGuild = await this.discordEntityResolver.fetchGuild(id).catch(() => null);
         if (discordGuild) {
+            if (!await this.requireOwner(message)) return;
             this.setPending(message.author.id, { type: 'guild', discordGuildId: id, guildName: discordGuild.name });
             await message.reply({
                 embeds: [
@@ -173,6 +173,7 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
         if (guildLink) {
             const discordChannel = await this.discordEntityResolver.fetchChannel(guildLink.discordGuildId, id).catch(() => null);
             if (discordChannel) {
+                if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
                 const channelName = 'name' in discordChannel ? (discordChannel as any).name : id;
                 this.setPending(message.author.id, {
                     type: 'channel',

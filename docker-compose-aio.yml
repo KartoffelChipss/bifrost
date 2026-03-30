@@ -1,41 +1,46 @@
 services:
     bifrost:
-        image: ghcr.io/4g0tt3nsou1/bifrost:latest
+        image: kartoffelchipss/bifrost:latest
         container_name: bifrost
         restart: unless-stopped
+        depends_on:
+            postgres:
+                condition: service_healthy
+        env_file:
+            - .env
         environment:
-            BF_DB_DIALECT: sqlite
-            BF_FLUXER_TOKEN_FILE: /root/.creds/bf_flux
-            BF_DISCORD_TOKEN_FILE: /root/.creds/bf_discord
-            BF_FLUXER_APP_ID: 1478333491047665698
-            BF_DISCORD_APP_ID: 1478331623853260892
-            BF_FLUXER_OWNER_ID: 1475309609460187238
-            BF_DISCORD_OWNER_ID: 391124319444533249
-            BF_COMMAND_PREFIX: "%"
-            BF_CONFIG_PATH: /config
-            BF_DISCORD_HEALTH_URL: https://status.sou1.dev/api/push
-            BF_DISCORD_HEALTH_TOKEN_FILE: /root/.creds/bf_hc_discord
-            BF_FLUXER_HEALTH_URL: https://status.sou1.dev/api/push
-            BF_FLUXER_HEALTH_TOKEN_FILE: /root/.creds/bf_hc_flux
-            NODE_ENV: development
-            BF_METRICS_PORT: "9091"
-            BF_DELETE_INVOCATION: "true"
+            DB_DIALECT: postgres
+            DB_HOST: postgres
+            DB_PORT: 5432
+            DB_NAME: bifrost
+            DB_USER: bifrost_user
+            DB_PASS: ${POSTGRES_PASSWORD}
         volumes:
-            - bifrost:/config
-            - /root/.creds/bf_flux:/root/.creds/bf_flux:ro
-            - /root/.creds/bf_discord:/root/.creds/bf_discord:ro
-            - /root/.creds/bf_hc_discord:/root/.creds/bf_hc_discord:ro
-            - /root/.creds/bf_hc_flux:/root/.creds/bf_hc_flux:ro
+            - ./config:/config
         networks:
-            - bifrost
-            - npm
+            - bifrost_network
+
+    postgres:
+        image: postgres:16
+        container_name: bifrost_postgres
+        restart: unless-stopped
+        environment:
+            POSTGRES_DB: bifrost
+            POSTGRES_USER: bifrost_user
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U bifrost_user -d bifrost']
+            interval: 10s
+            timeout: 5s
+            retries: 5
+        networks:
+            - bifrost_network
 
 volumes:
-    bifrost:
+    postgres_data:
 
 networks:
-    bifrost:
+    bifrost_network:
         driver: bridge
-    npm:
-        external: true
-        name: npm_default

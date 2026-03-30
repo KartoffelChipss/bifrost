@@ -53,65 +53,39 @@ const commandList: Command[] = [
         name: 'link',
         discord: {
             description:
-                'Creates a link between this Discord guild and a Fluxer guild.',
-            usageArgs: ['<fluxerGuildId>'],
+                'Links this server to a Fluxer guild (by guild ID), or links the current channel to a Fluxer channel (by channel ID). Run with `confirm` to proceed.',
+            usageArgs: ['<fluxerGuildId | fluxerChannelId>'],
         },
         fluxer: {
             description:
-                'Creates a link between this Fluxer guild and a Discord guild.',
-            usageArgs: ['<discordGuildId>'],
+                'Links this server to a Discord guild (by guild ID), or links the current channel to a Discord channel (by channel ID). Run with `confirm` to proceed.',
+            usageArgs: ['<discordGuildId | discordChannelId>'],
         },
     },
     {
         name: 'unlink',
         discord: {
             description:
-                'Unlinks this Discord guild from its linked Fluxer guild.',
-            usageArgs: [],
+                'Unlinks this Discord guild from its linked Fluxer guild, or removes a specific channel link by Fluxer channel ID.',
+            usageArgs: ['<fluxerGuildId | fluxerChannelId>'],
         },
         fluxer: {
             description:
-                'Unlinks this Fluxer guild from its linked Discord guild.',
-            usageArgs: [],
+                'Unlinks this Fluxer guild from its linked Discord guild, or removes a specific channel link by Discord channel ID.',
+            usageArgs: ['<discordGuildId | discordChannelId>'],
         },
     },
     {
-        name: 'listall',
+        name: 'list',
         discord: {
             description:
-                'Links the current Discord channel to a Fluxer channel.',
-            usageArgs: ['<fluxerChannelId>'],
+                'Lists all channel links in this server. Use `all` (bot owner only) to list every bridge across all servers.',
+            usageArgs: ['[all]'],
         },
         fluxer: {
             description:
-                'Links the current Fluxer channel to a Discord channel.',
-            usageArgs: ['<discordChannelId>'],
-        },
-    },
-    {
-        name: 'listchannels',
-        discord: {
-            description:
-                'Lists all channels linked in the current Discord guild.',
-            usageArgs: [],
-        },
-        fluxer: {
-            description:
-                'Lists all channels linked in the current Fluxer guild.',
-            usageArgs: [],
-        },
-    },
-    {
-        name: 'unlinkchannel',
-        discord: {
-            description:
-                'Unlinks the current Discord channel from its linked Fluxer channel.',
-            usageArgs: [],
-        },
-        fluxer: {
-            description:
-                'Unlinks the current Fluxer channel from its linked Discord channel.',
-            usageArgs: [],
+                'Lists all channel links in this server. Use `all` (bot owner only) to list every bridge across all servers.',
+            usageArgs: ['[all]'],
         },
     },
     {

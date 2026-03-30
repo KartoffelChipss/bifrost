@@ -1,4 +1,4 @@
-import { Client, EmbedBuilder } from 'discord.js';
+import { Client, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import { LinkService } from '../../../services/LinkService';
 import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
 import FluxerEntityResolver from '../../../services/entityResolver/FluxerEntityResolver';
@@ -144,8 +144,7 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
             return;
         }
 
-        const isOwner = await this.requireOwner(message);
-        if (!isOwner) return;
+        if (!await this.requirePermission(message, PermissionFlagsBits.ManageWebhooks, 'Manage Webhooks')) return;
 
         try {
             const guildLink = await this.linkService.getGuildLinkForDiscordGuild(message.guildId!);

@@ -1,4 +1,4 @@
-import { Client, EmbedBuilder, Message } from '@fluxerjs/core';
+import { Client, EmbedBuilder, Message, PermissionsBitField } from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import DiscordEntityResolver from '../../../services/entityResolver/DiscordEntityResolver';
@@ -144,8 +144,7 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
             return;
         }
 
-        const isOwner = await this.requireOwner(message);
-        if (!isOwner) return;
+        if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
 
         try {
             const guildLink = await this.linkService.getGuildLinkForFluxerGuild(message.guildId!);

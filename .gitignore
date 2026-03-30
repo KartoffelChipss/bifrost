@@ -10,3 +10,4 @@ docs/.vitepress/cache
 .claude/
 
 .github/workflows/docker-release.yml
+personal.yml

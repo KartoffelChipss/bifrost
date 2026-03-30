@@ -2,13 +2,18 @@ import { Client, EmbedBuilder, GuildMember, Message, PermissionResolvable } from
 import CommandHandler from '../CommandHandler';
 import logger from '../../utils/logging/logger';
 import { EmbedColors } from '../../utils/embeds';
+import { DELETE_INVOCATION } from '../../utils/env';
+
+// @fluxerjs/core does not expose ownerId on the Guild type declaration
+interface FluxerGuildWithOwner { ownerId?: string; }
 
 export default abstract class FluxerCommandHandler extends CommandHandler<Client, Message> {
     protected footer(message: Message) {
+        if (!DELETE_INVOCATION) return null;
         const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
         return {
             text: `${message.author.username} used ${message.content} • ${time}`,
-            iconURL: (message.author as any).avatarURL?.() ?? undefined,
+            iconURL: (message.author as { avatarURL?: () => string | undefined }).avatarURL?.() ?? undefined,
         };
     }
 
@@ -22,16 +27,8 @@ export default abstract class FluxerCommandHandler extends CommandHandler<Client
             authorMember = (await message.guild?.fetchMember(message.author.id)) || null;
         } catch (error) {
             logger.error('Error fetching member for FluxerCommandHandler:', error);
-            await message.reply({
-                embeds: [
-                    new EmbedBuilder()
-                        .setDescription('Could not fetch your member information.')
-                        .setColor(EmbedColors.Error)
-                        .setFooter(this.footer(message)).setTimestamp(),
-                ],
-            });
-            return false;
         }
+
         if (!authorMember) {
             await message.reply({
                 embeds: [
@@ -60,7 +57,7 @@ export default abstract class FluxerCommandHandler extends CommandHandler<Client
     }
 
     protected async requireOwner(message: Message): Promise<boolean> {
-        if ((message.guild as any)?.ownerId !== message.author.id) {
+        if ((message.guild as unknown as FluxerGuildWithOwner)?.ownerId !== message.author.id) {
             await message.reply({
                 embeds: [
                     new EmbedBuilder()

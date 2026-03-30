@@ -6,6 +6,7 @@ import { SequelizeChannelLinkRepository } from './db/sequelizerepos/SequelizeCha
 import { SequelizeGuildLinkRepository } from './db/sequelizerepos/SequelizeGuildLinkRepository';
 import { SequelizeMessageLinkRepository } from './db/sequelizerepos/SequelizeMessageLinkRepository';
 import startDiscordClient from './discord';
+import type { Client as FluxerClient } from '@fluxerjs/core';
 import startFluxerClient from './fluxer';
 import { DbStatsService } from './services/DbStatsService';
 import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
@@ -85,8 +86,7 @@ const main = async () => {
         dbStatsService,
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const fluxerClientRef: { current: any } = { current: null };
+    const fluxerClientRef: { current: FluxerClient | null } = { current: null };
     let fluxerRestartAttempts = 0;
     let fluxerRestartState: 'idle' | 'restarting' | 'backoff' = 'idle';
 
