@@ -3,17 +3,7 @@ services:
     image: kartoffelchipss/bifrost:latest
     container_name: bifrost
     restart: unless-stopped
-    environment:
-      BF_FLUXER_TOKEN_FILE: /run/secrets/fluxer_bot_token
-      BF_DISCORD_TOKEN_FILE: /run/secrets/discord_bot_token
-    secrets:
-      - fluxer_bot_token
-      - discord_bot_token
+    env_file:
+      - .env
     volumes:
       - ./config:/config
-
-secrets:
-  fluxer_bot_token:
-    external: true
-  discord_bot_token:
-    external: true
