@@ -13,7 +13,10 @@ export default class HealthCheckService {
     private readonly fluxerPushUrl: string | null;
     private discordClient: DiscordClient | null = null;
     private fluxerClient: FluxerClient | null = null;
+    private metricsService: MetricsService | null = null;
+    private lastDiscordHealthy: boolean | null = null;
     private lastFluxerHealthy: boolean | null = null;
+    private onDiscordRecovered: (() => void) | null = null;
     private onFluxerRecovered: (() => void) | null = null;
     private fluxerConsecutiveDowns = 0;
     private onFluxerDown: ((count: number) => void) | null = null;
@@ -35,6 +38,10 @@ export default class HealthCheckService {
         this.fluxerClient = client;
     }
 
+    public setOnDiscordRecovered(cb: () => void) {
+        this.onDiscordRecovered = cb;
+    }
+
     public setOnFluxerRecovered(cb: () => void) {
         this.onFluxerRecovered = cb;
     }
@@ -49,52 +56,55 @@ export default class HealthCheckService {
 
     private async checkDiscordHealth(): Promise<HealthStatus> {
         if (!this.discordClient)
-            return {
-                healthy: false,
-                message: 'Discord client not initialized',
-            };
+            return { healthy: false, message: 'Discord client not initialized' };
         try {
             if (this.discordClient.ws.status !== 0)
-                return {
-                    healthy: false,
-                    message: 'Discord client is not connected',
-                };
+                return { healthy: false, message: 'Discord client is not connected' };
             await this.discordClient.application?.fetch();
             return { healthy: true };
         } catch (err) {
-            return {
-                healthy: false,
-                message: `Error checking Discord health: ${err}`,
-            };
+            return { healthy: false, message: `Error checking Discord health: ${err}` };
         }
     }
 
     private async checkFluxerHealth(): Promise<HealthStatus> {
-        if (!this.fluxerClient)
-            return { healthy: false, message: 'Fluxer client not initialized' };
+        if (!this.fluxerClient) return { healthy: false, message: 'Fluxer client not initialized' };
         try {
             const gatewayBot = await this.fluxerClient.rest.get('/gateway/bot');
             logger.debug(`Fluxer /gateway/bot response: ${JSON.stringify(gatewayBot)}`);
             const isReady = this.fluxerClient.isReady();
             if (!isReady) {
-                return {
-                    healthy: false,
-                    message: 'Fluxer client is not ready',
-                };
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const ws = (this.fluxerClient as any).ws;
+                const guilds = this.fluxerClient.guilds.size;
+                const userId = this.fluxerClient.user?.id ?? 'none';
+                const aborted = ws?._aborted ?? 'unknown';
+                const gatewayUrl = ws?.gatewayUrl ?? 'unknown';
+                const shardCount = ws?.shardCount ?? 'unknown';
+                // shards is a Map<number, Shard> — log each shard's status
+                const shardStatuses: string[] = [];
+                if (ws?.shards instanceof Map) {
+                    for (const [id, shard] of ws.shards) {
+                        const shardKeys = Object.keys(shard as object).join(', ');
+                        shardStatuses.push(`shard ${id}: status=${(shard as any).status ?? '?'}, keys=[${shardKeys}]`);
+                    }
+                } else {
+                    shardStatuses.push(`shards type: ${typeof ws?.shards}`);
+                }
+                logger.debug(
+                    `Fluxer client not yet ready — guilds cached: ${guilds}, user: ${userId}, ` +
+                    `aborted: ${aborted}, gateway: ${gatewayUrl}, shardCount: ${shardCount}, ` +
+                    `shards: [${shardStatuses.join(' | ')}]`
+                );
+                return { healthy: false, message: 'Fluxer client is not ready' };
             }
             return { healthy: true };
         } catch (err) {
-            return {
-                healthy: false,
-                message: `Error checking Fluxer health: ${err}`,
-            };
+            return { healthy: false, message: `Error checking Fluxer health: ${err}` };
         }
     }
 
-    private async pushHealthStatus(
-        pushUrl: string,
-        status: HealthStatus
-    ): Promise<void> {
+    private async pushHealthStatus(pushUrl: string, status: HealthStatus, ping?: number): Promise<void> {
         const url = new URL(pushUrl);
         url.searchParams.append('status', status.healthy ? 'up' : 'down');
         if (status.message) url.searchParams.append('msg', status.message);
@@ -220,18 +230,29 @@ export default class HealthCheckService {
         if (healthStatus.healthy) {
             this.fluxerConsecutiveDowns = 0;
             logger.info(`Fluxer health status: UP`);
-            if (this.lastFluxerHealthy === false) {
-                logger.info('Fluxer recovered');
-                this.onFluxerRecovered?.();
-            }
         } else {
             this.fluxerConsecutiveDowns++;
             logger.warn(
                 `Fluxer health status: DOWN${healthStatus.message ? ` - ${healthStatus.message}` : ''} (consecutive: ${this.fluxerConsecutiveDowns})`
             );
+            const platformStatus = await this.getFluxerPlatformStatus();
+            if (platformStatus) {
+                logger.warn(`Fluxer platform status: ${platformStatus}`);
+            }
             this.onFluxerDown?.(this.fluxerConsecutiveDowns);
         }
+        this.metricsService?.fluxerUp.set(healthStatus.healthy ? 1 : 0);
+        this.metricsService?.healthPingMs.set({ bot: 'fluxer' }, ping);
+        await this.pushHealthStatus(this.fluxerPushUrl, healthStatus, ping);
+
+        // Update Discord bot presence to reflect Fluxer state
+        this.updateDiscordPresence(healthStatus.healthy);
+
+        // Trigger queue drain on recovery
+        if (healthStatus.healthy && this.lastFluxerHealthy === false) {
+            logger.info('Fluxer recovered — triggering queue drain');
+            this.onFluxerRecovered?.();
+        }
         this.lastFluxerHealthy = healthStatus.healthy;
-        await this.pushHealthStatus(this.fluxerPushUrl, healthStatus);
     }
 }
