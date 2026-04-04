@@ -4,12 +4,9 @@ node_modules/
 config/
 logs/
 .idea/
-package-lock.json
 docs/.vitepress/dist
 docs/.vitepress/cache
 .claude/
-
-.github/workflows/docker-release.yml
 personal.yml
 .github/workflows/docker-publish.yml
 personal2.yml
