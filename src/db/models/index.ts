@@ -1,6 +1,7 @@
 import { GuildLinkModel } from './GuildLinkModel';
 import { ChannelLinkModel } from './ChannelLinkModel';
 import { MessageLinkModel } from './MessageLinkModel';
+import { QueuedMessageModel } from './QueuedMessageModel';
 
 // Guild -> Channel
 GuildLinkModel.hasMany(ChannelLinkModel, {
@@ -38,4 +39,9 @@ MessageLinkModel.belongsTo(ChannelLinkModel, {
     as: 'channelLink',
 });
 
-export { GuildLinkModel, ChannelLinkModel, MessageLinkModel };
+export {
+    GuildLinkModel,
+    ChannelLinkModel,
+    MessageLinkModel,
+    QueuedMessageModel,
+};

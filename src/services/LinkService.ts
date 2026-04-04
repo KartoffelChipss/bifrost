@@ -1,4 +1,4 @@
-import { MessageLinkRepository } from 'src/db/repositories/MessageLinkRepository';
+import { MessageLinkRepository } from '../db/repositories/MessageLinkRepository';
 import { ChannelLinkRepository } from '../db/repositories/ChannelLinkRepository';
 import { GuildLinkRepository } from '../db/repositories/GuildLinkRepository';
 
@@ -19,6 +19,10 @@ export class LinkService {
 
     async getGuildLinkForFluxerGuild(fluxerGuildId: string) {
         return this.guildRepo.findByFluxerGuildId(fluxerGuildId);
+    }
+
+    async getAllGuildLinks() {
+        return this.guildRepo.findAll();
     }
 
     async createGuildLink(discordGuildId: string, fluxerGuildId: string) {

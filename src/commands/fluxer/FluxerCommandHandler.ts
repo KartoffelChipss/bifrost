@@ -10,6 +10,11 @@ import logger from '../../utils/logging/logger';
 import { EmbedColors } from '../../utils/embeds';
 import { DELETE_INVOCATION } from '../../utils/env';
 
+// @fluxerjs/core does not expose ownerId on the Guild type declaration
+interface FluxerGuildWithOwner {
+    ownerId?: string;
+}
+
 export default abstract class FluxerCommandHandler extends CommandHandler<
     Client,
     Message
@@ -22,7 +27,10 @@ export default abstract class FluxerCommandHandler extends CommandHandler<
         });
         return {
             text: `${message.author.username} used ${message.content} • ${time}`,
-            iconURL: message.author.avatarURL?.() ?? undefined,
+            iconURL:
+                (
+                    message.author as { avatarURL?: () => string | undefined }
+                ).avatarURL?.() ?? undefined,
         };
     }
 
@@ -31,33 +39,17 @@ export default abstract class FluxerCommandHandler extends CommandHandler<
         permission: PermissionResolvable,
         permissionDisplayName?: string
     ): Promise<boolean> {
-        let authorMember: GuildMember | null;
+        let authorMember: GuildMember | null = null;
         try {
             authorMember =
                 (await message.guild?.fetchMember(message.author.id)) || null;
         } catch (error) {
-            await message.reply({
-                embeds: [
-                    new EmbedBuilder()
-                        .setDescription(
-                            'Could not fetch your member information.'
-                        )
-                        .setColor(EmbedColors.Error)
-                        .setFooter(this.footer(message))
-                        .setTimestamp(),
-                ],
-            });
             logger.error(
-                'Failed fetching member for Fluxer permission check',
-                {
-                    fluxerGuildId: message.guildId,
-                    fluxerChannelId: message.channelId,
-                    authorId: message.author.id,
-                },
+                'Error fetching member for FluxerCommandHandler:',
                 error
             );
-            return false;
         }
+
         if (!authorMember) {
             await message.reply({
                 embeds: [
@@ -92,7 +84,10 @@ export default abstract class FluxerCommandHandler extends CommandHandler<
     }
 
     protected async requireOwner(message: Message): Promise<boolean> {
-        if (message.guild?.ownerId !== message.author.id) {
+        if (
+            (message.guild as unknown as FluxerGuildWithOwner)?.ownerId !==
+            message.author.id
+        ) {
             await message.reply({
                 embeds: [
                     new EmbedBuilder()

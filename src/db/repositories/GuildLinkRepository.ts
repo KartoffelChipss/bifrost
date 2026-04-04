@@ -9,5 +9,7 @@ export interface GuildLinkRepository {
 
     findByFluxerGuildId(fluxerGuildId: string): Promise<GuildLink | null>;
 
+    findAll(): Promise<GuildLink[]>;
+
     deleteById(id: string): Promise<void>;
 }
