@@ -63,11 +63,17 @@ export const DB_NAME = process.env.BF_DB_NAME || 'bifrost';
 export const DB_USER = process.env.BF_DB_USER || 'root';
 export const DB_PASS = process.env.BF_DB_PASS || '';
 export const DB_HOST = process.env.BF_DB_HOST || 'localhost';
-export const DB_PORT = process.env.BF_DB_PORT ? Number(process.env.BF_DB_PORT) : 5432;
+export const DB_PORT = process.env.BF_DB_PORT
+    ? Number(process.env.BF_DB_PORT)
+    : 5432;
 
-export const METRICS_PORT = process.env.BF_METRICS_PORT ? Number(process.env.BF_METRICS_PORT) : 9091;
+export const METRICS_PORT = process.env.BF_METRICS_PORT
+    ? Number(process.env.BF_METRICS_PORT)
+    : 9091;
 
-export const QUEUE_TTL_MS = process.env.BF_QUEUE_TTL_MS ? Number(process.env.BF_QUEUE_TTL_MS) : 5 * 60 * 1000;
+export const QUEUE_TTL_MS = process.env.BF_QUEUE_TTL_MS
+    ? Number(process.env.BF_QUEUE_TTL_MS)
+    : 5 * 60 * 1000;
 
 function parseBool(value: string | undefined): boolean {
     return ['true', '1', 'yes'].includes((value ?? '').toLowerCase());
@@ -80,7 +86,9 @@ export const FLUXER_OWNER_ID = process.env.BF_FLUXER_OWNER_ID || null;
 
 function tryExec(cmd: string): string | null {
     try {
-        const result = execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+        const result = execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] })
+            .toString()
+            .trim();
         return result || null;
     } catch (err) {
         console.warn(`[env] exec failed: "${cmd}" — ${err}`);

@@ -25,7 +25,9 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                 const fluxerChannel = await this.fluxerEntityResolver
                     .fetchChannel(fluxerGuildId, link.fluxerChannelId)
                     .catch(() => null);
-                const fluxerName = (fluxerChannel as any)?.name ?? link.fluxerChannelId;
+                const fluxerName =
+                    (fluxerChannel as { name?: string } | null)?.name ??
+                    link.fluxerChannelId;
                 const fluxerUrl = `https://fluxer.app/channels/${fluxerGuildId}/${link.fluxerChannelId}`;
                 const suffix = showLinkId ? ` | \`${link.linkId}\`` : '';
                 // Discord on left, Fluxer on right (viewing from Discord)
@@ -72,21 +74,36 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                 const embeds: EmbedBuilder[] = [];
 
                 for (const guildLink of guildLinks) {
-                    const [channelLinks, fluxerGuild, discordGuild] = await Promise.all([
-                        this.linkService.getChannelLinksForDiscordGuild(guildLink.discordGuildId),
-                        this.fluxerEntityResolver.fetchGuild(guildLink.fluxerGuildId).catch(() => null),
-                        this.getClient().guilds.fetch(guildLink.discordGuildId).catch(() => null),
-                    ]);
+                    const [channelLinks, fluxerGuild, discordGuild] =
+                        await Promise.all([
+                            this.linkService.getChannelLinksForDiscordGuild(
+                                guildLink.discordGuildId
+                            ),
+                            this.fluxerEntityResolver
+                                .fetchGuild(guildLink.fluxerGuildId)
+                                .catch(() => null),
+                            this.getClient()
+                                .guilds.fetch(guildLink.discordGuildId)
+                                .catch(() => null),
+                        ]);
 
-                    const fluxerGuildName = (fluxerGuild as any)?.name ?? guildLink.fluxerGuildId;
-                    const discordGuildName = (discordGuild as any)?.name ?? guildLink.discordGuildId;
+                    const fluxerGuildName =
+                        (fluxerGuild as { name?: string } | null)?.name ??
+                        guildLink.fluxerGuildId;
+                    const discordGuildName =
+                        (discordGuild as { name?: string } | null)?.name ??
+                        guildLink.discordGuildId;
                     const title = `Discord: ${discordGuildName} (${guildLink.discordGuildId}) | Fluxer: ${fluxerGuildName} (${guildLink.fluxerGuildId})`;
 
                     let description: string;
                     if (channelLinks.length === 0) {
                         description = '*(no channel links)*';
                     } else {
-                        const lines = await this.buildChannelLines(channelLinks, guildLink.fluxerGuildId, true);
+                        const lines = await this.buildChannelLines(
+                            channelLinks,
+                            guildLink.fluxerGuildId,
+                            true
+                        );
                         description = lines.join('\n\n');
                     }
 
@@ -110,22 +127,31 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
                         await message.reply({
                             embeds: [
                                 new EmbedBuilder()
-                                    .setDescription('Could not send DM — ensure your DMs are open.')
+                                    .setDescription(
+                                        'Could not send DM — ensure your DMs are open.'
+                                    )
                                     .setColor(EmbedColors.Error)
-                                    .setFooter(footer).setTimestamp()
-                            ]
+                                    .setFooter(footer)
+                                    .setTimestamp(),
+                            ],
                         });
-                        logger.error('Failed to DM %list all output to Discord user:', message.author.id);
+                        logger.error(
+                            'Failed to DM %list all output to Discord user:',
+                            message.author.id
+                        );
                     }
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 await message.reply({
                     embeds: [
                         new EmbedBuilder()
-                            .setDescription(`Failed to list all links: ${err.message}`)
+                            .setDescription(
+                                `Failed to list all links: ${(err as Error).message}`
+                            )
                             .setColor(EmbedColors.Error)
-                            .setFooter(footer).setTimestamp()
-                    ]
+                            .setFooter(footer)
+                            .setTimestamp(),
+                    ],
                 });
                 logger.error('Error listing all links:', err);
             }

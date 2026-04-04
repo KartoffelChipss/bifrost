@@ -52,51 +52,70 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                 await message.reply({
                     embeds: [
                         new EmbedBuilder()
-                            .setDescription(`No pending link action. Run \`${COMMAND_PREFIX}link <id>\` first.`)
+                            .setDescription(
+                                `No pending link action. Run \`${COMMAND_PREFIX}link <id>\` first.`
+                            )
                             .setColor(EmbedColors.Error)
-                            .setFooter(footer).setTimestamp(),
+                            .setFooter(footer)
+                            .setTimestamp(),
                     ],
                 });
                 return;
             }
 
             if (pending.type === 'guild') {
-                if (!await this.requireOwner(message)) return;
+                if (!(await this.requireOwner(message))) return;
                 try {
-                    await this.linkService.createGuildLink(pending.discordGuildId, message.guildId!);
+                    await this.linkService.createGuildLink(
+                        pending.discordGuildId,
+                        message.guildId!
+                    );
                     await message.reply({
                         embeds: [
                             new EmbedBuilder()
                                 .setDescription(
                                     `This Fluxer server is now bridged with Discord guild **${pending.guildName}**.\n` +
-                                    `Use \`${COMMAND_PREFIX}link <discord-channel-id>\` in any channel to start linking channels.`
+                                        `Use \`${COMMAND_PREFIX}link <discord-channel-id>\` in any channel to start linking channels.`
                                 )
                                 .setColor(EmbedColors.Success)
-                                .setFooter(footer).setTimestamp(),
+                                .setFooter(footer)
+                                .setTimestamp(),
                         ],
                     });
-                } catch (err: any) {
+                } catch (err: unknown) {
                     await message.reply({
                         embeds: [
                             new EmbedBuilder()
-                                .setDescription(`Failed to link guild: ${err.message}`)
+                                .setDescription(
+                                    `Failed to link guild: ${(err as Error).message}`
+                                )
                                 .setColor(EmbedColors.Error)
-                                .setFooter(footer).setTimestamp(),
+                                .setFooter(footer)
+                                .setTimestamp(),
                         ],
                     });
                     logger.error('Link guild failed:', err);
                 }
             } else {
-                if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
+                if (
+                    !(await this.requirePermission(
+                        message,
+                        PermissionsBitField.Flags.ManageWebhooks,
+                        'Manage Webhooks'
+                    ))
+                )
+                    return;
                 try {
-                    const discordWebhook = await this.webhookService.createDiscordWebhook(
-                        pending.discordChannelId,
-                        `Fluxer Bridge Webhook for channel ${pending.discordChannelId}`
-                    );
-                    const fluxerWebhook = await this.webhookService.createFluxerWebhook(
-                        pending.fluxerChannelId,
-                        `Discord Bridge Webhook for channel ${pending.fluxerChannelId}`
-                    );
+                    const discordWebhook =
+                        await this.webhookService.createDiscordWebhook(
+                            pending.discordChannelId,
+                            `Fluxer Bridge Webhook for channel ${pending.discordChannelId}`
+                        );
+                    const fluxerWebhook =
+                        await this.webhookService.createFluxerWebhook(
+                            pending.fluxerChannelId,
+                            `Discord Bridge Webhook for channel ${pending.fluxerChannelId}`
+                        );
                     await this.linkService.createChannelLink({
                         guildLinkId: pending.guildLinkId,
                         discordChannelId: pending.discordChannelId,
@@ -139,42 +158,64 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                     new EmbedBuilder()
                         .setDescription(
                             `Usage: \`${COMMAND_PREFIX}link <id>\`\n` +
-                            `> Provide a Discord guild ID to bridge servers, or a Discord channel ID to bridge channels.\n` +
-                            `> Then run \`${COMMAND_PREFIX}link confirm\` to proceed.`
+                                `> Provide a Discord guild ID to bridge servers, or a Discord channel ID to bridge channels.\n` +
+                                `> Then run \`${COMMAND_PREFIX}link confirm\` to proceed.`
                         )
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
             return;
         }
 
         // 1. Try Discord guild
-        const discordGuild = await this.discordEntityResolver.fetchGuild(id).catch(() => null);
+        const discordGuild = await this.discordEntityResolver
+            .fetchGuild(id)
+            .catch(() => null);
         if (discordGuild) {
-            if (!await this.requireOwner(message)) return;
-            this.setPending(message.author.id, { type: 'guild', discordGuildId: id, guildName: discordGuild.name });
+            if (!(await this.requireOwner(message))) return;
+            this.setPending(message.author.id, {
+                type: 'guild',
+                discordGuildId: id,
+                guildName: discordGuild.name,
+            });
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setDescription(
                             `Found Discord guild **${discordGuild.name}**.\n` +
-                            `Run \`${COMMAND_PREFIX}link confirm\` to bridge this Fluxer server to it.`
+                                `Run \`${COMMAND_PREFIX}link confirm\` to bridge this Fluxer server to it.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
             return;
         }
 
         // 2. Try Discord channel (requires existing guild link)
-        const guildLink = await this.linkService.getGuildLinkForFluxerGuild(message.guildId!).catch(() => null);
+        const guildLink = await this.linkService
+            .getGuildLinkForFluxerGuild(message.guildId!)
+            .catch(() => null);
         if (guildLink) {
-            const discordChannel = await this.discordEntityResolver.fetchChannel(guildLink.discordGuildId, id).catch(() => null);
+            const discordChannel = await this.discordEntityResolver
+                .fetchChannel(guildLink.discordGuildId, id)
+                .catch(() => null);
             if (discordChannel) {
-                if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
-                const channelName = 'name' in discordChannel ? (discordChannel as any).name : id;
+                if (
+                    !(await this.requirePermission(
+                        message,
+                        PermissionsBitField.Flags.ManageWebhooks,
+                        'Manage Webhooks'
+                    ))
+                )
+                    return;
+                const channelName =
+                    'name' in discordChannel
+                        ? ((discordChannel as { name?: string }).name ?? id)
+                        : id;
                 this.setPending(message.author.id, {
                     type: 'channel',
                     discordChannelId: id,

@@ -24,18 +24,25 @@ export default abstract class FluxerCommandHandler extends CommandHandler<Client
     ): Promise<boolean> {
         let authorMember: GuildMember | null = null;
         try {
-            authorMember = (await message.guild?.fetchMember(message.author.id)) || null;
+            authorMember =
+                (await message.guild?.fetchMember(message.author.id)) || null;
         } catch (error) {
-            logger.error('Error fetching member for FluxerCommandHandler:', error);
+            logger.error(
+                'Error fetching member for FluxerCommandHandler:',
+                error
+            );
         }
 
         if (!authorMember) {
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
-                        .setDescription('Could not fetch your member information.')
+                        .setDescription(
+                            'Could not fetch your member information.'
+                        )
                         .setColor(EmbedColors.Error)
-                        .setFooter(this.footer(message)).setTimestamp(),
+                        .setFooter(this.footer(message))
+                        .setTimestamp(),
                 ],
             });
             return false;

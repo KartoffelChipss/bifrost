@@ -33,7 +33,10 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
     private setPending(userId: string, action: PendingUnlink) {
         const existing = this.pending.get(userId);
         if (existing) clearTimeout(existing.timer);
-        const timer = setTimeout(() => this.pending.delete(userId), 5 * 60 * 1000);
+        const timer = setTimeout(
+            () => this.pending.delete(userId),
+            5 * 60 * 1000
+        );
         this.pending.set(userId, { action, timer });
     }
 

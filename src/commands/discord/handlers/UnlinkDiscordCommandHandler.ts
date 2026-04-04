@@ -76,58 +76,112 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                         .catch(() => []);
                     for (const link of channelLinks) {
                         await this.webhookService
-                            .deleteDiscordWebhook(link.discordWebhookId, link.discordWebhookToken)
-                            .catch((err) => logger.error('Failed to delete Discord webhook during guild unlink:', err));
+                            .deleteDiscordWebhook(
+                                link.discordWebhookId,
+                                link.discordWebhookToken
+                            )
+                            .catch((err) =>
+                                logger.error(
+                                    'Failed to delete Discord webhook during guild unlink:',
+                                    err
+                                )
+                            );
                         await this.webhookService
-                            .deleteFluxerWebhook(link.fluxerWebhookId, link.fluxerWebhookToken)
-                            .catch((err) => logger.error('Failed to delete Fluxer webhook during guild unlink:', err));
+                            .deleteFluxerWebhook(
+                                link.fluxerWebhookId,
+                                link.fluxerWebhookToken
+                            )
+                            .catch((err) =>
+                                logger.error(
+                                    'Failed to delete Fluxer webhook during guild unlink:',
+                                    err
+                                )
+                            );
                     }
-                    await this.linkService.removeGuildLinkFromDiscord(message.guildId!);
+                    await this.linkService.removeGuildLinkFromDiscord(
+                        message.guildId!
+                    );
                     await message.reply({
                         embeds: [
                             new EmbedBuilder()
-                                .setDescription(`Server bridge removed. All channel links have been deleted.`)
+                                .setDescription(
+                                    `Server bridge removed. All channel links have been deleted.`
+                                )
                                 .setColor(EmbedColors.Success)
-                                .setFooter(footer).setTimestamp()
-                        ]
+                                .setFooter(footer)
+                                .setTimestamp(),
+                        ],
                     });
-                } catch (err: any) {
+                } catch (err: unknown) {
                     await message.reply({
                         embeds: [
                             new EmbedBuilder()
-                                .setDescription(`Failed to unlink guild: ${err.message}`)
+                                .setDescription(
+                                    `Failed to unlink guild: ${(err as Error).message}`
+                                )
                                 .setColor(EmbedColors.Error)
-                                .setFooter(footer).setTimestamp()
-                        ]
+                                .setFooter(footer)
+                                .setTimestamp(),
+                        ],
                     });
                     logger.error('Unlink guild failed:', err);
                 }
             } else {
-                if (!await this.requirePermission(message, PermissionFlagsBits.ManageWebhooks, 'Manage Webhooks')) return;
+                if (
+                    !(await this.requirePermission(
+                        message,
+                        PermissionFlagsBits.ManageWebhooks,
+                        'Manage Webhooks'
+                    ))
+                )
+                    return;
                 try {
                     await this.webhookService
-                        .deleteDiscordWebhook(pending.discordWebhookId, pending.discordWebhookToken)
-                        .catch((err) => logger.error('Failed to delete Discord webhook during channel unlink:', err));
+                        .deleteDiscordWebhook(
+                            pending.discordWebhookId,
+                            pending.discordWebhookToken
+                        )
+                        .catch((err) =>
+                            logger.error(
+                                'Failed to delete Discord webhook during channel unlink:',
+                                err
+                            )
+                        );
                     await this.webhookService
-                        .deleteFluxerWebhook(pending.fluxerWebhookId, pending.fluxerWebhookToken)
-                        .catch((err) => logger.error('Failed to delete Fluxer webhook during channel unlink:', err));
-                    await this.linkService.removeChannelLinkForDiscord(message.guildId!, pending.linkId);
+                        .deleteFluxerWebhook(
+                            pending.fluxerWebhookId,
+                            pending.fluxerWebhookToken
+                        )
+                        .catch((err) =>
+                            logger.error(
+                                'Failed to delete Fluxer webhook during channel unlink:',
+                                err
+                            )
+                        );
+                    await this.linkService.removeChannelLinkForDiscord(
+                        message.guildId!,
+                        pending.linkId
+                    );
                     await message.reply({
                         embeds: [
                             new EmbedBuilder()
                                 .setDescription(`Channel bridge removed.`)
                                 .setColor(EmbedColors.Success)
-                                .setFooter(footer).setTimestamp()
-                        ]
+                                .setFooter(footer)
+                                .setTimestamp(),
+                        ],
                     });
-                } catch (err: any) {
+                } catch (err: unknown) {
                     await message.reply({
                         embeds: [
                             new EmbedBuilder()
-                                .setDescription(`Failed to unlink channel: ${err.message}`)
+                                .setDescription(
+                                    `Failed to unlink channel: ${(err as Error).message}`
+                                )
                                 .setColor(EmbedColors.Error)
-                                .setFooter(footer).setTimestamp()
-                        ]
+                                .setFooter(footer)
+                                .setTimestamp(),
+                        ],
                     });
                     logger.error('Unlink channel failed:', err);
                 }

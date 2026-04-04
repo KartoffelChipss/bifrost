@@ -110,23 +110,31 @@ const main = async () => {
     const enterFluxerBackoff = () => {
         fluxerRestartState = 'backoff';
         healthCheckService.resetFluxerDownCount();
-        logger.warn(`[Fluxer] Entering ${FLUXER_BACKOFF_MS / 60_000}-minute backoff before next restart`);
+        logger.warn(
+            `[Fluxer] Entering ${FLUXER_BACKOFF_MS / 60_000}-minute backoff before next restart`
+        );
         setTimeout(() => {
             fluxerRestartState = 'idle';
-            doFluxerRestart().catch((err) => logger.error('[Fluxer] Restart after backoff failed:', err));
+            doFluxerRestart().catch((err) =>
+                logger.error('[Fluxer] Restart after backoff failed:', err)
+            );
         }, FLUXER_BACKOFF_MS);
     };
 
     healthCheckService.setOnDiscordRecovered(() => {
-        queueService.drain(webhookService, linkService).catch((err) =>
-            logger.error('Queue drain on Discord recovery error:', err)
-        );
+        queueService
+            .drain(webhookService, linkService)
+            .catch((err) =>
+                logger.error('Queue drain on Discord recovery error:', err)
+            );
     });
     healthCheckService.setOnFluxerRecovered(() => {
         fluxerRestartAttempts = 0;
-        queueService.drain(webhookService, linkService).catch((err) =>
-            logger.error('Queue drain on Fluxer recovery error:', err)
-        );
+        queueService
+            .drain(webhookService, linkService)
+            .catch((err) =>
+                logger.error('Queue drain on Fluxer recovery error:', err)
+            );
     });
     healthCheckService.setOnFluxerDown((count) => {
         if (fluxerRestartState !== 'idle') return;

@@ -24,52 +24,78 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
         _command: string,
         ...args: string[]
     ): Promise<void> {
-        if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
+        if (
+            !(await this.requirePermission(
+                message,
+                PermissionsBitField.Flags.ManageWebhooks,
+                'Manage Webhooks'
+            ))
+        )
+            return;
 
         const footer = this.footer(message);
         const doConfirm = args[0]?.toLowerCase() === 'confirm';
 
         let guildLink;
         try {
-            guildLink = await this.linkService.getGuildLinkForFluxerGuild(message.guildId!);
-            if (!guildLink) throw new Error('this guild is not linked to a Discord guild');
-        } catch (error: any) {
+            guildLink = await this.linkService.getGuildLinkForFluxerGuild(
+                message.guildId!
+            );
+            if (!guildLink)
+                throw new Error('this guild is not linked to a Discord guild');
+        } catch (error: unknown) {
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setDescription(
-                            `Cannot run autolink: ${error.message}. Use \`${COMMAND_PREFIX}link <discord-guild-id>\` first.`
+                            `Cannot run autolink: ${(error as Error).message}. Use \`${COMMAND_PREFIX}link <discord-guild-id>\` first.`
                         )
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
             return;
         }
 
         // Get already-linked channel IDs to skip them
-        const existingLinks = await this.linkService.getChannelLinksForFluxerGuild(
-            message.guildId!
+        const existingLinks =
+            await this.linkService.getChannelLinksForFluxerGuild(
+                message.guildId!
+            );
+        const linkedDiscordIds = new Set(
+            existingLinks.map((l) => l.discordChannelId)
         );
-        const linkedDiscordIds = new Set(existingLinks.map((l) => l.discordChannelId));
-        const linkedFluxerIds = new Set(existingLinks.map((l) => l.fluxerChannelId));
+        const linkedFluxerIds = new Set(
+            existingLinks.map((l) => l.fluxerChannelId)
+        );
 
         // Fetch all Fluxer text channels in this guild
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const allFluxerChannels: any[] = await (message.guild as any).fetchChannels();
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        const allFluxerChannels: any[] = await (
+            message.guild as any
+        ).fetchChannels();
         const fluxerTextChannels: ChannelInfo[] = allFluxerChannels
-            .filter((ch: any) => ch.isTextBased() && !linkedFluxerIds.has(ch.id))
+            .filter(
+                (ch: any) => ch.isTextBased() && !linkedFluxerIds.has(ch.id)
+            )
             .map((ch: any) => ({ id: ch.id, name: ch.name as string }));
+        /* eslint-enable @typescript-eslint/no-explicit-any */
 
         // Fetch all Discord text channels in the linked Discord guild
-        const discordGuild = await this.discordEntityResolver.fetchGuild(guildLink.discordGuildId);
+        const discordGuild = await this.discordEntityResolver.fetchGuild(
+            guildLink.discordGuildId
+        );
         if (!discordGuild) {
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
-                        .setDescription('Could not fetch the linked Discord guild.')
+                        .setDescription(
+                            'Could not fetch the linked Discord guild.'
+                        )
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
             return;
@@ -137,14 +163,16 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
 
         for (const proposal of proposals) {
             try {
-                const discordWebhook = await this.webhookService.createDiscordWebhook(
-                    proposal.discord.id,
-                    `Fluxer Bridge Webhook for channel ${proposal.discord.id}`
-                );
-                const fluxerWebhook = await this.webhookService.createFluxerWebhook(
-                    proposal.fluxer.id,
-                    `Discord Bridge Webhook for channel ${proposal.fluxer.id}`
-                );
+                const discordWebhook =
+                    await this.webhookService.createDiscordWebhook(
+                        proposal.discord.id,
+                        `Fluxer Bridge Webhook for channel ${proposal.discord.id}`
+                    );
+                const fluxerWebhook =
+                    await this.webhookService.createFluxerWebhook(
+                        proposal.fluxer.id,
+                        `Discord Bridge Webhook for channel ${proposal.fluxer.id}`
+                    );
                 await this.linkService.createChannelLink({
                     guildLinkId: guildLink.id,
                     discordChannelId: proposal.discord.id,

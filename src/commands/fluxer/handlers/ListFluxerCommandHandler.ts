@@ -25,7 +25,9 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                 const discordChannel = await this.discordEntityResolver
                     .fetchChannel(discordGuildId, link.discordChannelId)
                     .catch(() => null);
-                const discordName = (discordChannel as any)?.name ?? link.discordChannelId;
+                const discordName =
+                    (discordChannel as { name?: string } | null)?.name ??
+                    link.discordChannelId;
                 const discordUrl = `https://discord.com/channels/${discordGuildId}/${link.discordChannelId}`;
                 const suffix = showLinkId ? ` | \`${link.linkId}\`` : '';
                 return `<#${link.fluxerChannelId}> ←→ [#${discordName}](${discordUrl})${suffix}\n  └ \`${link.fluxerChannelId}\` · \`${link.discordChannelId}\``;
@@ -71,21 +73,36 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                 const embeds: EmbedBuilder[] = [];
 
                 for (const guildLink of guildLinks) {
-                    const [channelLinks, discordGuild, fluxerGuild] = await Promise.all([
-                        this.linkService.getChannelLinksForFluxerGuild(guildLink.fluxerGuildId),
-                        this.discordEntityResolver.fetchGuild(guildLink.discordGuildId).catch(() => null),
-                        this.getClient().guilds.fetch(guildLink.fluxerGuildId).catch(() => null),
-                    ]);
+                    const [channelLinks, discordGuild, fluxerGuild] =
+                        await Promise.all([
+                            this.linkService.getChannelLinksForFluxerGuild(
+                                guildLink.fluxerGuildId
+                            ),
+                            this.discordEntityResolver
+                                .fetchGuild(guildLink.discordGuildId)
+                                .catch(() => null),
+                            this.getClient()
+                                .guilds.fetch(guildLink.fluxerGuildId)
+                                .catch(() => null),
+                        ]);
 
-                    const discordGuildName = (discordGuild as any)?.name ?? guildLink.discordGuildId;
-                    const fluxerGuildName = (fluxerGuild as any)?.name ?? guildLink.fluxerGuildId;
+                    const discordGuildName =
+                        (discordGuild as { name?: string } | null)?.name ??
+                        guildLink.discordGuildId;
+                    const fluxerGuildName =
+                        (fluxerGuild as { name?: string } | null)?.name ??
+                        guildLink.fluxerGuildId;
                     const title = `Fluxer: ${fluxerGuildName} (${guildLink.fluxerGuildId}) | Discord: ${discordGuildName} (${guildLink.discordGuildId})`;
 
                     let description: string;
                     if (channelLinks.length === 0) {
                         description = '*(no channel links)*';
                     } else {
-                        const lines = await this.buildChannelLines(channelLinks, guildLink.discordGuildId, true);
+                        const lines = await this.buildChannelLines(
+                            channelLinks,
+                            guildLink.discordGuildId,
+                            true
+                        );
                         description = lines.join('\n\n');
                     }
 
@@ -103,28 +120,43 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                     await message.reply({ embeds });
                 } else {
                     try {
-                        const dm = await (message.author as any).createDM?.();
+                        const dm = await (
+                            message.author as {
+                                createDM?: () => Promise<{
+                                    send: (data: unknown) => Promise<unknown>;
+                                }>;
+                            }
+                        ).createDM?.();
                         if (!dm) throw new Error('DM not supported');
                         await dm.send({ embeds });
                     } catch {
                         await message.reply({
                             embeds: [
                                 new EmbedBuilder()
-                                    .setDescription('Could not send DM — ensure your DMs are open.')
+                                    .setDescription(
+                                        'Could not send DM — ensure your DMs are open.'
+                                    )
                                     .setColor(EmbedColors.Error)
-                                    .setFooter(footer).setTimestamp(),
+                                    .setFooter(footer)
+                                    .setTimestamp(),
                             ],
                         });
-                        logger.error('Failed to DM %list all output to Fluxer user:', message.author.id);
+                        logger.error(
+                            'Failed to DM %list all output to Fluxer user:',
+                            message.author.id
+                        );
                     }
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 await message.reply({
                     embeds: [
                         new EmbedBuilder()
-                            .setDescription(`Failed to list all links: ${err.message}`)
+                            .setDescription(
+                                `Failed to list all links: ${(err as Error).message}`
+                            )
                             .setColor(EmbedColors.Error)
-                            .setFooter(footer).setTimestamp(),
+                            .setFooter(footer)
+                            .setTimestamp(),
                     ],
                 });
                 logger.error('Error listing all links:', err);

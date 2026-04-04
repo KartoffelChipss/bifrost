@@ -85,26 +85,40 @@ export default class HealthCheckService {
                 const shardStatuses: string[] = [];
                 if (ws?.shards instanceof Map) {
                     for (const [id, shard] of ws.shards) {
-                        const shardKeys = Object.keys(shard as object).join(', ');
-                        shardStatuses.push(`shard ${id}: status=${(shard as any).status ?? '?'}, keys=[${shardKeys}]`);
+                        const shardKeys = Object.keys(shard as object).join(
+                            ', '
+                        );
+                        shardStatuses.push(
+                            `shard ${id}: status=${(shard as { status?: string }).status ?? '?'}, keys=[${shardKeys}]`
+                        );
                     }
                 } else {
                     shardStatuses.push(`shards type: ${typeof ws?.shards}`);
                 }
                 logger.debug(
                     `Fluxer client not yet ready — guilds cached: ${guilds}, user: ${userId}, ` +
-                    `aborted: ${aborted}, gateway: ${gatewayUrl}, shardCount: ${shardCount}, ` +
-                    `shards: [${shardStatuses.join(' | ')}]`
+                        `aborted: ${aborted}, gateway: ${gatewayUrl}, shardCount: ${shardCount}, ` +
+                        `shards: [${shardStatuses.join(' | ')}]`
                 );
-                return { healthy: false, message: 'Fluxer client is not ready' };
+                return {
+                    healthy: false,
+                    message: 'Fluxer client is not ready',
+                };
             }
             return { healthy: true };
         } catch (err) {
-            return { healthy: false, message: `Error checking Fluxer health: ${err}` };
+            return {
+                healthy: false,
+                message: `Error checking Fluxer health: ${err}`,
+            };
         }
     }
 
-    private async pushHealthStatus(pushUrl: string, status: HealthStatus, ping?: number): Promise<void> {
+    private async pushHealthStatus(
+        pushUrl: string,
+        status: HealthStatus,
+        ping?: number
+    ): Promise<void> {
         const url = new URL(pushUrl);
         url.searchParams.append('status', status.healthy ? 'up' : 'down');
         if (status.message) url.searchParams.append('msg', status.message);
@@ -155,9 +169,17 @@ export default class HealthCheckService {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const user = this.fluxerClient.user as any;
         if (healthy) {
-            user.setPresence?.({ status: 'online', custom_status: { text: 'Bridging to Discord' } });
+            user.setPresence?.({
+                status: 'online',
+                custom_status: { text: 'Bridging to Discord' },
+            });
         } else {
-            user.setPresence?.({ status: 'dnd', custom_status: { text: 'Discord unreachable — messages queued' } });
+            user.setPresence?.({
+                status: 'dnd',
+                custom_status: {
+                    text: 'Discord unreachable — messages queued',
+                },
+            });
         }
     }
 
