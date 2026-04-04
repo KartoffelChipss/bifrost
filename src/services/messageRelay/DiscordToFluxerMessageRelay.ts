@@ -8,11 +8,16 @@ import { WebhookMessageData } from '../WebhookService';
 export default class DiscordToFluxerMessageRelay extends MessageRelay<
     OmitPartialGroupDMChannel<Message<boolean>>
 > {
-    public async relayMessage(message: OmitPartialGroupDMChannel<Message<boolean>>): Promise<void> {
+    public async relayMessage(
+        message: OmitPartialGroupDMChannel<Message<boolean>>
+    ): Promise<void> {
         const linkService = this.getLinkService();
         const webhookService = this.getWebhookService();
 
-        const linkedChannel = await linkService.getChannelLinkByDiscordChannelId(message.channelId);
+        const linkedChannel =
+            await linkService.getChannelLinkByDiscordChannelId(
+                message.channelId
+            );
         if (!linkedChannel) return;
 
         // Build payload before attempting send so it can be queued on failure
@@ -44,10 +49,14 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
                     channelLinkId: linkedChannel.id,
                 });
             }
-            this.metricsService?.messagesRelayed.inc({ direction: 'discord_to_fluxer' });
+            this.metricsService?.messagesRelayed.inc({
+                direction: 'discord_to_fluxer',
+            });
         } catch (error) {
             logger.error('Error relaying message to Fluxer:', error);
-            this.metricsService?.messageRelayErrors.inc({ direction: 'discord_to_fluxer' });
+            this.metricsService?.messageRelayErrors.inc({
+                direction: 'discord_to_fluxer',
+            });
             await this.queueService?.enqueue(
                 'discord_to_fluxer',
                 linkedChannel.id,

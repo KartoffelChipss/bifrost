@@ -56,22 +56,34 @@ export default class HealthCheckService {
 
     private async checkDiscordHealth(): Promise<HealthStatus> {
         if (!this.discordClient)
-            return { healthy: false, message: 'Discord client not initialized' };
+            return {
+                healthy: false,
+                message: 'Discord client not initialized',
+            };
         try {
             if (this.discordClient.ws.status !== 0)
-                return { healthy: false, message: 'Discord client is not connected' };
+                return {
+                    healthy: false,
+                    message: 'Discord client is not connected',
+                };
             await this.discordClient.application?.fetch();
             return { healthy: true };
         } catch (err) {
-            return { healthy: false, message: `Error checking Discord health: ${err}` };
+            return {
+                healthy: false,
+                message: `Error checking Discord health: ${err}`,
+            };
         }
     }
 
     private async checkFluxerHealth(): Promise<HealthStatus> {
-        if (!this.fluxerClient) return { healthy: false, message: 'Fluxer client not initialized' };
+        if (!this.fluxerClient)
+            return { healthy: false, message: 'Fluxer client not initialized' };
         try {
             const gatewayBot = await this.fluxerClient.rest.get('/gateway/bot');
-            logger.debug(`Fluxer /gateway/bot response: ${JSON.stringify(gatewayBot)}`);
+            logger.debug(
+                `Fluxer /gateway/bot response: ${JSON.stringify(gatewayBot)}`
+            );
             const isReady = this.fluxerClient.isReady();
             if (!isReady) {
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -138,10 +150,17 @@ export default class HealthCheckService {
             if (!res.ok) {
                 let errDetail = '';
                 try {
-                    const json = JSON.parse(body) as { ok?: boolean; msg?: string };
+                    const json = JSON.parse(body) as {
+                        ok?: boolean;
+                        msg?: string;
+                    };
                     if (json.msg) errDetail = ` — ${json.msg}`;
-                } catch { /* body wasn't JSON */ }
-                logger.error(`Health push failed: HTTP ${res.status} from ${redacted}${errDetail}`);
+                } catch {
+                    /* body wasn't JSON */
+                }
+                logger.error(
+                    `Health push failed: HTTP ${res.status} from ${redacted}${errDetail}`
+                );
                 return;
             }
 
@@ -150,13 +169,17 @@ export default class HealthCheckService {
                 if (!json.ok) {
                     const msg = json.msg ?? 'unknown error';
                     if (msg.toLowerCase().includes('not found')) {
-                        logger.warn(`Health push rejected — monitor not found at ${redacted}`);
+                        logger.warn(
+                            `Health push rejected — monitor not found at ${redacted}`
+                        );
                     } else {
                         logger.error(`Health push rejected — ${msg}`);
                     }
                 }
             } catch {
-                logger.warn(`Health push: unexpected non-JSON response from ${redacted}`);
+                logger.warn(
+                    `Health push: unexpected non-JSON response from ${redacted}`
+                );
             }
         } catch (err) {
             logger.error(`Failed to push health status to ${redacted}: ${err}`);
@@ -187,10 +210,15 @@ export default class HealthCheckService {
         if (!this.discordClient?.user) return;
         if (healthy) {
             this.discordClient.user.setStatus('online');
-            this.discordClient.user.setActivity('Bridging to Fluxer', { type: ActivityType.Watching });
+            this.discordClient.user.setActivity('Bridging to Fluxer', {
+                type: ActivityType.Watching,
+            });
         } else {
             this.discordClient.user.setStatus('dnd');
-            this.discordClient.user.setActivity('Fluxer unreachable — messages queued', { type: ActivityType.Watching });
+            this.discordClient.user.setActivity(
+                'Fluxer unreachable — messages queued',
+                { type: ActivityType.Watching }
+            );
         }
     }
 
@@ -227,16 +255,24 @@ export default class HealthCheckService {
         try {
             const res = await fetch('https://fluxerstatus.com/summary.json');
             if (!res.ok) return null;
-            const json = await res.json() as {
+            const json = (await res.json()) as {
                 page: { status: string };
                 activeIncidents: { name: string; impact: string }[];
                 activeMaintenances: { name: string }[];
             };
             if (json.page.status === 'UP') return null;
-            const incidents = json.activeIncidents.map((i) => `${i.name} (${i.impact})`).join(', ');
-            const maintenances = json.activeMaintenances.map((m) => m.name).join(', ');
-            const details = [incidents, maintenances].filter(Boolean).join('; ');
-            return details ? `${json.page.status} — ${details}` : json.page.status;
+            const incidents = json.activeIncidents
+                .map((i) => `${i.name} (${i.impact})`)
+                .join(', ');
+            const maintenances = json.activeMaintenances
+                .map((m) => m.name)
+                .join(', ');
+            const details = [incidents, maintenances]
+                .filter(Boolean)
+                .join('; ');
+            return details
+                ? `${json.page.status} — ${details}`
+                : json.page.status;
         } catch {
             return null;
         }

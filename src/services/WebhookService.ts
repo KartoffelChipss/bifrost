@@ -72,11 +72,17 @@ export class WebhookService {
         }
 
         try {
-            const webhook = await this.discordClient.fetchWebhook(webhookId, webhookToken);
+            const webhook = await this.discordClient.fetchWebhook(
+                webhookId,
+                webhookToken
+            );
             if (!webhook) return null;
-            const webhookClient = new WebhookClient({ id: webhookId, token: webhookToken });
+            const webhookClient = new WebhookClient({
+                id: webhookId,
+                token: webhookToken,
+            });
             return webhookClient;
-        } catch (error: any) {
+        } catch (error: unknown) {
             logger.error('Error getting or creating Discord webhook:', error);
             throw error;
         }
@@ -100,11 +106,12 @@ export class WebhookService {
                 username: data.username,
                 avatarURL: data.avatarURL,
                 files,
-                embeds: data.embeds?.map((embed) => embed.toDiscordEmbed()) || [],
+                embeds:
+                    data.embeds?.map((embed) => embed.toDiscordEmbed()) || [],
             });
 
             return { messageId: id };
-        } catch (error: any) {
+        } catch (error: unknown) {
             logger.error('Error sending message via Discord webhook:', error);
             throw error;
         }
@@ -150,16 +157,22 @@ export class WebhookService {
             )) as FluxerTextChannel;
             const webhook = await channel.createWebhook({ name });
             return { id: webhook.id, token: webhook.token! };
-        } catch (error: any) {
+        } catch (error: unknown) {
             logger.error('Error creating Fluxer webhook:', error);
             throw error;
         }
     }
 
-    async deleteDiscordWebhook(webhookId: string, webhookToken: string): Promise<void> {
+    async deleteDiscordWebhook(
+        webhookId: string,
+        webhookToken: string
+    ): Promise<void> {
         if (!this.discordClient) return;
         try {
-            const webhook = await this.discordClient.fetchWebhook(webhookId, webhookToken);
+            const webhook = await this.discordClient.fetchWebhook(
+                webhookId,
+                webhookToken
+            );
             await webhook.delete();
         } catch (error) {
             logger.error('Error deleting Discord webhook:', error);
@@ -167,10 +180,17 @@ export class WebhookService {
         }
     }
 
-    async deleteFluxerWebhook(webhookId: string, webhookToken: string): Promise<void> {
+    async deleteFluxerWebhook(
+        webhookId: string,
+        webhookToken: string
+    ): Promise<void> {
         if (!this.fluxerClient) return;
         try {
-            const webhook = FluxerWebhook.fromToken(this.fluxerClient, webhookId, webhookToken);
+            const webhook = FluxerWebhook.fromToken(
+                this.fluxerClient,
+                webhookId,
+                webhookToken
+            );
             await webhook.delete();
         } catch (error) {
             logger.error('Error deleting Fluxer webhook:', error);

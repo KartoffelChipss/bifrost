@@ -14,8 +14,8 @@ const DEFAULT_THRESHOLD = 0.5;
 function normalizeChannelName(name: string): string {
     return name
         .toLowerCase()
-        .replace(/^#/, '')           // strip leading #
-        .replace(/[-_.\s]+/g, ' ')   // separators → space
+        .replace(/^#/, '') // strip leading #
+        .replace(/[-_.\s]+/g, ' ') // separators → space
         .trim();
 }
 
@@ -74,7 +74,10 @@ export function matchChannels(
 
     for (let di = 0; di < discordChannels.length; di++) {
         for (let fi = 0; fi < fluxerChannels.length; fi++) {
-            const score = channelSimilarity(discordChannels[di].name, fluxerChannels[fi].name);
+            const score = channelSimilarity(
+                discordChannels[di].name,
+                fluxerChannels[fi].name
+            );
             if (score >= threshold) {
                 pairs.push({ di, fi, score });
             }

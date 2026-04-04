@@ -1,4 +1,9 @@
-import { Client, EmbedBuilder, Message, PermissionsBitField } from '@fluxerjs/core';
+import {
+    Client,
+    EmbedBuilder,
+    Message,
+    PermissionsBitField,
+} from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
 import DiscordEntityResolver from '../../../services/entityResolver/DiscordEntityResolver';
@@ -16,7 +21,11 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
     }
 
     private async buildChannelLines(
-        channelLinks: { fluxerChannelId: string; discordChannelId: string; linkId: string }[],
+        channelLinks: {
+            fluxerChannelId: string;
+            discordChannelId: string;
+            linkId: string;
+        }[],
         discordGuildId: string,
         showLinkId = false
     ): Promise<string[]> {
@@ -47,9 +56,12 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                 await message.reply({
                     embeds: [
                         new EmbedBuilder()
-                            .setDescription('You do not have permission to use this command.')
+                            .setDescription(
+                                'You do not have permission to use this command.'
+                            )
                             .setColor(EmbedColors.Error)
-                            .setFooter(footer).setTimestamp(),
+                            .setFooter(footer)
+                            .setTimestamp(),
                     ],
                 });
                 return;
@@ -64,7 +76,8 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                             new EmbedBuilder()
                                 .setDescription('No guild bridges configured.')
                                 .setColor(EmbedColors.Warning)
-                                .setFooter(footer).setTimestamp(),
+                                .setFooter(footer)
+                                .setTimestamp(),
                         ],
                     });
                     return;
@@ -168,46 +181,70 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
-                        .setDescription('This command must be used in a server.')
+                        .setDescription(
+                            'This command must be used in a server.'
+                        )
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
             return;
         }
 
-        if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
+        if (
+            !(await this.requirePermission(
+                message,
+                PermissionsBitField.Flags.ManageWebhooks,
+                'Manage Webhooks'
+            ))
+        )
+            return;
 
         try {
-            const guildLink = await this.linkService.getGuildLinkForFluxerGuild(message.guildId!);
+            const guildLink = await this.linkService.getGuildLinkForFluxerGuild(
+                message.guildId!
+            );
 
             if (!guildLink) {
                 await message.reply({
                     embeds: [
                         new EmbedBuilder()
-                            .setDescription('No guild bridge found for this server.')
+                            .setDescription(
+                                'No guild bridge found for this server.'
+                            )
                             .setColor(EmbedColors.Warning)
-                            .setFooter(footer).setTimestamp(),
+                            .setFooter(footer)
+                            .setTimestamp(),
                     ],
                 });
                 return;
             }
 
-            const channelLinks = await this.linkService.getChannelLinksForFluxerGuild(message.guildId!);
+            const channelLinks =
+                await this.linkService.getChannelLinksForFluxerGuild(
+                    message.guildId!
+                );
 
             if (channelLinks.length === 0) {
                 await message.reply({
                     embeds: [
                         new EmbedBuilder()
-                            .setDescription('No channel links found for this server.')
+                            .setDescription(
+                                'No channel links found for this server.'
+                            )
                             .setColor(EmbedColors.Warning)
-                            .setFooter(footer).setTimestamp(),
+                            .setFooter(footer)
+                            .setTimestamp(),
                     ],
                 });
                 return;
             }
 
-            const lines = await this.buildChannelLines(channelLinks, guildLink.discordGuildId);
+            const lines = await this.buildChannelLines(
+                channelLinks,
+                guildLink.discordGuildId
+            );
 
             await message.reply({
                 embeds: [
@@ -215,16 +252,20 @@ export default class ListFluxerCommandHandler extends FluxerCommandHandler {
                         .setTitle('Fluxer ↔ Discord | Linked Channels')
                         .setDescription(lines.join('\n\n'))
                         .setColor(EmbedColors.Info)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
-        } catch (err: any) {
+        } catch (err: unknown) {
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
-                        .setDescription(`Failed to list channel links: ${err.message}`)
+                        .setDescription(
+                            `Failed to list channel links: ${(err as Error).message}`
+                        )
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
             logger.error('Error listing channel links:', err);

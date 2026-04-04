@@ -10,7 +10,9 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
         const linkService = this.getLinkService();
         const webhookService = this.getWebhookService();
 
-        const linkedChannel = await linkService.getChannelLinkByFluxerChannelId(message.channelId);
+        const linkedChannel = await linkService.getChannelLinkByFluxerChannelId(
+            message.channelId
+        );
         if (!linkedChannel) return;
 
         // Build payload before attempting send so it can be queued on failure
@@ -18,7 +20,9 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
         if (message.type === 7) {
             msg = {
                 content: formatJoinMessage(
-                    message.author.username + '#' + message.author.discriminator,
+                    message.author.username +
+                        '#' +
+                        message.author.discriminator,
                     'fluxer'
                 ),
                 username: message.client.user?.username || 'Bifröst',
@@ -51,10 +55,14 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
                     channelLinkId: linkedChannel.id,
                 });
             }
-            this.metricsService?.messagesRelayed.inc({ direction: 'fluxer_to_discord' });
+            this.metricsService?.messagesRelayed.inc({
+                direction: 'fluxer_to_discord',
+            });
         } catch (error) {
             logger.error('Error relaying message to Discord:', error);
-            this.metricsService?.messageRelayErrors.inc({ direction: 'fluxer_to_discord' });
+            this.metricsService?.messageRelayErrors.inc({
+                direction: 'fluxer_to_discord',
+            });
             await this.queueService?.enqueue(
                 'fluxer_to_discord',
                 linkedChannel.id,

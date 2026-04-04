@@ -1,4 +1,9 @@
-import { Client, EmbedBuilder, Message, PermissionsBitField } from '@fluxerjs/core';
+import {
+    Client,
+    EmbedBuilder,
+    Message,
+    PermissionsBitField,
+} from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import DiscordEntityResolver from '../../../services/entityResolver/DiscordEntityResolver';
@@ -9,10 +14,19 @@ import { EmbedColors } from '../../../utils/embeds';
 
 type PendingLink =
     | { type: 'guild'; discordGuildId: string; guildName: string }
-    | { type: 'channel'; discordChannelId: string; channelName: string; guildLinkId: string; fluxerChannelId: string };
+    | {
+          type: 'channel';
+          discordChannelId: string;
+          channelName: string;
+          guildLinkId: string;
+          fluxerChannelId: string;
+      };
 
 export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
-    private pending = new Map<string, { action: PendingLink; timer: NodeJS.Timeout }>();
+    private pending = new Map<
+        string,
+        { action: PendingLink; timer: NodeJS.Timeout }
+    >();
 
     constructor(
         client: Client,
@@ -26,7 +40,10 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
     private setPending(userId: string, action: PendingLink) {
         const existing = this.pending.get(userId);
         if (existing) clearTimeout(existing.timer);
-        const timer = setTimeout(() => this.pending.delete(userId), 5 * 60 * 1000);
+        const timer = setTimeout(
+            () => this.pending.delete(userId),
+            5 * 60 * 1000
+        );
         this.pending.set(userId, { action, timer });
     }
 
@@ -132,16 +149,20 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                                     `Linked this channel ↔ **#${pending.channelName}** on Discord successfully.`
                                 )
                                 .setColor(EmbedColors.Success)
-                                .setFooter(footer).setTimestamp(),
+                                .setFooter(footer)
+                                .setTimestamp(),
                         ],
                     });
-                } catch (err: any) {
+                } catch (err: unknown) {
                     await message.reply({
                         embeds: [
                             new EmbedBuilder()
-                                .setDescription(`Failed to link channel: ${err.message}`)
+                                .setDescription(
+                                    `Failed to link channel: ${(err as Error).message}`
+                                )
                                 .setColor(EmbedColors.Error)
-                                .setFooter(footer).setTimestamp(),
+                                .setFooter(footer)
+                                .setTimestamp(),
                         ],
                     });
                     logger.error('Link channel failed:', err);
@@ -228,10 +249,11 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
                         new EmbedBuilder()
                             .setDescription(
                                 `Found Discord channel **#${channelName}**.\n` +
-                                `Run \`${COMMAND_PREFIX}link confirm\` to link this channel to it.`
+                                    `Run \`${COMMAND_PREFIX}link confirm\` to link this channel to it.`
                             )
                             .setColor(EmbedColors.Warning)
-                            .setFooter(footer).setTimestamp(),
+                            .setFooter(footer)
+                            .setTimestamp(),
                     ],
                 });
                 return;
@@ -245,9 +267,12 @@ export default class LinkFluxerCommandHandler extends FluxerCommandHandler {
         await message.reply({
             embeds: [
                 new EmbedBuilder()
-                    .setDescription(`Could not find a Discord guild or channel with ID \`${id}\`.${hint}`)
+                    .setDescription(
+                        `Could not find a Discord guild or channel with ID \`${id}\`.${hint}`
+                    )
                     .setColor(EmbedColors.Error)
-                    .setFooter(footer).setTimestamp(),
+                    .setFooter(footer)
+                    .setTimestamp(),
             ],
         });
     }

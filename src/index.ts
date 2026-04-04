@@ -37,8 +37,12 @@ import FluxerStatsService from './services/statsService/FluxerStatsService';
 const main = async () => {
     await initDatabase();
 
-    logger.debug(`GIT_COMMIT: ${GIT_COMMIT ?? 'not resolved — stats will show N/A'}`);
-    logger.debug(`REPO_URL: ${REPO_URL ?? 'not resolved — build link will be hash only'}`);
+    logger.debug(
+        `GIT_COMMIT: ${GIT_COMMIT ?? 'not resolved — stats will show N/A'}`
+    );
+    logger.debug(
+        `REPO_URL: ${REPO_URL ?? 'not resolved — build link will be hash only'}`
+    );
 
     const metricsService = new MetricsService(METRICS_PORT);
     const queueService = new MessageQueueService(QUEUE_TTL_MS);
@@ -54,8 +58,14 @@ const main = async () => {
     const messageLinkRepo = new SequelizeMessageLinkRepository();
 
     const cachedGuildLinkRepo = new CachedGuildLinkRepository(guildLinkRepo, 0);
-    const cachedChannelLinkRepo = new CachedChannelLinkRepository(channelLinkRepo, 0);
-    const cachedMessageLinkRepo = new CachedMessageLinkRepository(messageLinkRepo, 15_000);
+    const cachedChannelLinkRepo = new CachedChannelLinkRepository(
+        channelLinkRepo,
+        0
+    );
+    const cachedMessageLinkRepo = new CachedMessageLinkRepository(
+        messageLinkRepo,
+        15_000
+    );
 
     const linkService = new LinkService(
         cachedGuildLinkRepo,
@@ -67,10 +77,13 @@ const main = async () => {
     const fluxerEntityResolver = new FluxerEntityResolver();
     const discordStatsService = new DiscordStatsService();
     const fluxerStatsService = new FluxerStatsService();
-    const dbStatsService = new DbStatsService(cachedChannelLinkRepo, cachedMessageLinkRepo);
+    const dbStatsService = new DbStatsService(
+        cachedChannelLinkRepo,
+        cachedMessageLinkRepo
+    );
 
-    const FLUXER_DOWN_THRESHOLD = 5;        // 5 × 30s = 2.5 min before restart
-    const FLUXER_MAX_RESTARTS = 3;          // restart up to N times, then long backoff
+    const FLUXER_DOWN_THRESHOLD = 5; // 5 × 30s = 2.5 min before restart
+    const FLUXER_MAX_RESTARTS = 3; // restart up to N times, then long backoff
     const FLUXER_BACKOFF_MS = 20 * 60_000; // 20 min wait after exhausting restarts
 
     const fluxerArgs = {
@@ -93,16 +106,26 @@ const main = async () => {
     const doFluxerRestart = async () => {
         fluxerRestartState = 'restarting';
         fluxerRestartAttempts++;
-        logger.warn(`[Fluxer] Restarting client (attempt #${fluxerRestartAttempts})...`);
+        logger.warn(
+            `[Fluxer] Restarting client (attempt #${fluxerRestartAttempts})...`
+        );
         healthCheckService.resetFluxerDownCount();
-        try { fluxerClientRef.current?.destroy?.(); } catch {}
-        await new Promise(r => setTimeout(r, 3_000));
+        try {
+            fluxerClientRef.current?.destroy?.();
+            // eslint-disable-next-line no-empty
+        } catch {}
+        await new Promise((r) => setTimeout(r, 3_000));
         try {
             fluxerClientRef.current = await startFluxerClient(fluxerArgs);
-            logger.info(`[Fluxer] Client restarted successfully (attempt #${fluxerRestartAttempts})`);
+            logger.info(
+                `[Fluxer] Client restarted successfully (attempt #${fluxerRestartAttempts})`
+            );
             fluxerRestartState = 'idle';
         } catch (err) {
-            logger.error(`[Fluxer] Restart #${fluxerRestartAttempts} failed:`, err);
+            logger.error(
+                `[Fluxer] Restart #${fluxerRestartAttempts} failed:`,
+                err
+            );
             enterFluxerBackoff();
         }
     };
@@ -143,13 +166,21 @@ const main = async () => {
             enterFluxerBackoff();
             return;
         }
-        doFluxerRestart().catch((err) => logger.error('[Fluxer] Restart error:', err));
+        doFluxerRestart().catch((err) =>
+            logger.error('[Fluxer] Restart error:', err)
+        );
     });
 
     const perms = '536947712';
-    const discordBotInviteLink = generateDiscordBotInviteLink(DISCORD_APP_ID, perms);
+    const discordBotInviteLink = generateDiscordBotInviteLink(
+        DISCORD_APP_ID,
+        perms
+    );
     logger.info(`Discord Bot Invite Link: ${discordBotInviteLink}`);
-    const fluxerBotInviteLink = generateFluxerBotInviteLink(FLUXER_APP_ID, perms);
+    const fluxerBotInviteLink = generateFluxerBotInviteLink(
+        FLUXER_APP_ID,
+        perms
+    );
     logger.info(`Fluxer Bot Invite Link: ${fluxerBotInviteLink}`);
 
     const [, initialFluxerClient] = await Promise.all([

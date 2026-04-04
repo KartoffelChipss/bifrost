@@ -1,4 +1,9 @@
-import { Client, EmbedBuilder, Message, PermissionsBitField } from '@fluxerjs/core';
+import {
+    Client,
+    EmbedBuilder,
+    Message,
+    PermissionsBitField,
+} from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import FluxerCommandHandler from '../FluxerCommandHandler';
@@ -20,7 +25,10 @@ type PendingUnlink =
       };
 
 export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
-    private pending = new Map<string, { action: PendingUnlink; timer: NodeJS.Timeout }>();
+    private pending = new Map<
+        string,
+        { action: PendingUnlink; timer: NodeJS.Timeout }
+    >();
 
     constructor(
         client: Client,
@@ -62,16 +70,19 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                 await message.reply({
                     embeds: [
                         new EmbedBuilder()
-                            .setDescription(`No pending unlink action. Run \`${COMMAND_PREFIX}unlink <id>\` first.`)
+                            .setDescription(
+                                `No pending unlink action. Run \`${COMMAND_PREFIX}unlink <id>\` first.`
+                            )
                             .setColor(EmbedColors.Error)
-                            .setFooter(footer).setTimestamp(),
+                            .setFooter(footer)
+                            .setTimestamp(),
                     ],
                 });
                 return;
             }
 
             if (pending.type === 'guild') {
-                if (!await this.requireOwner(message)) return;
+                if (!(await this.requireOwner(message))) return;
                 try {
                     // Clean up webhooks for all channel links before removing the guild link
                     const channelLinks = await this.linkService
@@ -79,57 +90,111 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                         .catch(() => []);
                     for (const link of channelLinks) {
                         await this.webhookService
-                            .deleteDiscordWebhook(link.discordWebhookId, link.discordWebhookToken)
-                            .catch((err) => logger.error('Failed to delete Discord webhook during guild unlink:', err));
+                            .deleteDiscordWebhook(
+                                link.discordWebhookId,
+                                link.discordWebhookToken
+                            )
+                            .catch((err) =>
+                                logger.error(
+                                    'Failed to delete Discord webhook during guild unlink:',
+                                    err
+                                )
+                            );
                         await this.webhookService
-                            .deleteFluxerWebhook(link.fluxerWebhookId, link.fluxerWebhookToken)
-                            .catch((err) => logger.error('Failed to delete Fluxer webhook during guild unlink:', err));
+                            .deleteFluxerWebhook(
+                                link.fluxerWebhookId,
+                                link.fluxerWebhookToken
+                            )
+                            .catch((err) =>
+                                logger.error(
+                                    'Failed to delete Fluxer webhook during guild unlink:',
+                                    err
+                                )
+                            );
                     }
-                    await this.linkService.removeGuildLinkFromFluxer(message.guildId!);
+                    await this.linkService.removeGuildLinkFromFluxer(
+                        message.guildId!
+                    );
                     await message.reply({
                         embeds: [
                             new EmbedBuilder()
-                                .setDescription(`Server bridge removed. All channel links have been deleted.`)
+                                .setDescription(
+                                    `Server bridge removed. All channel links have been deleted.`
+                                )
                                 .setColor(EmbedColors.Success)
-                                .setFooter(footer).setTimestamp(),
+                                .setFooter(footer)
+                                .setTimestamp(),
                         ],
                     });
-                } catch (err: any) {
+                } catch (err: unknown) {
                     await message.reply({
                         embeds: [
                             new EmbedBuilder()
-                                .setDescription(`Failed to unlink guild: ${err.message}`)
+                                .setDescription(
+                                    `Failed to unlink guild: ${(err as Error).message}`
+                                )
                                 .setColor(EmbedColors.Error)
-                                .setFooter(footer).setTimestamp(),
+                                .setFooter(footer)
+                                .setTimestamp(),
                         ],
                     });
                     logger.error('Unlink guild failed:', err);
                 }
             } else {
-                if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
+                if (
+                    !(await this.requirePermission(
+                        message,
+                        PermissionsBitField.Flags.ManageWebhooks,
+                        'Manage Webhooks'
+                    ))
+                )
+                    return;
                 try {
                     await this.webhookService
-                        .deleteDiscordWebhook(pending.discordWebhookId, pending.discordWebhookToken)
-                        .catch((err) => logger.error('Failed to delete Discord webhook during channel unlink:', err));
+                        .deleteDiscordWebhook(
+                            pending.discordWebhookId,
+                            pending.discordWebhookToken
+                        )
+                        .catch((err) =>
+                            logger.error(
+                                'Failed to delete Discord webhook during channel unlink:',
+                                err
+                            )
+                        );
                     await this.webhookService
-                        .deleteFluxerWebhook(pending.fluxerWebhookId, pending.fluxerWebhookToken)
-                        .catch((err) => logger.error('Failed to delete Fluxer webhook during channel unlink:', err));
-                    await this.linkService.removeChannelLinkForFluxer(message.guildId!, pending.linkId);
+                        .deleteFluxerWebhook(
+                            pending.fluxerWebhookId,
+                            pending.fluxerWebhookToken
+                        )
+                        .catch((err) =>
+                            logger.error(
+                                'Failed to delete Fluxer webhook during channel unlink:',
+                                err
+                            )
+                        );
+                    await this.linkService.removeChannelLinkForFluxer(
+                        message.guildId!,
+                        pending.linkId
+                    );
                     await message.reply({
                         embeds: [
                             new EmbedBuilder()
                                 .setDescription(`Channel bridge removed.`)
                                 .setColor(EmbedColors.Success)
-                                .setFooter(footer).setTimestamp(),
+                                .setFooter(footer)
+                                .setTimestamp(),
                         ],
                     });
-                } catch (err: any) {
+                } catch (err: unknown) {
                     await message.reply({
                         embeds: [
                             new EmbedBuilder()
-                                .setDescription(`Failed to unlink channel: ${err.message}`)
+                                .setDescription(
+                                    `Failed to unlink channel: ${(err as Error).message}`
+                                )
                                 .setColor(EmbedColors.Error)
-                                .setFooter(footer).setTimestamp(),
+                                .setFooter(footer)
+                                .setTimestamp(),
                         ],
                     });
                     logger.error('Unlink channel failed:', err);
@@ -146,41 +211,57 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                     new EmbedBuilder()
                         .setDescription(
                             `Usage: \`${COMMAND_PREFIX}unlink <id>\`\n` +
-                            `> Provide the Discord guild ID to unbridge servers, or a Discord channel ID to remove a channel link.\n` +
-                            `> Then run \`${COMMAND_PREFIX}unlink confirm\` to proceed.\n` +
-                            `> Use \`${COMMAND_PREFIX}list\` to see active links and their IDs.`
+                                `> Provide the Discord guild ID to unbridge servers, or a Discord channel ID to remove a channel link.\n` +
+                                `> Then run \`${COMMAND_PREFIX}unlink confirm\` to proceed.\n` +
+                                `> Use \`${COMMAND_PREFIX}list\` to see active links and their IDs.`
                         )
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
             return;
         }
 
         // 1. Check if ID matches a guild link by Discord guild ID
-        const guildLink = await this.linkService.getGuildLinkForDiscordGuild(id).catch(() => null);
+        const guildLink = await this.linkService
+            .getGuildLinkForDiscordGuild(id)
+            .catch(() => null);
         if (guildLink) {
-            if (!await this.requireOwner(message)) return;
-            this.setPending(message.author.id, { type: 'guild', discordGuildId: id });
+            if (!(await this.requireOwner(message))) return;
+            this.setPending(message.author.id, {
+                type: 'guild',
+                discordGuildId: id,
+            });
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setDescription(
                             `This will remove the bridge between this Fluxer server and Discord guild \`${id}\`, ` +
-                            `including **all** channel links.\n` +
-                            `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
+                                `including **all** channel links.\n` +
+                                `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
             return;
         }
 
         // 2. Check if ID matches a channel link by Discord channel ID
-        const channelLink = await this.linkService.getChannelLinkByDiscordChannelId(id).catch(() => null);
+        const channelLink = await this.linkService
+            .getChannelLinkByDiscordChannelId(id)
+            .catch(() => null);
         if (channelLink) {
-            if (!await this.requirePermission(message, PermissionsBitField.Flags.ManageWebhooks, 'Manage Webhooks')) return;
+            if (
+                !(await this.requirePermission(
+                    message,
+                    PermissionsBitField.Flags.ManageWebhooks,
+                    'Manage Webhooks'
+                ))
+            )
+                return;
             this.setPending(message.author.id, {
                 type: 'channel',
                 linkId: channelLink.linkId,
@@ -196,10 +277,11 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                     new EmbedBuilder()
                         .setDescription(
                             `This will remove the channel bridge for Discord channel \`${id}\` ↔ <#${channelLink.fluxerChannelId}>.\n` +
-                            `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
+                                `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
             return;
@@ -210,10 +292,11 @@ export default class UnlinkFluxerCommandHandler extends FluxerCommandHandler {
                 new EmbedBuilder()
                     .setDescription(
                         `No active link found for ID \`${id}\`.\n` +
-                        `Use \`${COMMAND_PREFIX}list\` to see active links.`
+                            `Use \`${COMMAND_PREFIX}list\` to see active links.`
                     )
                     .setColor(EmbedColors.Error)
-                    .setFooter(footer).setTimestamp(),
+                    .setFooter(footer)
+                    .setTimestamp(),
             ],
         });
     }

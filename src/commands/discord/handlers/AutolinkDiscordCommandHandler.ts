@@ -1,9 +1,16 @@
-import { ChannelType, Client, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import {
+    ChannelType,
+    Client,
+    EmbedBuilder,
+    PermissionFlagsBits,
+} from 'discord.js';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import FluxerEntityResolver from '../../../services/entityResolver/FluxerEntityResolver';
 import { matchChannels, ChannelInfo } from '../../../utils/channelMatcher';
-import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
+import DiscordCommandHandler, {
+    DiscordCommandHandlerMessage,
+} from '../DiscordCommandHandler';
 import { COMMAND_PREFIX } from '../../../utils/env';
 import logger from '../../../utils/logging/logger';
 import { EmbedColors } from '../../../utils/embeds';
@@ -123,8 +130,9 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                                 ` and **${fluxerTextChannels.length}** unlinked Fluxer text channels.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer).setTimestamp()
-                ]
+                        .setFooter(footer)
+                        .setTimestamp(),
+                ],
             });
             return;
         }
@@ -134,8 +142,10 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                 (p) =>
                     `> \`#${p.discord.name}\` ↔ \`#${p.fluxer.name}\` (${Math.round(p.score * 100)}% match)`
             );
-            const unmatchedDiscord = discordTextChannels.length - proposals.length;
-            const unmatchedFluxer = fluxerTextChannels.length - proposals.length;
+            const unmatchedDiscord =
+                discordTextChannels.length - proposals.length;
+            const unmatchedFluxer =
+                fluxerTextChannels.length - proposals.length;
             const unmatchedTotal = unmatchedDiscord + unmatchedFluxer;
 
             await message.reply({
@@ -155,8 +165,9 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
                             ].join('\n')
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer).setTimestamp()
-                ]
+                        .setFooter(footer)
+                        .setTimestamp(),
+                ],
             });
             return;
         }
@@ -167,14 +178,16 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
 
         for (const proposal of proposals) {
             try {
-                const discordWebhook = await this.webhookService.createDiscordWebhook(
-                    proposal.discord.id,
-                    `Fluxer Bridge Webhook for channel ${proposal.discord.id}`
-                );
-                const fluxerWebhook = await this.webhookService.createFluxerWebhook(
-                    proposal.fluxer.id,
-                    `Discord Bridge Webhook for channel ${proposal.fluxer.id}`
-                );
+                const discordWebhook =
+                    await this.webhookService.createDiscordWebhook(
+                        proposal.discord.id,
+                        `Fluxer Bridge Webhook for channel ${proposal.discord.id}`
+                    );
+                const fluxerWebhook =
+                    await this.webhookService.createFluxerWebhook(
+                        proposal.fluxer.id,
+                        `Discord Bridge Webhook for channel ${proposal.fluxer.id}`
+                    );
                 await this.linkService.createChannelLink({
                     guildLinkId: guildLink.id,
                     discordChannelId: proposal.discord.id,
@@ -208,9 +221,14 @@ export default class AutolinkDiscordCommandHandler extends DiscordCommandHandler
             embeds: [
                 new EmbedBuilder()
                     .setDescription(descriptionLines.join('\n'))
-                    .setColor(errors.length > 0 ? EmbedColors.Warning : EmbedColors.Success)
-                    .setFooter(footer).setTimestamp()
-            ]
+                    .setColor(
+                        errors.length > 0
+                            ? EmbedColors.Warning
+                            : EmbedColors.Success
+                    )
+                    .setFooter(footer)
+                    .setTimestamp(),
+            ],
         });
     }
 }

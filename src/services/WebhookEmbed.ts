@@ -227,7 +227,9 @@ export default class WebhookEmbed {
         };
     }
 
-    public static fromPlainObject(obj: ReturnType<WebhookEmbed['toPlainObject']>): WebhookEmbed {
+    public static fromPlainObject(
+        obj: ReturnType<WebhookEmbed['toPlainObject']>
+    ): WebhookEmbed {
         return new WebhookEmbed({
             ...obj,
             timestamp: obj.timestamp ? new Date(obj.timestamp) : null,

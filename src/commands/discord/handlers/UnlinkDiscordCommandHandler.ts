@@ -1,7 +1,9 @@
 import { Client, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
-import DiscordCommandHandler, { DiscordCommandHandlerMessage } from '../DiscordCommandHandler';
+import DiscordCommandHandler, {
+    DiscordCommandHandlerMessage,
+} from '../DiscordCommandHandler';
 import { COMMAND_PREFIX } from '../../../utils/env';
 import logger from '../../../utils/logging/logger';
 import { EmbedColors } from '../../../utils/embeds';
@@ -20,7 +22,10 @@ type PendingUnlink =
       };
 
 export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
-    private pending = new Map<string, { action: PendingUnlink; timer: NodeJS.Timeout }>();
+    private pending = new Map<
+        string,
+        { action: PendingUnlink; timer: NodeJS.Timeout }
+    >();
 
     constructor(
         client: Client,
@@ -33,7 +38,10 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
     private setPending(userId: string, action: PendingUnlink) {
         const existing = this.pending.get(userId);
         if (existing) clearTimeout(existing.timer);
-        const timer = setTimeout(() => this.pending.delete(userId), 5 * 60 * 1000);
+        const timer = setTimeout(
+            () => this.pending.delete(userId),
+            5 * 60 * 1000
+        );
         this.pending.set(userId, { action, timer });
     }
 
@@ -59,16 +67,19 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                 await message.reply({
                     embeds: [
                         new EmbedBuilder()
-                            .setDescription(`No pending unlink action. Run \`${COMMAND_PREFIX}unlink <id>\` first.`)
+                            .setDescription(
+                                `No pending unlink action. Run \`${COMMAND_PREFIX}unlink <id>\` first.`
+                            )
                             .setColor(EmbedColors.Error)
-                            .setFooter(footer).setTimestamp()
-                    ]
+                            .setFooter(footer)
+                            .setTimestamp(),
+                    ],
                 });
                 return;
             }
 
             if (pending.type === 'guild') {
-                if (!await this.requireOwner(message)) return;
+                if (!(await this.requireOwner(message))) return;
                 try {
                     // Clean up webhooks for all channel links before removing the guild link
                     const channelLinks = await this.linkService
@@ -197,41 +208,57 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                     new EmbedBuilder()
                         .setDescription(
                             `Usage: \`${COMMAND_PREFIX}unlink <id>\`\n` +
-                            `> Provide the Fluxer guild ID to unbridge servers, or a Fluxer channel ID to remove a channel link.\n` +
-                            `> Then run \`${COMMAND_PREFIX}unlink confirm\` to proceed.\n` +
-                            `> Use \`${COMMAND_PREFIX}list\` to see active links and their IDs.`
+                                `> Provide the Fluxer guild ID to unbridge servers, or a Fluxer channel ID to remove a channel link.\n` +
+                                `> Then run \`${COMMAND_PREFIX}unlink confirm\` to proceed.\n` +
+                                `> Use \`${COMMAND_PREFIX}list\` to see active links and their IDs.`
                         )
                         .setColor(EmbedColors.Error)
-                        .setFooter(footer).setTimestamp()
-                ]
+                        .setFooter(footer)
+                        .setTimestamp(),
+                ],
             });
             return;
         }
 
         // 1. Check if ID matches a guild link by Fluxer guild ID
-        const guildLink = await this.linkService.getGuildLinkForFluxerGuild(id).catch(() => null);
+        const guildLink = await this.linkService
+            .getGuildLinkForFluxerGuild(id)
+            .catch(() => null);
         if (guildLink) {
-            if (!await this.requireOwner(message)) return;
-            this.setPending(message.author.id, { type: 'guild', fluxerGuildId: id });
+            if (!(await this.requireOwner(message))) return;
+            this.setPending(message.author.id, {
+                type: 'guild',
+                fluxerGuildId: id,
+            });
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setDescription(
                             `This will remove the bridge between this Discord server and Fluxer guild \`${id}\`, ` +
-                            `including **all** channel links.\n` +
-                            `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
+                                `including **all** channel links.\n` +
+                                `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer).setTimestamp()
-                ]
+                        .setFooter(footer)
+                        .setTimestamp(),
+                ],
             });
             return;
         }
 
         // 2. Check if ID matches a channel link by Fluxer channel ID
-        const channelLink = await this.linkService.getChannelLinkByFluxerChannelId(id).catch(() => null);
+        const channelLink = await this.linkService
+            .getChannelLinkByFluxerChannelId(id)
+            .catch(() => null);
         if (channelLink) {
-            if (!await this.requirePermission(message, PermissionFlagsBits.ManageWebhooks, 'Manage Webhooks')) return;
+            if (
+                !(await this.requirePermission(
+                    message,
+                    PermissionFlagsBits.ManageWebhooks,
+                    'Manage Webhooks'
+                ))
+            )
+                return;
             this.setPending(message.author.id, {
                 type: 'channel',
                 linkId: channelLink.linkId,
@@ -247,11 +274,12 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                     new EmbedBuilder()
                         .setDescription(
                             `This will remove the channel bridge for Fluxer channel \`${id}\` ↔ <#${channelLink.discordChannelId}>.\n` +
-                            `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
+                                `Run \`${COMMAND_PREFIX}unlink confirm\` to proceed.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer).setTimestamp()
-                ]
+                        .setFooter(footer)
+                        .setTimestamp(),
+                ],
             });
             return;
         }
@@ -261,11 +289,12 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
                 new EmbedBuilder()
                     .setDescription(
                         `No active link found for ID \`${id}\`.\n` +
-                        `Use \`${COMMAND_PREFIX}list\` to see active links.`
+                            `Use \`${COMMAND_PREFIX}list\` to see active links.`
                     )
                     .setColor(EmbedColors.Error)
-                    .setFooter(footer).setTimestamp()
-            ]
+                    .setFooter(footer)
+                    .setTimestamp(),
+            ],
         });
     }
 }

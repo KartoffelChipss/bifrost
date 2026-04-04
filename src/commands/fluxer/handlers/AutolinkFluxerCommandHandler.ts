@@ -1,5 +1,10 @@
 import { ChannelType } from 'discord.js';
-import { Client, EmbedBuilder, Message, PermissionsBitField } from '@fluxerjs/core';
+import {
+    Client,
+    EmbedBuilder,
+    Message,
+    PermissionsBitField,
+} from '@fluxerjs/core';
 import { LinkService } from '../../../services/LinkService';
 import { WebhookService } from '../../../services/WebhookService';
 import DiscordEntityResolver from '../../../services/entityResolver/DiscordEntityResolver';
@@ -103,12 +108,19 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
         const allDiscordChannels = await discordGuild.channels.fetch();
         const discordTextChannels: ChannelInfo[] = [];
         for (const [, ch] of allDiscordChannels) {
-            if (ch && ch.type === ChannelType.GuildText && !linkedDiscordIds.has(ch.id)) {
+            if (
+                ch &&
+                ch.type === ChannelType.GuildText &&
+                !linkedDiscordIds.has(ch.id)
+            ) {
                 discordTextChannels.push({ id: ch.id, name: ch.name });
             }
         }
 
-        const proposals = matchChannels(discordTextChannels, fluxerTextChannels);
+        const proposals = matchChannels(
+            discordTextChannels,
+            fluxerTextChannels
+        );
 
         if (proposals.length === 0) {
             await message.reply({
@@ -119,7 +131,8 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
                                 ` and **${fluxerTextChannels.length}** unlinked Fluxer text channels.`
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
             return;
@@ -130,8 +143,10 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
                 (p) =>
                     `> \`#${p.discord.name}\` ↔ \`#${p.fluxer.name}\` (${Math.round(p.score * 100)}% match)`
             );
-            const unmatchedDiscord = discordTextChannels.length - proposals.length;
-            const unmatchedFluxer = fluxerTextChannels.length - proposals.length;
+            const unmatchedDiscord =
+                discordTextChannels.length - proposals.length;
+            const unmatchedFluxer =
+                fluxerTextChannels.length - proposals.length;
             const unmatchedTotal = unmatchedDiscord + unmatchedFluxer;
 
             await message.reply({
@@ -151,7 +166,8 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
                             ].join('\n')
                         )
                         .setColor(EmbedColors.Warning)
-                        .setFooter(footer).setTimestamp(),
+                        .setFooter(footer)
+                        .setTimestamp(),
                 ],
             });
             return;
@@ -183,13 +199,13 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
                     fluxerWebhookToken: fluxerWebhook.token,
                 });
                 successCount++;
-            } catch (err: any) {
+            } catch (err: unknown) {
                 logger.error(
                     `Autolink failed for #${proposal.discord.name} ↔ #${proposal.fluxer.name}:`,
                     err
                 );
                 errors.push(
-                    `\`#${proposal.discord.name}\` ↔ \`#${proposal.fluxer.name}\`: ${err.message}`
+                    `\`#${proposal.discord.name}\` ↔ \`#${proposal.fluxer.name}\`: ${(err as Error).message}`
                 );
             }
         }
@@ -206,8 +222,13 @@ export default class AutolinkFluxerCommandHandler extends FluxerCommandHandler {
             embeds: [
                 new EmbedBuilder()
                     .setDescription(descriptionLines.join('\n'))
-                    .setColor(errors.length > 0 ? EmbedColors.Warning : EmbedColors.Success)
-                    .setFooter(footer).setTimestamp(),
+                    .setColor(
+                        errors.length > 0
+                            ? EmbedColors.Warning
+                            : EmbedColors.Success
+                    )
+                    .setFooter(footer)
+                    .setTimestamp(),
             ],
         });
     }

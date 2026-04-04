@@ -39,4 +39,9 @@ MessageLinkModel.belongsTo(ChannelLinkModel, {
     as: 'channelLink',
 });
 
-export { GuildLinkModel, ChannelLinkModel, MessageLinkModel, QueuedMessageModel };
+export {
+    GuildLinkModel,
+    ChannelLinkModel,
+    MessageLinkModel,
+    QueuedMessageModel,
+};

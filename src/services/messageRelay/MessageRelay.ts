@@ -7,7 +7,10 @@ import MessageQueueService from '../MessageQueueService';
 export default abstract class MessageRelay<RelayMessage> {
     private readonly linkService: LinkService;
     private readonly webhookService: WebhookService;
-    private readonly messageTransformer: MessageTransformer<RelayMessage, WebhookMessageData>;
+    private readonly messageTransformer: MessageTransformer<
+        RelayMessage,
+        WebhookMessageData
+    >;
     protected readonly metricsService: MetricsService | null;
     protected readonly queueService: MessageQueueService | null;
 
@@ -20,7 +23,10 @@ export default abstract class MessageRelay<RelayMessage> {
     }: {
         linkService: LinkService;
         webhookService: WebhookService;
-        messageTransformer: MessageTransformer<RelayMessage, WebhookMessageData>;
+        messageTransformer: MessageTransformer<
+            RelayMessage,
+            WebhookMessageData
+        >;
         metricsService?: MetricsService;
         queueService?: MessageQueueService;
     }) {
@@ -41,7 +47,10 @@ export default abstract class MessageRelay<RelayMessage> {
         return this.webhookService;
     }
 
-    protected getMessageTransformer(): MessageTransformer<RelayMessage, WebhookMessageData> {
+    protected getMessageTransformer(): MessageTransformer<
+        RelayMessage,
+        WebhookMessageData
+    > {
         return this.messageTransformer;
     }
 }
