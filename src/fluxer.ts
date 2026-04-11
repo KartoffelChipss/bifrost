@@ -185,6 +185,11 @@ const startFluxerClient = async ({
         );
         if (!linkedChannel) return;
 
+        const guildLink = await linkService.getGuildLinkById(
+            linkedChannel.guildLinkId
+        );
+        if (!guildLink) return;
+
         const webhook = await webhookService.getDiscordWebhook(
             linkedChannel.discordWebhookId,
             linkedChannel.discordWebhookToken
@@ -196,7 +201,14 @@ const startFluxerClient = async ({
             return;
         }
 
-        const newMsg = await messageTransformer.transformMessage(newMessage);
+        const discordEmojis = await discordEntityResolver.fetchEmojis(
+            guildLink.discordGuildId
+        );
+
+        const newMsg = await messageTransformer.transformMessage(
+            newMessage,
+            discordEmojis
+        );
         try {
             await webhookService.editMessageViaDiscordWebhook(
                 webhook,
