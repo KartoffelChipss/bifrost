@@ -197,6 +197,53 @@ const startDiscordClient = async ({
         }
     });
 
+    client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
+        if (newMessage.webhookId) return;
+
+        const linkedMessage =
+            await linkService.getMessageLinkByDiscordMessageId(newMessage.id);
+        if (!linkedMessage) return;
+
+        const linkedChannel = await linkService.getChannelLinkById(
+            linkedMessage.channelLinkId
+        );
+        if (!linkedChannel) return;
+
+        const guildLink = await linkService.getGuildLinkById(
+            linkedChannel.guildLinkId
+        );
+        if (!guildLink) return;
+
+        const webhook = await webhookService.getFluxerWebhook(
+            linkedChannel.fluxerWebhookId,
+            linkedChannel.fluxerWebhookToken
+        );
+        if (!webhook) {
+            logger.warn(
+                `No webhook found for linked channel ${linkedChannel.linkId}, cannot relay message update`
+            );
+            return;
+        }
+
+        const fluxerEmojis = await fluxerEntityResolver.fetchEmojis(
+            guildLink.fluxerGuildId
+        );
+
+        const newMsg = await messageTransformer.transformMessage(
+            newMessage,
+            fluxerEmojis
+        );
+        try {
+            await webhookService.editMessageViaFluxerWebhook(
+                webhook,
+                linkedMessage.fluxerMessageId,
+                newMsg
+            );
+        } catch (error) {
+            logger.error('Error editing message via Fluxer webhook:', error);
+        }
+    });
+
     client.on(Events.MessageCreate, async (message) => {
         if (message.author.id === client.user?.id) return;
 

@@ -263,4 +263,36 @@ export class WebhookService {
             throw error;
         }
     }
+
+    async editMessageViaFluxerWebhook(
+        webhook: FluxerWebhook,
+        messageId: string,
+        data: WebhookMessageData
+    ): Promise<void> {
+        try {
+            const msg = await webhook.editMessage(messageId, {
+                content: data.content,
+                attachments:
+                    data.attachments?.map((attachment, index) => ({
+                        id: index,
+                        name: attachment.name,
+                        filename: attachment.name,
+                        flags: attachment.spoiler
+                            ? MessageAttachmentFlags.IS_SPOILER
+                            : undefined,
+                    })) || [],
+                embeds:
+                    data.embeds?.map((embed) => embed.toFluxerEmbed()) || [],
+            });
+
+            if (!msg) {
+                throw new Error(
+                    'Did not receive message object after editing via Fluxer webhook'
+                );
+            }
+        } catch (error: unknown) {
+            logger.error('Error editing message via Fluxer webhook:', error);
+            throw error;
+        }
+    }
 }

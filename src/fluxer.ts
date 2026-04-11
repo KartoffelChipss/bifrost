@@ -175,6 +175,8 @@ const startFluxerClient = async ({
     });
 
     client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
+        if (newMessage.webhookId) return;
+
         const linkedMessage = await linkService.getMessageLinkByFluxerMessageId(
             newMessage.id
         );
@@ -216,7 +218,7 @@ const startFluxerClient = async ({
                 newMsg
             );
         } catch (error) {
-            logger.error('Error relaying message update to Discord:', error);
+            logger.error('Error editing message via Discord webhook:', error);
         }
     });
 
