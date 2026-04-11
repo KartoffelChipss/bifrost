@@ -87,6 +87,7 @@ const startDiscordClient = async ({
         messageTransformer,
         metricsService,
         queueService,
+        fluxerEntityResolver,
     });
 
     const commandRegistry = new CommandRegistry<DiscordCommandHandler>();

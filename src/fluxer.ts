@@ -79,6 +79,7 @@ const startFluxerClient = async ({
         messageTransformer,
         metricsService,
         queueService,
+        discordEntityResolver,
     });
 
     const commandRegistry = new CommandRegistry<FluxerCommandHandler>();
