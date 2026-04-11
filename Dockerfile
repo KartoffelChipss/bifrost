@@ -29,10 +29,4 @@ ENV APP_VERSION=$APP_VERSION
 ENV CONFIG_PATH=/config
 ENV NODE_ENV=production
 
-# Build-time metadata — pass via: docker build --build-arg GIT_COMMIT=$(git rev-parse HEAD) ...
-ARG GIT_COMMIT
-ARG REPO_URL
-ENV GIT_COMMIT=$GIT_COMMIT
-ENV REPO_URL=$REPO_URL
-
 CMD ["node", "dist/index.js"]
