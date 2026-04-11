@@ -6,6 +6,7 @@ export default defineConfig({
     title: 'Bifröst',
     description: 'A bridge between Discord and Fluxer',
     appearance: 'force-dark',
+    ignoreDeadLinks: true,
     themeConfig: {
         // https://vitepress.dev/reference/default-theme-config
         logo: '/logo.svg',
