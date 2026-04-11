@@ -28,145 +28,14 @@ You can find the docs here: https://bifrost-bot.com/
 
 ### Hosted Bot
 
-1. Invite the Bifröst bot to your Fluxer server using [this link](https://bifrost-bot.com/invite/fluxer) and to your Discord server using [this link](https://bifrost-bot.com/invite/discord).
-2. Use the `!b linkguild <discordGuildId>` command in your Fluxer server to link your Discord server.
-
-    You can find your Discord Guild ID by enabling Developer Mode in Discord settings and right-clicking on your server name. (Alternatively you can also use `!b linkguild <fluxerGuildId>` on your Discord server to link your Fluxer server)
-
-3. Use the `!b linkchannel <discordChannelId> ` command in a Fluxer channel to link it to a Discord channel. You can also do this from Discord using `!b linkchannel <fluxerChannelId>` to link a Fluxer channel to the current Discord channel.
-
-    You can find your Discord Channel ID by enabling Developer Mode in Discord settings and right-clicking on the channel name.
-
-4. That's it! Your channels are now linked and messages will be synced between them. 🎉
+You can find a guide on how to use the hosted bot here: https://bifrost-bot.com/guide/getting-started.html
 
 > [!NOTE]  
 > You can check the uptime of the hosted instance [here](https://status.bifrost-bot.com)
 
 ### Self-Hosting with Docker
 
-#### 1. Create a Project Directory
-
-```bash
-mkdir bifrost
-cd bifrost
-```
-
----
-
-#### 2. Create a Fluxer Bot
-
-1. Open **Fluxer**.
-2. Go to **User Settings → Applications**.
-3. Click **Create Application**.
-4. Copy the **Bot Token** and **Application ID**, you’ll need it for the `.env` file.
-
----
-
-#### 3. Create a Discord Bot
-
-1. Go to the **Discord Developer Portal**:  
-   https://discord.com/developers/applications
-2. Click **New Application**.
-3. Go to **Bot -> Add Bot**.
-4. Copy the **Bot Token**.
-5. Under **Privileged Gateway Intents**, enable:
-    - Message Content Intent
-6. Copy the **Bot Token** and **Application ID**, you’ll need it for the `.env` file.
-
----
-
-#### 4. Create the `.env` file
-
-Create a `.env` file in the project root:
-
-```bash
-touch .env
-```
-
-Open it and add your credentials:
-
-```env
-# Fluxer
-BF_FLUXER_TOKEN="Your Fluxer Bot Token"
-BF_FLUXER_APP_ID="Your Fluxer Application ID"
-
-# Discord
-BF_DISCORD_TOKEN="Your Discord Bot Token"
-BF_DISCORD_APP_ID="Your Discord Application ID"
-```
-
-You can also use `.env.example` as a reference for all environment variables.
-
----
-
-#### 5. Create the docker-compose.yml
-
-Create a `docker-compose.yml` file:
-
-```yml
-services:
-    bifrost:
-        image: kartoffelchipss/bifrost:latest
-        container_name: bifrost
-        restart: unless-stopped
-        env_file:
-            - .env
-        volumes:
-            - ./config:/config
-```
-
-Alternative: Download the compose file from GitHub
-
-Instead of creating the file manually, you can download the official compose file from the repository:
-
-```bash
-curl -O https://raw.githubusercontent.com/KartoffelChipss/bifrost/main/docker-compose.yml
-```
-
-Alternative: All-in-one setup with PostgreSQL
-
-If you want a complete setup with PostgreSQL included, you can use the all-in-one compose file:
-
-```bash
-curl -o docker-compose.yml https://raw.githubusercontent.com/Kartoffelchipss/bifrost/main/docker-compose-aio.yml
-```
-
-This version automatically starts:
-
-- Bifröst
-- PostgreSQL database
-
----
-
-#### 6. Start the Container
-
-Run:
-
-```bash
-docker compose up -d
-```
-
-Docker will automatically pull the latest Bifröst image from Docker Hub and start the container.
-
-You can view the logs with:
-
-```bash
-docker compose logs -f
-```
-
-Or find the log files in the `config/logs` directory.
-
-#### 7. Invite the Discord and Fluxer Bot
-
-After the container starts, the invite links for both the Discord and Fluxer bots will be printed in the logs.
-
-Use these links to invite the bots to your servers.
-
----
-
-### 8. Link Servers and Channels
-
-Follow the same linking steps as the hosted bot to connect your Fluxer and Discord servers.
+You can find a guide on how to self-host the bot using Docker here: https://bifrost-bot.com/guide/self-hosting/
 
 ## License
 

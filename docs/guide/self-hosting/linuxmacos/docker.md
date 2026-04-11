@@ -1,6 +1,11 @@
-# Self-Hosting Bifröst
+# Self-Hosting Bifröst using Docker on Unix-based Systems
 
-This guide will walk you through the steps to self-host Bifröst, the bridge between Discord and Fluxer. By following this guide, you can run Bifröst on your own server using Docker for full control over your deployment.
+This guide will walk you through the steps to self-host Bifröst using docker on a Unix-based system.
+
+## Prerequisites
+
+- Docker installed on your system. You can follow the [official Docker installation guide for Unix-based systems](https://docs.docker.com/engine/install/) or install [Docker Desktop](https://www.docker.com/products/docker-desktop/) if you prefer a graphical interface.
+- Basic knowledge of using the terminal and Docker.
 
 ## 1. Create a Project Directory
 
@@ -47,7 +52,7 @@ BF_DISCORD_TOKEN="Your Discord Bot Token"
 BF_DISCORD_APP_ID="Your Discord Application ID"
 ```
 
-You can also use `.env.example` as a reference for all environment variables.
+You can also use [.env.example](https://github.com/KartoffelChipss/bifrost/blob/main/.env.example) as a reference for all available environment variables.
 
 ## 5. Create the docker-compose.yml
 
