@@ -11,16 +11,55 @@ export default defineConfig({
         logo: '/logo.svg',
         nav: [
             { text: 'Home', link: '/' },
-            { text: 'Guide', link: '/guide/getting-started' },
+            { text: 'Docs', link: '/guide/getting-started' },
             { text: 'Legal', link: '/legal' },
         ],
-
         sidebar: [
             {
                 text: 'Guide',
                 items: [
                     { text: 'Getting Started', link: '/guide/getting-started' },
-                    { text: 'Self Hosting Guide', link: '/guide/self-hosting' },
+                    {
+                        text: 'Using the Hosted Instance',
+                        link: '/guide/hosted-instance',
+                    },
+                    {
+                        text: 'Self Hosting',
+                        collapsed: true,
+                        items: [
+                            {
+                                text: 'Linux/Macos',
+                                base: '/guide/self-hosting/linuxmacos/',
+                                collapsed: false,
+                                items: [
+                                    {
+                                        text: 'Docker Setup',
+                                        link: '/docker',
+                                    },
+                                    {
+                                        text: 'Manual Setup',
+                                        link: '/manual',
+                                    },
+                                ],
+                            },
+                            {
+                                text: 'Windows',
+                                base: '/guide/self-hosting/windows/',
+                                collapsed: false,
+                                items: [
+                                    {
+                                        text: 'Docker Setup',
+                                        link: '/docker',
+                                    },
+                                    {
+                                        text: 'Manual Setup',
+                                        link: '/manual',
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                    { text: 'Linking Your Servers', link: '/guide/linking' },
                 ],
             },
         ],
