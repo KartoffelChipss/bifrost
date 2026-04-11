@@ -79,7 +79,14 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
             }
 
             if (pending.type === 'guild') {
-                if (!(await this.requireOwner(message))) return;
+                if (
+                    !(await this.requirePermission(
+                        message,
+                        PermissionFlagsBits.ManageGuild,
+                        'Manage Guild'
+                    ))
+                )
+                    return;
                 try {
                     // Clean up webhooks for all channel links before removing the guild link
                     const channelLinks = await this.linkService
@@ -225,7 +232,14 @@ export default class UnlinkDiscordCommandHandler extends DiscordCommandHandler {
             .getGuildLinkForFluxerGuild(id)
             .catch(() => null);
         if (guildLink) {
-            if (!(await this.requireOwner(message))) return;
+            if (
+                !(await this.requirePermission(
+                    message,
+                    PermissionFlagsBits.ManageGuild,
+                    'Manage Guild'
+                ))
+            )
+                return;
             this.setPending(message.author.id, {
                 type: 'guild',
                 fluxerGuildId: id,

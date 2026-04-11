@@ -78,7 +78,14 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
             }
 
             if (pending.type === 'guild') {
-                if (!(await this.requireOwner(message))) return;
+                if (
+                    !(await this.requirePermission(
+                        message,
+                        PermissionFlagsBits.ManageGuild,
+                        'Manage Guild'
+                    ))
+                )
+                    return;
                 try {
                     await this.linkService.createGuildLink(
                         message.guildId!,
@@ -192,7 +199,14 @@ export default class LinkDiscordCommandHandler extends DiscordCommandHandler {
             .fetchGuild(id)
             .catch(() => null);
         if (fluxerGuild) {
-            if (!(await this.requireOwner(message))) return;
+            if (
+                !(await this.requirePermission(
+                    message,
+                    PermissionFlagsBits.ManageGuild,
+                    'Manage Guild'
+                ))
+            )
+                return;
             const guildName = (fluxerGuild as { name?: string }).name ?? id;
             this.setPending(message.author.id, {
                 type: 'guild',
