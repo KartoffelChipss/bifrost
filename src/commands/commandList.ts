@@ -37,68 +37,55 @@ const commandList: Command[] = [
         },
     },
     {
-        name: 'linkguild',
+        name: 'autolink',
         discord: {
             description:
-                'Creates a link between this Discord guild and a Fluxer guild.',
-            usageArgs: ['<fluxerGuildId>'],
+                'Compares unlinked channels across both guilds and proposes links based on name similarity. Run with `confirm` to execute all proposals.',
+            usageArgs: ['[confirm]'],
         },
         fluxer: {
             description:
-                'Creates a link between this Fluxer guild and a Discord guild.',
-            usageArgs: ['<discordGuildId>'],
+                'Compares unlinked channels across both guilds and proposes links based on name similarity. Run with `confirm` to execute all proposals.',
+            usageArgs: ['[confirm]'],
         },
     },
     {
-        name: 'unlinkguild',
+        name: 'link',
         discord: {
             description:
-                'Unlinks this Discord guild from its linked Fluxer guild.',
-            usageArgs: [],
+                'Links this server to a Fluxer guild (by guild ID), or links the current channel to a Fluxer channel (by channel ID). Run with `confirm` to proceed.',
+            usageArgs: ['<fluxerGuildId | fluxerChannelId>'],
         },
         fluxer: {
             description:
-                'Unlinks this Fluxer guild from its linked Discord guild.',
-            usageArgs: [],
+                'Links this server to a Discord guild (by guild ID), or links the current channel to a Discord channel (by channel ID). Run with `confirm` to proceed.',
+            usageArgs: ['<discordGuildId | discordChannelId>'],
         },
     },
     {
-        name: 'linkchannel',
+        name: 'unlink',
         discord: {
             description:
-                'Links the current Discord channel to a Fluxer channel.',
-            usageArgs: ['<fluxerChannelId>'],
+                'Unlinks this Discord guild from its linked Fluxer guild, or removes a specific channel link by Fluxer channel ID.',
+            usageArgs: ['<fluxerGuildId | fluxerChannelId>'],
         },
         fluxer: {
             description:
-                'Links the current Fluxer channel to a Discord channel.',
-            usageArgs: ['<discordChannelId>'],
+                'Unlinks this Fluxer guild from its linked Discord guild, or removes a specific channel link by Discord channel ID.',
+            usageArgs: ['<discordGuildId | discordChannelId>'],
         },
     },
     {
-        name: 'listchannels',
+        name: 'list',
         discord: {
             description:
-                'Lists all channels linked in the current Discord guild.',
-            usageArgs: [],
+                'Lists all channel links in this server. Use `all` (bot owner only) to list every bridge across all servers.',
+            usageArgs: ['[all]'],
         },
         fluxer: {
             description:
-                'Lists all channels linked in the current Fluxer guild.',
-            usageArgs: [],
-        },
-    },
-    {
-        name: 'unlinkchannel',
-        discord: {
-            description:
-                'Unlinks the current Discord channel from its linked Fluxer channel.',
-            usageArgs: [],
-        },
-        fluxer: {
-            description:
-                'Unlinks the current Fluxer channel from its linked Discord channel.',
-            usageArgs: [],
+                'Lists all channel links in this server. Use `all` (bot owner only) to list every bridge across all servers.',
+            usageArgs: ['[all]'],
         },
     },
     {

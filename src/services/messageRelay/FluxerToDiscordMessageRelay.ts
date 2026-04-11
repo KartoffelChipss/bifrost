@@ -2,10 +2,12 @@ import { Message } from '@fluxerjs/core';
 import MessageRelay from './MessageRelay';
 import logger from '../../utils/logging/logger';
 import { formatJoinMessage } from '../../utils/formatJoinMessage';
-import DiscordEntityResolver from '../entityResolver/DiscordEntityResolver';
+import MessageQueueService, { toSerializable } from '../MessageQueueService';
 import { WebhookMessageData, WebhookService } from '../WebhookService';
-import MessageTransformer from '../messageTransformer/MessageTransformer';
+import DiscordEntityResolver from '../entityResolver/DiscordEntityResolver';
 import { LinkService } from '../LinkService';
+import MessageTransformer from '../messageTransformer/MessageTransformer';
+import MetricsService from '../MetricsService';
 
 export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
     private readonly discordEntityResolver: DiscordEntityResolver;
@@ -14,17 +16,23 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
         linkService,
         webhookService,
         messageTransformer,
+        metricsService,
+        queueService,
         discordEntityResolver,
     }: {
         linkService: LinkService;
         webhookService: WebhookService;
         messageTransformer: MessageTransformer<Message, WebhookMessageData>;
+        metricsService?: MetricsService;
+        queueService?: MessageQueueService;
         discordEntityResolver: DiscordEntityResolver;
     }) {
         super({
             linkService,
             webhookService,
             messageTransformer,
+            metricsService,
+            queueService,
         });
         this.discordEntityResolver = discordEntityResolver;
     }
@@ -42,6 +50,29 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
         );
         if (!guildLink) return;
 
+        // Build payload before attempting send so it can be queued on failure
+        let msg: WebhookMessageData;
+        if (message.type === 7) {
+            msg = {
+                content: formatJoinMessage(
+                    message.author.username +
+                        '#' +
+                        message.author.discriminator,
+                    'fluxer'
+                ),
+                username: message.client.user?.username || 'Bifröst',
+                avatarURL: message.client.user?.avatarURL() || '',
+            };
+        } else {
+            const discordEmojis = await this.discordEntityResolver.fetchEmojis(
+                guildLink.discordGuildId
+            );
+            msg = await this.getMessageTransformer().transformMessage(
+                message,
+                discordEmojis
+            );
+        }
+
         try {
             const webhook = await webhookService.getDiscordWebhook(
                 linkedChannel.discordWebhookId,
@@ -54,51 +85,30 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
                 return;
             }
 
-            if (message.type === 7) {
-                await webhookService.sendMessageViaDiscordWebhook(webhook, {
-                    content: formatJoinMessage(
-                        message.author.username +
-                            '#' +
-                            message.author.discriminator,
-                        'fluxer'
-                    ),
-                    username: message.client.user?.username || 'Bifröst',
-                    avatarURL: message.client.user?.avatarURL() || '',
-                });
-                return;
-            }
-
-            const discordEmojis = await this.discordEntityResolver.fetchEmojis(
-                guildLink.discordGuildId
-            );
-
-            const msg = await this.getMessageTransformer().transformMessage(
-                message,
-                discordEmojis
-            );
-
             const { messageId: webhookMessageId } =
                 await webhookService.sendMessageViaDiscordWebhook(webhook, msg);
 
-            await linkService.createMessageLink({
-                discordMessageId: webhookMessageId,
-                fluxerMessageId: message.id,
-                guildLinkId: linkedChannel.guildLinkId,
-                channelLinkId: linkedChannel.id,
+            if (message.type !== 7) {
+                await linkService.createMessageLink({
+                    discordMessageId: webhookMessageId,
+                    fluxerMessageId: message.id,
+                    guildLinkId: linkedChannel.guildLinkId,
+                    channelLinkId: linkedChannel.id,
+                });
+            }
+            this.metricsService?.messagesRelayed.inc({
+                direction: 'fluxer_to_discord',
             });
         } catch (error) {
-            logger.error(
-                'Failed relaying Fluxer message to Discord',
-                {
-                    source: 'FluxerToDiscordMessageRelay',
-                    fluxerMessageId: message.id,
-                    fluxerGuildId: message.guildId,
-                    fluxerChannelId: message.channelId,
-                    linkId: linkedChannel.linkId,
-                    channelLinkId: linkedChannel.id,
-                    guildLinkId: linkedChannel.guildLinkId,
-                },
-                error
+            logger.error('Error relaying message to Discord:', error);
+            this.metricsService?.messageRelayErrors.inc({
+                direction: 'fluxer_to_discord',
+            });
+            await this.queueService?.enqueue(
+                'fluxer_to_discord',
+                linkedChannel.id,
+                message.id,
+                toSerializable(msg)
             );
         }
     }

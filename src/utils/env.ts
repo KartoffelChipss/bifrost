@@ -48,9 +48,6 @@ export const isProduction = process.env.NODE_ENV === 'production';
 
 export const CONFIG_PATH = process.env.BF_CONFIG_PATH || './config';
 export const COMMAND_PREFIX = process.env.BF_COMMAND_PREFIX || '!b ';
-export const DELETE_INVOCATION = ['true', '1', 'yes'].includes(
-    (process.env.BF_DELETE_INVOCATION ?? '').toLowerCase()
-);
 
 export const FLUXER_TOKEN = process.env.BF_FLUXER_TOKEN || '';
 export const DISCORD_TOKEN = process.env.BF_DISCORD_TOKEN || '';
@@ -69,6 +66,23 @@ export const DB_HOST = process.env.BF_DB_HOST || 'localhost';
 export const DB_PORT = process.env.BF_DB_PORT
     ? Number(process.env.BF_DB_PORT)
     : 5432;
+
+export const METRICS_PORT = process.env.BF_METRICS_PORT
+    ? Number(process.env.BF_METRICS_PORT)
+    : 9091;
+
+export const QUEUE_TTL_MS = process.env.BF_QUEUE_TTL_MS
+    ? Number(process.env.BF_QUEUE_TTL_MS)
+    : 5 * 60 * 1000;
+
+function parseBool(value: string | undefined): boolean {
+    return ['true', '1', 'yes'].includes((value ?? '').toLowerCase());
+}
+
+export const DELETE_INVOCATION = parseBool(process.env.BF_DELETE_INVOCATION);
+
+export const DISCORD_OWNER_ID = process.env.BF_DISCORD_OWNER_ID || null;
+export const FLUXER_OWNER_ID = process.env.BF_FLUXER_OWNER_ID || null;
 
 function tryExec(cmd: string): string | null {
     try {

@@ -6,10 +6,14 @@ import { SequelizeChannelLinkRepository } from './db/sequelizerepos/SequelizeCha
 import { SequelizeGuildLinkRepository } from './db/sequelizerepos/SequelizeGuildLinkRepository';
 import { SequelizeMessageLinkRepository } from './db/sequelizerepos/SequelizeMessageLinkRepository';
 import startDiscordClient from './discord';
+import type { Client as FluxerClient } from '@fluxerjs/core';
 import startFluxerClient from './fluxer';
+import { DbStatsService } from './services/DbStatsService';
 import FluxerEntityResolver from './services/entityResolver/FluxerEntityResolver';
 import DiscordEntityResolver from './services/entityResolver/DiscordEntityResolver';
 import HealthCheckService from './services/HealthCheckService';
+import MetricsService from './services/MetricsService';
+import MessageQueueService from './services/MessageQueueService';
 import { LinkService } from './services/LinkService';
 import { WebhookService } from './services/WebhookService';
 import {
@@ -17,6 +21,10 @@ import {
     DISCORD_HEALTH_URL,
     FLUXER_APP_ID,
     FLUXER_HEALTH_URL,
+    GIT_COMMIT,
+    METRICS_PORT,
+    QUEUE_TTL_MS,
+    REPO_URL,
 } from './utils/env';
 import {
     generateDiscordBotInviteLink,
@@ -25,15 +33,25 @@ import {
 import logger from './utils/logging/logger';
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import FluxerStatsService from './services/statsService/FluxerStatsService';
-import { DbStatsService } from './services/DbStatsService';
 
 const main = async () => {
     await initDatabase();
+
+    logger.debug(
+        `GIT_COMMIT: ${GIT_COMMIT ?? 'not resolved — stats will show N/A'}`
+    );
+    logger.debug(
+        `REPO_URL: ${REPO_URL ?? 'not resolved — build link will be hash only'}`
+    );
+
+    const metricsService = new MetricsService(METRICS_PORT);
+    const queueService = new MessageQueueService(QUEUE_TTL_MS);
 
     const healthCheckService = new HealthCheckService(
         DISCORD_HEALTH_URL || null,
         FLUXER_HEALTH_URL || null
     );
+    healthCheckService.setMetricsService(metricsService);
 
     const guildLinkRepo = new SequelizeGuildLinkRepository();
     const channelLinkRepo = new SequelizeChannelLinkRepository();
@@ -59,7 +77,10 @@ const main = async () => {
     const fluxerEntityResolver = new FluxerEntityResolver();
     const discordStatsService = new DiscordStatsService();
     const fluxerStatsService = new FluxerStatsService();
-    const dbStatsService = new DbStatsService(channelLinkRepo, messageLinkRepo);
+    const dbStatsService = new DbStatsService(
+        cachedChannelLinkRepo,
+        cachedMessageLinkRepo
+    );
 
     const FLUXER_DOWN_THRESHOLD = 5; // 5 × 30s = 2.5 min before restart
     const FLUXER_MAX_RESTARTS = 3; // restart up to N times, then long backoff
@@ -71,13 +92,14 @@ const main = async () => {
         healthCheckService,
         discordEntityResolver,
         fluxerEntityResolver,
+        metricsService,
+        queueService,
         discordStatsService,
         fluxerStatsService,
         dbStatsService,
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const fluxerClientRef: { current: any } = { current: null };
+    const fluxerClientRef: { current: FluxerClient | null } = { current: null };
     let fluxerRestartAttempts = 0;
     let fluxerRestartState: 'idle' | 'restarting' | 'backoff' = 'idle';
 
@@ -90,9 +112,8 @@ const main = async () => {
         healthCheckService.resetFluxerDownCount();
         try {
             fluxerClientRef.current?.destroy?.();
-        } catch (err) {
-            logger.error('Error destroying Fluxer client during restart:', err);
-        }
+            // eslint-disable-next-line no-empty
+        } catch {}
         await new Promise((r) => setTimeout(r, 3_000));
         try {
             fluxerClientRef.current = await startFluxerClient(fluxerArgs);
@@ -123,8 +144,20 @@ const main = async () => {
         }, FLUXER_BACKOFF_MS);
     };
 
+    healthCheckService.setOnDiscordRecovered(() => {
+        queueService
+            .drain(webhookService, linkService)
+            .catch((err) =>
+                logger.error('Queue drain on Discord recovery error:', err)
+            );
+    });
     healthCheckService.setOnFluxerRecovered(() => {
         fluxerRestartAttempts = 0;
+        queueService
+            .drain(webhookService, linkService)
+            .catch((err) =>
+                logger.error('Queue drain on Fluxer recovery error:', err)
+            );
     });
     healthCheckService.setOnFluxerDown((count) => {
         if (fluxerRestartState !== 'idle') return;
@@ -157,6 +190,8 @@ const main = async () => {
             healthCheckService,
             discordEntityResolver,
             fluxerEntityResolver,
+            metricsService,
+            queueService,
             discordStatsService,
             fluxerStatsService,
             dbStatsService,

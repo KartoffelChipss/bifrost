@@ -47,6 +47,7 @@ export default class StatsDiscordCommandHandler extends DiscordCommandHandler {
         const fluxerPing = await this.fluxerStatsService.getPing();
         const readableUptime = formatDuration(process.uptime());
         const usedHeap = getHeapUsageMB();
+        const dbStats = await this.dbStatsService.getStats();
 
         const perms = '536947712';
         const inviteValue = `[Fluxer](${generateFluxerBotInviteLink(FLUXER_APP_ID, perms)}) | [Discord](${generateDiscordBotInviteLink(DISCORD_APP_ID, perms)})`;
@@ -80,6 +81,16 @@ export default class StatsDiscordCommandHandler extends DiscordCommandHandler {
                         {
                             name: 'Discord Users',
                             value: `${isNaN(discordUserCount) ? 'N/A' : discordUserCount}`,
+                            inline: true,
+                        },
+                        {
+                            name: 'Channel Links',
+                            value: `${dbStats.channelLinksCount}`,
+                            inline: true,
+                        },
+                        {
+                            name: 'Message Links',
+                            value: `${dbStats.messageLinksCount}`,
                             inline: true,
                         },
                         {
