@@ -379,7 +379,7 @@ export default class ListDiscordCommandHandler extends DiscordCommandHandler {
             embeds[embeds.length - 1].setFooter(footer).setTimestamp();
 
             await message.reply({ embeds });
-        } catch (err: any) {
+        } catch (err: unknown) {
             await message.reply({
                 embeds: [
                     new EmbedBuilder()
