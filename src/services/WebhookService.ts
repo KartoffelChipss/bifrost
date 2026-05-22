@@ -105,7 +105,7 @@ export class WebhookService {
             const { id } = await webhook.send({
                 content: data.content,
                 username: data.username,
-                avatarURL: data.avatarURL,
+                avatarURL: data.avatarURL || undefined,
                 files,
                 embeds:
                     data.embeds?.map((embed) => embed.toDiscordEmbed()) || [],
@@ -229,7 +229,7 @@ export class WebhookService {
                 {
                     content: data.content,
                     username: data.username,
-                    avatar_url: data.avatarURL,
+                    avatar_url: data.avatarURL || undefined,
                     files:
                         data.attachments?.map((attachment) => ({
                             url: attachment.url,

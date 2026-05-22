@@ -11,6 +11,7 @@ import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
 import { getPollMessage } from '../../utils/pollMessageFormatter';
 import WebhookEmbed from '../WebhookEmbed';
 import { GeneralEmoji } from '../../utils/emojis';
+import logger from '../../utils/logging/logger';
 
 type DiscordMessage = OmitPartialGroupDMChannel<Message<boolean>>;
 
@@ -103,25 +104,38 @@ export default class DiscordMessageTransformer extends MessageTransformer<
         );
 
         if (message.reference) {
-            const referencedMessage = await message.fetchReference();
-            const content = this.sanitizeContent(referencedMessage);
-            const isForwarded = message.flags.has(MessageFlags.HasSnapshot);
-            const refrenceEmoji = isForwarded ? '⏩' : '↩️';
-            if (content && content.trim() !== '') {
-                embeds.unshift(
-                    new WebhookEmbed({
-                        description: `${content}`,
-                        color: 0x0b0d0e,
-                        author: {
-                            name:
-                                referencedMessage.author.username +
-                                ` ${refrenceEmoji}`,
-                            iconURL:
-                                referencedMessage.author.avatarURL() ||
-                                undefined,
-                        },
-                    })
-                );
+            // The reply/forward context embed requires fetching the referenced
+            // message. For cross-posts and forwards from guilds the bot isn't
+            // a member of, this fetch fails — skip the decoration rather than
+            // aborting the relay of the message itself.
+            const referencedMessage = await message
+                .fetchReference()
+                .catch((err: Error) => {
+                    logger.warn(
+                        `Could not fetch referenced message; skipping reference embed: ${err.message}`
+                    );
+                    return null;
+                });
+            if (referencedMessage) {
+                const content = this.sanitizeContent(referencedMessage);
+                const isForwarded = message.flags.has(MessageFlags.HasSnapshot);
+                const refrenceEmoji = isForwarded ? '⏩' : '↩️';
+                if (content && content.trim() !== '') {
+                    embeds.unshift(
+                        new WebhookEmbed({
+                            description: `${content}`,
+                            color: 0x0b0d0e,
+                            author: {
+                                name:
+                                    referencedMessage.author.username +
+                                    ` ${refrenceEmoji}`,
+                                iconURL:
+                                    referencedMessage.author.avatarURL() ||
+                                    undefined,
+                            },
+                        })
+                    );
+                }
             }
         }
 
