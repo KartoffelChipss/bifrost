@@ -1,0 +1,78 @@
+name: Bug Report
+description: Report a bug to help us improve
+title: '[BUG] '
+labels: [bug]
+body:
+  - type: checkboxes
+    attributes:
+      label: Is there an existing bug report for this?
+      description: Please [search here](https://github.com/KartoffelChipss/bifrost/issues?q=is%3Aissue) to see if someone else has already reported this bug.
+      options:
+        - label: I have searched the existing issues before opening this bug report.
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of the bug.
+      placeholder: When I do X, Y happens instead of Z...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+      placeholder: I expected...
+    validations:
+      required: true
+      
+  - type: dropdown
+    id: selfhosting
+    attributes:
+      label: Are you self hosting Fluxer?
+      options:
+        - 'Yes'
+        - 'No'
+    validations:
+      required: true
+
+  - type: input
+    id: bifrost-version
+    attributes:
+      label: Bifröst Version
+      placeholder: e.g. 1.4.0 (Leave this empty if using the hosted instance)
+    validations:
+      required: false
+      
+  - type: dropdown
+    id: selfhosted-fluxer
+    attributes:
+      label: Are you self hosted Fluxer instance?
+      options:
+        - 'Yes'
+        - 'No'
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add any other context or screenshots about the problem here.
+    validations:
+      required: false
