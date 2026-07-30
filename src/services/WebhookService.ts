@@ -229,7 +229,7 @@ export class WebhookService {
                 {
                     content: data.content,
                     username: data.username,
-                    avatar_url: data.avatarURL,
+                    avatarUrl: data.avatarURL,
                     files:
                         data.attachments?.map((attachment) => ({
                             url: attachment.url,

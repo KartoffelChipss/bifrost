@@ -272,16 +272,12 @@ export default class WebhookEmbed {
         if (this.image) {
             builder.setImage({
                 url: this.image.url,
-                width: this.image.width,
-                height: this.image.height,
             });
         }
 
         if (this.thumbnail) {
             builder.setThumbnail({
                 url: this.thumbnail.url,
-                width: this.thumbnail.width,
-                height: this.thumbnail.height,
             });
         }
 
