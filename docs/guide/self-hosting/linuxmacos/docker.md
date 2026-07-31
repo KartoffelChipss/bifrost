@@ -52,7 +52,7 @@ BF_DISCORD_TOKEN="Your Discord Bot Token"
 BF_DISCORD_APP_ID="Your Discord Application ID"
 ```
 
-You can also use [.env.example](https://github.com/KartoffelChipss/bifrost/blob/main/.env.example) as a reference for all available environment variables.
+You can also use [.env.example](https://github.com/KartoffelChipss/bifrost/blob/main/.env.example) as a reference, or see the full [Environment Variables](/guide/environment-variables) documentation, including how to connect to a [self-hosted Fluxer instance](/guide/self-hosting/custom-fluxer-instance).
 
 ## 5. Create the docker-compose.yml
 

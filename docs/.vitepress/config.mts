@@ -58,7 +58,15 @@ export default defineConfig({
                                     },
                                 ],
                             },
+                            {
+                                text: 'Using a Self-Hosted Fluxer Instance',
+                                link: '/guide/self-hosting/custom-fluxer-instance',
+                            },
                         ],
+                    },
+                    {
+                        text: 'Environment Variables',
+                        link: '/guide/environment-variables',
                     },
                     { text: 'Linking Your Servers', link: '/guide/linking' },
                 ],
