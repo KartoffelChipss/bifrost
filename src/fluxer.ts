@@ -1,5 +1,6 @@
 import {
     Client,
+    ClientOptions,
     EmbedBuilder,
     Events,
     PartialMessage,
@@ -13,7 +14,16 @@ import {
 import { EmbedColors } from './utils/embeds';
 import logger from './utils/logging/logger';
 import FluxerCommandHandler from './commands/fluxer/FluxerCommandHandler';
-import { COMMAND_PREFIX, DELETE_INVOCATION, FLUXER_TOKEN } from './utils/env';
+import {
+    COMMAND_PREFIX,
+    DELETE_INVOCATION,
+    AUTODISCOVERY_FLUXER_DOMAIN,
+    FLUXER_TOKEN,
+    FLUXER_API_URL,
+    FLUXER_MEDIA_URL,
+    FLUXER_STATIC_CDN_URL,
+    FLUXER_INVITE_URL,
+} from './utils/env';
 import { LinkService } from './services/LinkService';
 import LinkFluxerCommandHandler from './commands/fluxer/handlers/LinkFluxerCommandHandler';
 import UnlinkFluxerCommandHandler from './commands/fluxer/handlers/UnlinkFluxerCommandHandler';
@@ -56,7 +66,7 @@ const startFluxerClient = async ({
     fluxerStatsService: FluxerStatsService;
     dbStatsService: DbStatsService;
 }): Promise<Client> => {
-    const client = new Client({
+    const clientOptions: ClientOptions = {
         intents: 0,
         waitForGuilds: true,
         presence: {
@@ -65,7 +75,19 @@ const startFluxerClient = async ({
                 text: 'Bridging to Discord',
             },
         },
-    });
+        instance: {
+            api: FLUXER_API_URL || undefined,
+            media: FLUXER_MEDIA_URL || undefined,
+            static_cdn: FLUXER_STATIC_CDN_URL || undefined,
+            invite: FLUXER_INVITE_URL || undefined,
+        },
+    };
+
+    const client = AUTODISCOVERY_FLUXER_DOMAIN
+        ? await Client.fromDiscovery(AUTODISCOVERY_FLUXER_DOMAIN, clientOptions)
+        : new Client(clientOptions);
+
+    console.log();
 
     webhookService.setFluxerClient(client);
     healthCheckService.setFluxerClient(client);

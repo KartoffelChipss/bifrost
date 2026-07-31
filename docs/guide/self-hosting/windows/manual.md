@@ -57,7 +57,7 @@ BF_DISCORD_TOKEN="Your Discord Bot Token"
 BF_DISCORD_APP_ID="Your Discord Application ID"
 ```
 
-See [.env.example](https://github.com/KartoffelChipss/bifrost/blob/main/.env.example) for all available environment variables.
+See [.env.example](https://github.com/KartoffelChipss/bifrost/blob/main/.env.example) for a reference, or the full [Environment Variables](/guide/environment-variables) documentation, including how to connect to a [self-hosted Fluxer instance](/guide/self-hosting/custom-fluxer-instance).
 
 ## 5. Install Dependencies
 

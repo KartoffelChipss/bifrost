@@ -1,6 +1,9 @@
 dist/
 node_modules/
 .env
+.env.main
+.env.custominstance
+.env.dev
 config/
 logs/
 .idea/
@@ -12,3 +15,4 @@ docs/.vitepress/cache
 personal.yml
 .github/workflows/docker-publish.yml
 personal2.yml
+fluxer-ca.crt

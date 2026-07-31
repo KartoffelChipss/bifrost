@@ -5,7 +5,7 @@ layout: home
 hero:
     name: 'Bifröst'
     text: 'A bridge between Discord and Fluxer'
-    tagline: 'Seemlessly connect your Discord and Fluxer communities'
+    tagline: 'Seamlessly connect your Discord and Fluxer communities'
     image:
         src: '/logo.svg'
         alt: 'Bifröst Logo'

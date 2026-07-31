@@ -84,6 +84,36 @@ export const DELETE_INVOCATION = parseBool(process.env.BF_DELETE_INVOCATION);
 export const DISCORD_OWNER_ID = process.env.BF_DISCORD_OWNER_ID || null;
 export const FLUXER_OWNER_ID = process.env.BF_FLUXER_OWNER_ID || null;
 
+export const AUTODISCOVERY_FLUXER_DOMAIN =
+    process.env.BF_FLUXER_AUTODISCOVERY_DOMAIN || null;
+
+function getSuffixedFluxerUrl(
+    baseUrl: string | null,
+    suffix: string
+): string | null {
+    if (baseUrl === null) return null;
+    baseUrl = baseUrl.replace(/\/$/, '') || null;
+    return baseUrl ? `${baseUrl}/${suffix}` : null;
+}
+
+export const FLUXER_BASE_URL = process.env.BF_FLUXER_BASE_URL || null;
+export const FLUXER_API_URL =
+    process.env.BF_FLUXER_API_URL ||
+    getSuffixedFluxerUrl(FLUXER_BASE_URL, 'api') ||
+    null;
+export const FLUXER_MEDIA_URL =
+    process.env.BF_FLUXER_MEDIA_URL ||
+    getSuffixedFluxerUrl(FLUXER_BASE_URL, 'media') ||
+    null;
+export const FLUXER_STATIC_CDN_URL =
+    process.env.BF_FLUXER_STATIC_CDN_URL ||
+    getSuffixedFluxerUrl(FLUXER_BASE_URL, 'static') ||
+    null;
+export const FLUXER_INVITE_URL =
+    process.env.BF_FLUXER_INVITE_URL ||
+    getSuffixedFluxerUrl(FLUXER_BASE_URL, 'invite') ||
+    null;
+
 function tryExec(cmd: string): string | null {
     try {
         const result = execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] })

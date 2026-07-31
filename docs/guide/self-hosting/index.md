@@ -21,3 +21,8 @@ You can self-host Bifröst using Docker on Unix-based systems (Linux and macOS) 
 Guides marked with a ⭐ are recommended for most users, as they provide an easier setup and better performance if you have Docker available.
 
 Guides marked with a 🔧 are for users who prefer or need to run Bifröst without Docker, but they require more technical knowledge and may involve a more complex setup process.
+
+## Further Configuration
+
+- Connecting to a self-hosted Fluxer instance instead of the hosted one: [Using a Self-Hosted Fluxer Instance](./custom-fluxer-instance.md)
+- Full list of configuration options: [Environment Variables](/guide/environment-variables)
