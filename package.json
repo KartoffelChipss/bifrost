@@ -6,9 +6,6 @@
     "scripts": {
         "build": "tsc",
         "start": "tsc && node dist/index.js",
-        "docs:dev": "vitepress dev docs",
-        "docs:build": "vitepress build docs",
-        "docs:preview": "vitepress preview docs",
         "lint": "eslint src",
         "lint:fix": "eslint src --fix",
         "format": "prettier --write src",
@@ -45,7 +42,6 @@
         "prettier": "^3.8.1",
         "tsx": "^4.23.1",
         "typescript": "^5.9.3",
-        "typescript-eslint": "^8.56.1",
-        "vitepress": "2.0.0-alpha.16"
+        "typescript-eslint": "^8.56.1"
     }
 }

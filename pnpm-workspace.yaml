@@ -1,2 +1,3 @@
 onlyBuiltDependencies:
-  - sqlite3
+    - sqlite3
+    - esbuild
