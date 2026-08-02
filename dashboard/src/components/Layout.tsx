@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { useLogout, useMe } from '@/api/client';
 import type { Identity } from '../../../src/web/types';
 import { PlatformLoginButton } from './PlatformLoginButton';
+import LoginPrompt from './LoginPrompt';
 
 function IdentityChip({
     platform,
@@ -44,9 +45,11 @@ function IdentityChip({
 export function Layout({
     children,
     title,
+    requiredAuth = 'either',
 }: {
     children: ReactNode;
     title?: string;
+    requiredAuth?: 'none' | 'either' | 'both';
 }) {
     const { data: me } = useMe();
     const logout = useLogout();
@@ -58,6 +61,10 @@ export function Layout({
             document.title = 'Bifröst Dashboard';
         }
     }, [title]);
+
+    const missingAuth =
+        (requiredAuth === 'either' && !me?.discord && !me?.fluxer) ||
+        (requiredAuth === 'both' && (!me?.discord || !me?.fluxer));
 
     return (
         <div className="mx-auto flex min-h-svh max-w-5xl flex-col gap-6 px-4 py-6">
@@ -88,7 +95,9 @@ export function Layout({
                     )}
                 </div>
             </header>
-            <main className="flex-1">{children}</main>
+            <main className="flex-1">
+                {missingAuth ? <LoginPrompt /> : children}
+            </main>
         </div>
     );
 }

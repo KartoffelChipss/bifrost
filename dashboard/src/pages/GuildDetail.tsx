@@ -257,5 +257,5 @@ export function GuildDetail() {
         </div>
     );
 
-    return <Layout>{content}</Layout>;
+    return <Layout requiredAuth="either">{content}</Layout>;
 }

@@ -11,13 +11,7 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-    Card,
-    CardDescription,
-    CardHeader,
-    CardPanel,
-    CardTitle,
-} from '@/components/ui/card';
+import { Card, CardPanel } from '@/components/ui/card';
 import {
     Combobox,
     ComboboxEmpty,
@@ -47,7 +41,6 @@ import {
 } from '@/api/client';
 import type { GuildSummary } from '../../../src/web/types';
 import GuildIcon from '../components/GuildIcon';
-import { PlatformLoginButton } from '../components/PlatformLoginButton';
 import { Layout } from '../components/Layout';
 import {
     Empty,
@@ -317,40 +310,7 @@ function CreateGuildLinkDialog({
     );
 }
 
-function LoginPrompt() {
-    return (
-        <Card className="mx-auto mt-16 max-w-md">
-            <CardHeader>
-                <CardTitle>Connect your accounts</CardTitle>
-                <CardDescription>
-                    Log in with Discord and Fluxer to manage your bridged
-                    servers and channels.
-                </CardDescription>
-            </CardHeader>
-            <CardPanel className="flex flex-col gap-3">
-                <PlatformLoginButton
-                    platform="discord"
-                    href="/api/auth/discord/login"
-                />
-                <PlatformLoginButton
-                    platform="fluxer"
-                    href="/api/auth/fluxer/login"
-                />
-            </CardPanel>
-        </Card>
-    );
-}
-
 export function Home() {
-    const { data: me } = useMe();
-
-    const content =
-        me?.discord || me?.fluxer ? <GuildsView /> : <LoginPrompt />;
-
-    return <Layout>{content}</Layout>;
-}
-
-function GuildsView() {
     const { data: me } = useMe();
     const { data: guilds, isLoading } = useGuilds();
     const deleteGuildLink = useDeleteGuildLink();
@@ -370,7 +330,7 @@ function GuildsView() {
         guilds.unlinkedDiscordGuilds.length > 0 &&
         guilds.unlinkedFluxerGuilds.length > 0;
 
-    return (
+    const content = (
         <div className="flex flex-col gap-8">
             <div className="flex items-center justify-between">
                 <h1 className="text-xl font-semibold">Bridged servers</h1>
@@ -467,4 +427,6 @@ function GuildsView() {
             </section>
         </div>
     );
+
+    return <Layout requiredAuth="either">{content}</Layout>;
 }
