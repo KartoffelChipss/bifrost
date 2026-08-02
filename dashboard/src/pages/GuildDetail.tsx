@@ -1,8 +1,24 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, PackageOpen, Plus, Trash, Wand2 } from 'lucide-react';
+import {
+    ArrowLeft,
+    ArrowLeftRight,
+    Hash,
+    PackageOpen,
+    Plus,
+    Trash,
+    Wand2,
+} from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+    Combobox,
+    ComboboxEmpty,
+    ComboboxInput,
+    ComboboxItem,
+    ComboboxList,
+    ComboboxPopup,
+} from '@/components/ui/combobox';
 import {
     Dialog,
     DialogClose,
@@ -14,13 +30,6 @@ import {
     DialogTitle,
     DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-    Select,
-    SelectItem,
-    SelectPopup,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
 import {
     Table,
     TableBody,
@@ -49,6 +58,10 @@ import {
     EmptyTitle,
 } from '../components/ui/empty';
 
+function sortByName(a: ChannelSummary, b: ChannelSummary) {
+    return a.name.localeCompare(b.name);
+}
+
 function CreateChannelLinkDialog({
     guildLinkId,
     discordChannels,
@@ -63,14 +76,17 @@ function CreateChannelLinkDialog({
     const [fluxerId, setFluxerId] = useState<string | null>(null);
     const createChannelLink = useCreateChannelLink();
 
-    const discordItems = discordChannels.map((c) => ({
-        label: `#${c.name}`,
-        value: c.id,
-    }));
-    const fluxerItems = fluxerChannels.map((c) => ({
-        label: `#${c.name}`,
-        value: c.id,
-    }));
+    const discordItems = [...discordChannels]
+        .sort(sortByName)
+        .map((c) => ({ label: c.name, value: c.id }));
+    const fluxerItems = [...fluxerChannels]
+        .sort(sortByName)
+        .map((c) => ({ label: c.name, value: c.id }));
+
+    const selectedDiscordItem =
+        discordItems.find((i) => i.value === discordId) ?? null;
+    const selectedFluxerItem =
+        fluxerItems.find((i) => i.value === fluxerId) ?? null;
 
     return (
         <Dialog
@@ -87,63 +103,98 @@ function CreateChannelLinkDialog({
                 <Plus aria-hidden="true" />
                 Link a channel
             </DialogTrigger>
-            <DialogPopup>
+            <DialogPopup className="sm:max-w-2xl">
                 <DialogHeader>
                     <DialogTitle>Link a channel</DialogTitle>
+                    <DialogDescription>
+                        Messages posted in either channel will be mirrored to
+                        the other.
+                    </DialogDescription>
                 </DialogHeader>
                 <DialogPanel className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-1.5">
-                        <label className="text-sm font-medium">
-                            Discord channel
-                        </label>
-                        <Select
-                            items={discordItems}
-                            value={
-                                discordItems.find(
-                                    (i) => i.value === discordId
-                                ) ?? null
-                            }
-                            onValueChange={(item) =>
-                                setDiscordId(item?.value ?? null)
-                            }
-                        >
-                            <SelectTrigger>
-                                <SelectValue placeholder="Select a Discord channel" />
-                            </SelectTrigger>
-                            <SelectPopup>
-                                {discordItems.map((item) => (
-                                    <SelectItem key={item.value} value={item}>
-                                        {item.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectPopup>
-                        </Select>
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <label className="text-sm font-medium">
-                            Fluxer channel
-                        </label>
-                        <Select
-                            items={fluxerItems}
-                            value={
-                                fluxerItems.find((i) => i.value === fluxerId) ??
-                                null
-                            }
-                            onValueChange={(item) =>
-                                setFluxerId(item?.value ?? null)
-                            }
-                        >
-                            <SelectTrigger>
-                                <SelectValue placeholder="Select a Fluxer channel" />
-                            </SelectTrigger>
-                            <SelectPopup>
-                                {fluxerItems.map((item) => (
-                                    <SelectItem key={item.value} value={item}>
-                                        {item.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectPopup>
-                        </Select>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_1fr]">
+                        <div className="flex flex-col gap-1.5">
+                            <label className="text-sm font-medium">
+                                Discord channel
+                            </label>
+                            <Combobox
+                                items={discordItems}
+                                value={selectedDiscordItem}
+                                onValueChange={(item) =>
+                                    setDiscordId(item?.value ?? null)
+                                }
+                            >
+                                <ComboboxInput
+                                    placeholder="Search Discord channels..."
+                                    startAddon={
+                                        <Hash
+                                            aria-hidden="true"
+                                            className="size-4.5"
+                                        />
+                                    }
+                                />
+                                <ComboboxPopup>
+                                    <ComboboxEmpty>
+                                        No unlinked Discord channels.
+                                    </ComboboxEmpty>
+                                    <ComboboxList>
+                                        {(item) => (
+                                            <ComboboxItem
+                                                key={item.value}
+                                                value={item}
+                                            >
+                                                #{item.label}
+                                            </ComboboxItem>
+                                        )}
+                                    </ComboboxList>
+                                </ComboboxPopup>
+                            </Combobox>
+                        </div>
+
+                        <div className="text-muted-foreground hidden items-center justify-center pt-7 sm:flex">
+                            <ArrowLeftRight
+                                aria-hidden="true"
+                                className="size-5"
+                            />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                            <label className="text-sm font-medium">
+                                Fluxer channel
+                            </label>
+                            <Combobox
+                                items={fluxerItems}
+                                value={selectedFluxerItem}
+                                onValueChange={(item) =>
+                                    setFluxerId(item?.value ?? null)
+                                }
+                            >
+                                <ComboboxInput
+                                    placeholder="Search Fluxer channels..."
+                                    startAddon={
+                                        <Hash
+                                            aria-hidden="true"
+                                            className="size-4.5"
+                                        />
+                                    }
+                                />
+                                <ComboboxPopup>
+                                    <ComboboxEmpty>
+                                        No unlinked Fluxer channels.
+                                    </ComboboxEmpty>
+                                    <ComboboxList>
+                                        {(item) => (
+                                            <ComboboxItem
+                                                key={item.value}
+                                                value={item}
+                                            >
+                                                #{item.label}
+                                            </ComboboxItem>
+                                        )}
+                                    </ComboboxList>
+                                </ComboboxPopup>
+                            </Combobox>
+                        </div>
                     </div>
                 </DialogPanel>
                 <DialogFooter>
@@ -165,12 +216,14 @@ function CreateChannelLinkDialog({
                                 {
                                     onSuccess: () => {
                                         toastManager.add({
+                                            type: 'success',
                                             title: 'Channels linked',
                                         });
                                         setOpen(false);
                                     },
                                     onError: (err) =>
                                         toastManager.add({
+                                            type: 'error',
                                             title: 'Could not link channels',
                                             description: err.message,
                                         }),
