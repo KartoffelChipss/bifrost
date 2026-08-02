@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, PackageOpen, Plus, Unlink } from 'lucide-react';
+import { ArrowLeft, PackageOpen, Plus, Trash } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -248,7 +248,7 @@ export function GuildDetail() {
                                 <TableCell>
                                     <Button
                                         aria-label="Unlink channel"
-                                        variant="ghost"
+                                        variant="destructive-outline"
                                         size="icon-sm"
                                         loading={
                                             deleteChannelLink.isPending &&
@@ -266,7 +266,7 @@ export function GuildDetail() {
                                             })
                                         }
                                     >
-                                        <Unlink aria-hidden="true" />
+                                        <Trash aria-hidden="true" />
                                     </Button>
                                 </TableCell>
                             </TableRow>
