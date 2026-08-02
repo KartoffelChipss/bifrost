@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Plus, Unlink } from 'lucide-react';
+import { ArrowLeft, PackageOpen, Plus, Unlink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -36,6 +36,14 @@ import {
 } from '@/api/client';
 import type { ChannelSummary } from '../../../src/web/types';
 import { Layout } from '../components/Layout';
+import {
+    Empty,
+    EmptyContent,
+    EmptyDescription,
+    EmptyHeader,
+    EmptyMedia,
+    EmptyTitle,
+} from '../components/ui/empty';
 
 function CreateChannelLinkDialog({
     guildLinkId,
@@ -197,6 +205,28 @@ export function GuildDetail() {
 
             {isLoading || !data ? (
                 <Skeleton className="h-40 w-full" />
+            ) : data.linked.length === 0 ? (
+                <Empty>
+                    <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                            <PackageOpen />
+                        </EmptyMedia>
+                        <EmptyTitle>No bridged channels</EmptyTitle>
+                        <EmptyDescription>
+                            You haven't linked any Discord channels to Fluxer
+                            channels yet.
+                        </EmptyDescription>
+                    </EmptyHeader>
+                    <EmptyContent>
+                        <div className="flex gap-2">
+                            <CreateChannelLinkDialog
+                                guildLinkId={guildLinkId!}
+                                discordChannels={data.unlinkedDiscordChannels}
+                                fluxerChannels={data.unlinkedFluxerChannels}
+                            />
+                        </div>
+                    </EmptyContent>
+                </Empty>
             ) : (
                 <Table>
                     <TableHeader>
@@ -207,16 +237,6 @@ export function GuildDetail() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {data.linked.length === 0 && (
-                            <TableRow>
-                                <TableCell
-                                    colSpan={3}
-                                    className="text-muted-foreground text-center"
-                                >
-                                    No channels linked yet.
-                                </TableCell>
-                            </TableRow>
-                        )}
                         {data.linked.map((link) => (
                             <TableRow key={link.id}>
                                 <TableCell>
