@@ -1,8 +1,10 @@
 import { Router, Request } from 'express';
 import { ChannelType, TextChannel as DiscordTextChannel } from 'discord.js';
 import type { Client as DiscordClient } from 'discord.js';
+import { GuildLink } from '../../db/entities/GuildLink';
 import { LinkService } from '../../services/LinkService';
 import { WebhookService } from '../../services/WebhookService';
+import { matchChannels } from '../../utils/channelMatcher';
 import logger from '../../utils/logging/logger';
 import type { FluxerClientRef } from '../clientRefs';
 import {
@@ -12,6 +14,9 @@ import {
     hasFluxerGuildPermission,
 } from '../middleware/auth';
 import type {
+    AutolinkPreviewResponse,
+    AutolinkResponse,
+    AutolinkResultItem,
     ChannelLinkSummary,
     ChannelSummary,
     CreateChannelLinkBody,
@@ -52,23 +57,7 @@ export function createChannelsRouter({
         return null;
     }
 
-    router.get('/guild-links/:id/channels', async (req, res) => {
-        const link = await linkService.getGuildLinkById(req.params.id);
-        if (!link) {
-            res.status(404).json({ error: 'Guild link not found' });
-            return;
-        }
-
-        const permError = assertChannelPermission(
-            req,
-            link.discordGuildId,
-            link.fluxerGuildId
-        );
-        if (permError) {
-            res.status(403).json({ error: permError });
-            return;
-        }
-
+    async function getChannelState(link: GuildLink) {
         const channelLinks = await linkService.getChannelLinksForDiscordGuild(
             link.discordGuildId
         );
@@ -102,6 +91,44 @@ export function createChannelsRouter({
             channelLinks.map((l) => l.fluxerChannelId)
         );
 
+        return {
+            channelLinks,
+            discordChannels,
+            fluxerChannels,
+            unlinkedDiscordChannels: discordChannels.filter(
+                (c) => !linkedDiscordIds.has(c.id)
+            ),
+            unlinkedFluxerChannels: fluxerChannels.filter(
+                (c) => !linkedFluxerIds.has(c.id)
+            ),
+        };
+    }
+
+    router.get('/guild-links/:id/channels', async (req, res) => {
+        const link = await linkService.getGuildLinkById(req.params.id);
+        if (!link) {
+            res.status(404).json({ error: 'Guild link not found' });
+            return;
+        }
+
+        const permError = assertChannelPermission(
+            req,
+            link.discordGuildId,
+            link.fluxerGuildId
+        );
+        if (permError) {
+            res.status(403).json({ error: permError });
+            return;
+        }
+
+        const {
+            channelLinks,
+            discordChannels,
+            fluxerChannels,
+            unlinkedDiscordChannels,
+            unlinkedFluxerChannels,
+        } = await getChannelState(link);
+
         const linked: ChannelLinkSummary[] = channelLinks.map((l) => ({
             id: l.id,
             discordChannel: {
@@ -120,13 +147,116 @@ export function createChannelsRouter({
 
         const response: GuildChannelsResponse = {
             linked,
-            unlinkedDiscordChannels: discordChannels.filter(
-                (c) => !linkedDiscordIds.has(c.id)
-            ),
-            unlinkedFluxerChannels: fluxerChannels.filter(
-                (c) => !linkedFluxerIds.has(c.id)
-            ),
+            unlinkedDiscordChannels,
+            unlinkedFluxerChannels,
         };
+        res.json(response);
+    });
+
+    router.get('/guild-links/:id/autolink', async (req, res) => {
+        const link = await linkService.getGuildLinkById(req.params.id);
+        if (!link) {
+            res.status(404).json({ error: 'Guild link not found' });
+            return;
+        }
+
+        const permError = assertChannelPermission(
+            req,
+            link.discordGuildId,
+            link.fluxerGuildId
+        );
+        if (permError) {
+            res.status(403).json({ error: permError });
+            return;
+        }
+
+        const { unlinkedDiscordChannels, unlinkedFluxerChannels } =
+            await getChannelState(link);
+        const matches = matchChannels(
+            unlinkedDiscordChannels,
+            unlinkedFluxerChannels
+        );
+
+        const response: AutolinkPreviewResponse = {
+            proposals: matches.map((m) => ({
+                discordChannel: m.discord,
+                fluxerChannel: m.fluxer,
+                score: m.score,
+            })),
+            unmatchedDiscordCount:
+                unlinkedDiscordChannels.length - matches.length,
+            unmatchedFluxerCount:
+                unlinkedFluxerChannels.length - matches.length,
+        };
+        res.json(response);
+    });
+
+    router.post('/guild-links/:id/autolink', async (req, res) => {
+        const link = await linkService.getGuildLinkById(req.params.id);
+        if (!link) {
+            res.status(404).json({ error: 'Guild link not found' });
+            return;
+        }
+
+        const permError = assertChannelPermission(
+            req,
+            link.discordGuildId,
+            link.fluxerGuildId
+        );
+        if (permError) {
+            res.status(403).json({ error: permError });
+            return;
+        }
+
+        const { unlinkedDiscordChannels, unlinkedFluxerChannels } =
+            await getChannelState(link);
+        const matches = matchChannels(
+            unlinkedDiscordChannels,
+            unlinkedFluxerChannels
+        );
+
+        const results: AutolinkResultItem[] = [];
+        let linkedCount = 0;
+
+        for (const match of matches) {
+            try {
+                const discordWebhook =
+                    await webhookService.createDiscordWebhook(
+                        match.discord.id,
+                        `Fluxer Bridge Webhook for channel ${match.discord.id}`
+                    );
+                const fluxerWebhook = await webhookService.createFluxerWebhook(
+                    match.fluxer.id,
+                    `Discord Bridge Webhook for channel ${match.fluxer.id}`
+                );
+                await linkService.createChannelLink({
+                    guildLinkId: link.id,
+                    discordChannelId: match.discord.id,
+                    fluxerChannelId: match.fluxer.id,
+                    discordWebhookId: discordWebhook.id,
+                    discordWebhookToken: discordWebhook.token,
+                    fluxerWebhookId: fluxerWebhook.id,
+                    fluxerWebhookToken: fluxerWebhook.token,
+                });
+                linkedCount++;
+                results.push({
+                    discordChannel: match.discord,
+                    fluxerChannel: match.fluxer,
+                });
+            } catch (err) {
+                logger.error(
+                    `Autolink failed for #${match.discord.name} ↔ #${match.fluxer.name}:`,
+                    err
+                );
+                results.push({
+                    discordChannel: match.discord,
+                    fluxerChannel: match.fluxer,
+                    error: (err as Error).message,
+                });
+            }
+        }
+
+        const response: AutolinkResponse = { linkedCount, results };
         res.json(response);
     });
 

@@ -60,6 +60,29 @@ export interface InviteLinkResponse {
     url: string;
 }
 
+export interface AutolinkProposal {
+    discordChannel: ChannelSummary;
+    fluxerChannel: ChannelSummary;
+    score: number;
+}
+
+export interface AutolinkPreviewResponse {
+    proposals: AutolinkProposal[];
+    unmatchedDiscordCount: number;
+    unmatchedFluxerCount: number;
+}
+
+export interface AutolinkResultItem {
+    discordChannel: ChannelSummary;
+    fluxerChannel: ChannelSummary;
+    error?: string;
+}
+
+export interface AutolinkResponse {
+    linkedCount: number;
+    results: AutolinkResultItem[];
+}
+
 export interface ApiErrorResponse {
     error: string;
 }

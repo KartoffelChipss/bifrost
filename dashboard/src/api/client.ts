@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+    AutolinkPreviewResponse,
+    AutolinkResponse,
     ChannelLinkSummary,
     CreateChannelLinkBody,
     CreateGuildLinkBody,
@@ -102,6 +104,34 @@ export function useDeleteChannelLink(guildLinkId: string | undefined) {
         mutationFn: (channelLinkId: string) =>
             apiFetch<void>(`/channel-links/${channelLinkId}`, {
                 method: 'DELETE',
+            }),
+        onSuccess: () =>
+            queryClient.invalidateQueries({
+                queryKey: ['guild-channels', guildLinkId],
+            }),
+    });
+}
+
+export function useAutolinkPreview(
+    guildLinkId: string | undefined,
+    enabled: boolean
+) {
+    return useQuery({
+        queryKey: ['guild-autolink', guildLinkId],
+        queryFn: () =>
+            apiFetch<AutolinkPreviewResponse>(
+                `/guild-links/${guildLinkId}/autolink`
+            ),
+        enabled: !!guildLinkId && enabled,
+    });
+}
+
+export function useRunAutolink(guildLinkId: string | undefined) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: () =>
+            apiFetch<AutolinkResponse>(`/guild-links/${guildLinkId}/autolink`, {
+                method: 'POST',
             }),
         onSuccess: () =>
             queryClient.invalidateQueries({
