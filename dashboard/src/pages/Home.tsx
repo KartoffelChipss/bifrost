@@ -5,7 +5,6 @@ import {
     PackageOpen,
     PackageX,
     Plus,
-    Server,
     Unlink,
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -50,6 +49,8 @@ import {
     EmptyMedia,
     EmptyTitle,
 } from '../components/ui/empty';
+import { FluxerIcon } from '../icons/FluxerIcon';
+import { DiscordIcon } from '../icons/DiscordIcon';
 
 function GuildOptionRow({ guild }: { guild: GuildSummary }) {
     return (
@@ -66,9 +67,19 @@ function GuildOptionRow({ guild }: { guild: GuildSummary }) {
     );
 }
 
-function GuildComboboxAddon({ guild }: { guild: GuildSummary | undefined }) {
+function GuildComboboxAddon({
+    guild,
+    type,
+}: {
+    guild: GuildSummary | undefined;
+    type: 'discord' | 'fluxer';
+}) {
     if (!guild) {
-        return <Server aria-hidden="true" className="size-4.5" />;
+        if (type === 'discord')
+            return <DiscordIcon aria-hidden="true" className="size-4.5" />;
+        else if (type === 'fluxer')
+            return <FluxerIcon aria-hidden="true" className="size-4.5" />;
+        else return null;
     }
     return <GuildIcon guild={guild} className="size-4.5" />;
 }
@@ -184,6 +195,7 @@ function CreateGuildLinkDialog({
                                     startAddon={
                                         <GuildComboboxAddon
                                             guild={selectedDiscordItem?.guild}
+                                            type="discord"
                                         />
                                     }
                                 />
@@ -236,6 +248,7 @@ function CreateGuildLinkDialog({
                                     startAddon={
                                         <GuildComboboxAddon
                                             guild={selectedFluxerItem?.guild}
+                                            type="fluxer"
                                         />
                                     }
                                 />
