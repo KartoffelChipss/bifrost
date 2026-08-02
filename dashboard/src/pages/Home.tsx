@@ -317,10 +317,12 @@ export function Home() {
 
     if (isLoading || !guilds) {
         return (
-            <div className="flex flex-col gap-3">
-                <Skeleton className="h-20 w-full" />
-                <Skeleton className="h-20 w-full" />
-            </div>
+            <Layout requiredAuth="either">
+                <div className="flex flex-col gap-3">
+                    <Skeleton className="h-20 w-full" />
+                    <Skeleton className="h-20 w-full" />
+                </div>
+            </Layout>
         );
     }
 
@@ -330,103 +332,107 @@ export function Home() {
         guilds.unlinkedDiscordGuilds.length > 0 &&
         guilds.unlinkedFluxerGuilds.length > 0;
 
-    const content = (
-        <div className="flex flex-col gap-8">
-            <div className="flex items-center justify-between">
-                <h1 className="text-xl font-semibold">Bridged servers</h1>
-                {canCreateLink && (
-                    <CreateGuildLinkDialog
-                        discordGuilds={guilds.unlinkedDiscordGuilds}
-                        fluxerGuilds={guilds.unlinkedFluxerGuilds}
-                    />
-                )}
+    return (
+        <Layout requiredAuth="either">
+            <div className="flex flex-col gap-8">
+                <div className="flex items-center justify-between">
+                    <h1 className="text-xl font-semibold">Bridged servers</h1>
+                    {canCreateLink && (
+                        <CreateGuildLinkDialog
+                            discordGuilds={guilds.unlinkedDiscordGuilds}
+                            fluxerGuilds={guilds.unlinkedFluxerGuilds}
+                        />
+                    )}
+                </div>
+
+                <section className="flex flex-col gap-3">
+                    {guilds.linkedPairs.length === 0 && (
+                        <Empty>
+                            <EmptyHeader>
+                                <EmptyMedia variant="icon">
+                                    <PackageOpen />
+                                </EmptyMedia>
+                                <EmptyTitle>No bridged servers</EmptyTitle>
+                                <EmptyDescription>
+                                    You haven't linked any Discord servers to
+                                    Fluxer guilds yet.
+                                </EmptyDescription>
+                            </EmptyHeader>
+                            <EmptyContent>
+                                <div className="flex gap-2">
+                                    {canCreateLink && (
+                                        <CreateGuildLinkDialog
+                                            discordGuilds={
+                                                guilds.unlinkedDiscordGuilds
+                                            }
+                                            fluxerGuilds={
+                                                guilds.unlinkedFluxerGuilds
+                                            }
+                                        />
+                                    )}
+                                </div>
+                            </EmptyContent>
+                        </Empty>
+                    )}
+                    {guilds.linkedPairs.map((pair) => (
+                        <Card key={pair.guildLinkId}>
+                            <CardPanel className="flex items-center justify-between gap-4">
+                                <Link
+                                    to={`/guilds/${pair.guildLinkId}`}
+                                    className="flex flex-1 items-center gap-6"
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <GuildIcon guild={pair.discord} />
+                                        <span>{pair.discord.name}</span>
+                                        {!pair.discord.botPresent && (
+                                            <Badge variant="warning">
+                                                Bot missing
+                                            </Badge>
+                                        )}
+                                    </div>
+                                    <span className="text-muted-foreground">
+                                        &harr;
+                                    </span>
+                                    <div className="flex items-center gap-2">
+                                        <GuildIcon guild={pair.fluxer} />
+                                        <span>{pair.fluxer.name}</span>
+                                        {!pair.fluxer.botPresent && (
+                                            <Badge variant="warning">
+                                                Bot missing
+                                            </Badge>
+                                        )}
+                                    </div>
+                                </Link>
+                                <Button
+                                    aria-label="Unlink servers"
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    loading={
+                                        deleteGuildLink.isPending &&
+                                        deleteGuildLink.variables ===
+                                            pair.guildLinkId
+                                    }
+                                    onClick={() =>
+                                        deleteGuildLink.mutate(
+                                            pair.guildLinkId,
+                                            {
+                                                onError: (err) =>
+                                                    toastManager.add({
+                                                        title: 'Could not unlink servers',
+                                                        description:
+                                                            err.message,
+                                                    }),
+                                            }
+                                        )
+                                    }
+                                >
+                                    <Unlink aria-hidden="true" />
+                                </Button>
+                            </CardPanel>
+                        </Card>
+                    ))}
+                </section>
             </div>
-
-            <section className="flex flex-col gap-3">
-                {guilds.linkedPairs.length === 0 && (
-                    <Empty>
-                        <EmptyHeader>
-                            <EmptyMedia variant="icon">
-                                <PackageOpen />
-                            </EmptyMedia>
-                            <EmptyTitle>No bridged servers</EmptyTitle>
-                            <EmptyDescription>
-                                You haven't linked any Discord servers to Fluxer
-                                guilds yet.
-                            </EmptyDescription>
-                        </EmptyHeader>
-                        <EmptyContent>
-                            <div className="flex gap-2">
-                                {canCreateLink && (
-                                    <CreateGuildLinkDialog
-                                        discordGuilds={
-                                            guilds.unlinkedDiscordGuilds
-                                        }
-                                        fluxerGuilds={
-                                            guilds.unlinkedFluxerGuilds
-                                        }
-                                    />
-                                )}
-                            </div>
-                        </EmptyContent>
-                    </Empty>
-                )}
-                {guilds.linkedPairs.map((pair) => (
-                    <Card key={pair.guildLinkId}>
-                        <CardPanel className="flex items-center justify-between gap-4">
-                            <Link
-                                to={`/guilds/${pair.guildLinkId}`}
-                                className="flex flex-1 items-center gap-6"
-                            >
-                                <div className="flex items-center gap-2">
-                                    <GuildIcon guild={pair.discord} />
-                                    <span>{pair.discord.name}</span>
-                                    {!pair.discord.botPresent && (
-                                        <Badge variant="warning">
-                                            Bot missing
-                                        </Badge>
-                                    )}
-                                </div>
-                                <span className="text-muted-foreground">
-                                    &harr;
-                                </span>
-                                <div className="flex items-center gap-2">
-                                    <GuildIcon guild={pair.fluxer} />
-                                    <span>{pair.fluxer.name}</span>
-                                    {!pair.fluxer.botPresent && (
-                                        <Badge variant="warning">
-                                            Bot missing
-                                        </Badge>
-                                    )}
-                                </div>
-                            </Link>
-                            <Button
-                                aria-label="Unlink servers"
-                                variant="ghost"
-                                size="icon-sm"
-                                loading={
-                                    deleteGuildLink.isPending &&
-                                    deleteGuildLink.variables ===
-                                        pair.guildLinkId
-                                }
-                                onClick={() =>
-                                    deleteGuildLink.mutate(pair.guildLinkId, {
-                                        onError: (err) =>
-                                            toastManager.add({
-                                                title: 'Could not unlink servers',
-                                                description: err.message,
-                                            }),
-                                    })
-                                }
-                            >
-                                <Unlink aria-hidden="true" />
-                            </Button>
-                        </CardPanel>
-                    </Card>
-                ))}
-            </section>
-        </div>
+        </Layout>
     );
-
-    return <Layout requiredAuth="either">{content}</Layout>;
 }
