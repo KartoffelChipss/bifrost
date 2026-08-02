@@ -141,6 +141,16 @@ export const WEB_PUBLIC_URL = (
 
 export const SESSION_SECRET = process.env.BF_SESSION_SECRET || '';
 
+function parseTrustProxy(value: string | undefined): boolean | number | string {
+    if (!value) return 1;
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    if (/^-?\d+$/.test(value)) return Number(value);
+    return value;
+}
+
+export const WEB_TRUST_PROXY = parseTrustProxy(process.env.BF_WEB_TRUST_PROXY);
+
 export const DISCORD_CLIENT_SECRET = process.env.BF_DISCORD_CLIENT_SECRET || '';
 export const FLUXER_CLIENT_SECRET = process.env.BF_FLUXER_CLIENT_SECRET || '';
 

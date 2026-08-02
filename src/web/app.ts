@@ -3,7 +3,7 @@ import path from 'path';
 import type { Client as DiscordClient } from 'discord.js';
 import { LinkService } from '../services/LinkService';
 import { WebhookService } from '../services/WebhookService';
-import { isProduction } from '../utils/env';
+import { isProduction, WEB_TRUST_PROXY } from '../utils/env';
 import logger from '../utils/logging/logger';
 import type { FluxerClientRef } from './clientRefs';
 import { createSessionMiddleware } from './session';
@@ -26,7 +26,7 @@ export function createWebApp({
     fluxerClientRef: FluxerClientRef;
 }): express.Express {
     const app = express();
-    app.set('trust proxy', 1);
+    app.set('trust proxy', WEB_TRUST_PROXY);
     app.disable('x-powered-by');
 
     app.use(express.json());
