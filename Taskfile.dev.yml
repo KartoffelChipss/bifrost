@@ -1,0 +1,23 @@
+version: '3'
+
+tasks:
+    install:
+        desc: Install dependencies for the bot and the dashboard
+        cmds:
+            - pnpm install
+
+    bot:
+        desc: Run the bot with hot-reload (tsx watch)
+        cmds:
+            - pnpm exec tsx watch src/index.ts
+
+    dashboard:
+        desc: Run the dashboard's Vite dev server
+        cmds:
+            - pnpm --dir dashboard dev
+
+    up:
+        desc: Run the bot and the dashboard together in development mode
+        deps:
+            - bot
+            - dashboard

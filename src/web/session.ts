@@ -2,7 +2,7 @@ import session from 'express-session';
 import type { RequestHandler } from 'express';
 import SequelizeSessionInit from 'connect-session-sequelize';
 import sequelize from '../db/sequelize';
-import { SESSION_SECRET, isProduction } from '../utils/env';
+import { SESSION_SECRET } from '../utils/env';
 
 export interface StoredGuild {
     id: string;
@@ -47,7 +47,7 @@ export function createSessionMiddleware(): RequestHandler {
         name: 'bifrost.sid',
         cookie: {
             httpOnly: true,
-            secure: isProduction,
+            secure: 'auto',
             sameSite: 'lax',
             maxAge: 30 * 24 * 60 * 60 * 1000,
         },
