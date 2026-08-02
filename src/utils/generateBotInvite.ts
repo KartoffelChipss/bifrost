@@ -17,7 +17,8 @@ export const generateFluxerBotInviteLink = (
     permissions: string,
     guildId?: string
 ) => {
-    const baseUrl = FLUXER_BASE_URL?.replace(/\/$/, '') || 'https://fluxer.app';
+    const baseUrl =
+        FLUXER_BASE_URL?.replace(/\/$/, '') || 'https://web.fluxer.app';
     let url = `${baseUrl}/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=${permissions}`;
     if (guildId) {
         url += `&guild_id=${guildId}&disable_guild_select=true`;
