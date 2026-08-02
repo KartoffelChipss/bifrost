@@ -204,7 +204,30 @@ export function GuildDetail() {
             </div>
 
             {isLoading || !data ? (
-                <Skeleton className="h-40 w-full" />
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Discord channel</TableHead>
+                            <TableHead>Fluxer channel</TableHead>
+                            <TableHead className="w-px" />
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {[0, 1, 2].map((i) => (
+                            <TableRow key={i}>
+                                <TableCell>
+                                    <Skeleton className="h-4 w-24 rounded-md" />
+                                </TableCell>
+                                <TableCell>
+                                    <Skeleton className="h-4 w-24 rounded-md" />
+                                </TableCell>
+                                <TableCell>
+                                    <Skeleton className="size-8 rounded-lg" />
+                                </TableCell>
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                </Table>
             ) : data.linked.length === 0 ? (
                 <Empty>
                     <EmptyHeader>
