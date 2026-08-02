@@ -25,7 +25,9 @@ import {
     METRICS_PORT,
     QUEUE_TTL_MS,
     REPO_URL,
+    WEB_PORT,
 } from './utils/env';
+import { createWebApp } from './web/app';
 import {
     generateDiscordBotInviteLink,
     generateFluxerBotInviteLink,
@@ -183,7 +185,7 @@ const main = async () => {
     );
     logger.info(`Fluxer Bot Invite Link: ${fluxerBotInviteLink}`);
 
-    const [, initialFluxerClient] = await Promise.all([
+    const [discordClient, initialFluxerClient] = await Promise.all([
         startDiscordClient({
             linkService,
             webhookService,
@@ -205,6 +207,16 @@ const main = async () => {
     }, 30_000);
 
     logger.info('Both Discord and Fluxer clients have started successfully.');
+
+    const webApp = createWebApp({
+        linkService,
+        webhookService,
+        discordClient,
+        fluxerClientRef,
+    });
+    webApp.listen(WEB_PORT, () => {
+        logger.info(`Web dashboard listening on port ${WEB_PORT}`);
+    });
 };
 
 main();

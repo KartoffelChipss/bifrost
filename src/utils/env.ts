@@ -131,6 +131,19 @@ function parseRepoUrl(raw: string): string {
     return raw.replace(/^git@([^:]+):/, 'https://$1/').replace(/\.git$/, '');
 }
 
+export const WEB_PORT = process.env.BF_WEB_PORT
+    ? Number(process.env.BF_WEB_PORT)
+    : 9092;
+
+export const WEB_PUBLIC_URL = (
+    process.env.BF_WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`
+).replace(/\/$/, '');
+
+export const SESSION_SECRET = process.env.BF_SESSION_SECRET || '';
+
+export const DISCORD_CLIENT_SECRET = process.env.BF_DISCORD_CLIENT_SECRET || '';
+export const FLUXER_CLIENT_SECRET = process.env.BF_FLUXER_CLIENT_SECRET || '';
+
 export const GIT_COMMIT =
     process.env.GIT_COMMIT || tryExec('git rev-parse HEAD');
 export const REPO_URL =
