@@ -19,6 +19,7 @@ import { WebhookService } from './services/WebhookService';
 import {
     DISCORD_APP_ID,
     DISCORD_HEALTH_URL,
+    ENABLE_WEB_DASHBOARD,
     FLUXER_APP_ID,
     FLUXER_HEALTH_URL,
     GIT_COMMIT,
@@ -208,15 +209,17 @@ const main = async () => {
 
     logger.info('Both Discord and Fluxer clients have started successfully.');
 
-    const webApp = createWebApp({
-        linkService,
-        webhookService,
-        discordClient,
-        fluxerClientRef,
-    });
-    webApp.listen(WEB_PORT, () => {
-        logger.info(`Web dashboard listening on port ${WEB_PORT}`);
-    });
+    if (ENABLE_WEB_DASHBOARD) {
+        const webApp = createWebApp({
+            linkService,
+            webhookService,
+            discordClient,
+            fluxerClientRef,
+        });
+        webApp.listen(WEB_PORT, () => {
+            logger.info(`Web dashboard listening on port ${WEB_PORT}`);
+        });
+    }
 };
 
 main();

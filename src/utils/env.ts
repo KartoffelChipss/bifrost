@@ -131,6 +131,9 @@ function parseRepoUrl(raw: string): string {
     return raw.replace(/^git@([^:]+):/, 'https://$1/').replace(/\.git$/, '');
 }
 
+export const ENABLE_WEB_DASHBOARD = parseBool(
+    process.env.BF_ENABLE_WEB_DASHBOARD
+);
 export const WEB_PORT = process.env.BF_WEB_PORT
     ? Number(process.env.BF_WEB_PORT)
     : 9092;
