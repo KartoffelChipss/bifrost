@@ -1,6 +1,6 @@
 {
     "name": "bifrost",
-    "version": "1.5.0",
+    "version": "1.5.1",
     "description": "",
     "main": "index.ts",
     "scripts": {
@@ -16,7 +16,7 @@
     "license": "ISC",
     "packageManager": "pnpm@10.27.0",
     "dependencies": {
-        "@fluxerjs/core": "^2.1.0",
+        "@fluxerjs/core": "^2.2.0",
         "discord.js": "^14.25.1",
         "dotenv": "^17.3.1",
         "lru-cache": "^11.2.6",
