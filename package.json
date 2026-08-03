@@ -17,8 +17,12 @@
     "packageManager": "pnpm@10.27.0",
     "dependencies": {
         "@fluxerjs/core": "^2.2.0",
+        "@fluxerjs/util": "^2.2.0",
+        "connect-session-sequelize": "^8.0.6",
         "discord.js": "^14.25.1",
         "dotenv": "^17.3.1",
+        "express": "^5.2.1",
+        "express-session": "^1.19.0",
         "lru-cache": "^11.2.6",
         "nanoid": "^5.1.6",
         "node-cache": "^5.1.2",
@@ -31,6 +35,8 @@
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
+        "@types/express": "^5.0.6",
+        "@types/express-session": "^1.19.0",
         "@types/node": "^25.3.0",
         "@typescript-eslint/eslint-plugin": "^8.56.1",
         "@typescript-eslint/parser": "^8.56.1",

@@ -19,13 +19,16 @@ import { WebhookService } from './services/WebhookService';
 import {
     DISCORD_APP_ID,
     DISCORD_HEALTH_URL,
+    ENABLE_WEB_DASHBOARD,
     FLUXER_APP_ID,
     FLUXER_HEALTH_URL,
     GIT_COMMIT,
     METRICS_PORT,
     QUEUE_TTL_MS,
     REPO_URL,
+    WEB_PORT,
 } from './utils/env';
+import { createWebApp } from './web/app';
 import {
     generateDiscordBotInviteLink,
     generateFluxerBotInviteLink,
@@ -183,7 +186,7 @@ const main = async () => {
     );
     logger.info(`Fluxer Bot Invite Link: ${fluxerBotInviteLink}`);
 
-    const [, initialFluxerClient] = await Promise.all([
+    const [discordClient, initialFluxerClient] = await Promise.all([
         startDiscordClient({
             linkService,
             webhookService,
@@ -205,6 +208,18 @@ const main = async () => {
     }, 30_000);
 
     logger.info('Both Discord and Fluxer clients have started successfully.');
+
+    if (ENABLE_WEB_DASHBOARD) {
+        const webApp = createWebApp({
+            linkService,
+            webhookService,
+            discordClient,
+            fluxerClientRef,
+        });
+        webApp.listen(WEB_PORT, () => {
+            logger.info(`Web dashboard listening on port ${WEB_PORT}`);
+        });
+    }
 };
 
 main();

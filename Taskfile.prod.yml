@@ -1,0 +1,22 @@
+version: '3'
+
+tasks:
+    build:
+        desc: Build the bot and the dashboard for production
+        cmds:
+            - pnpm build
+            - pnpm --dir dashboard build
+
+    up:
+        desc: Build (if needed) and run the bot in production mode
+        deps:
+            - build
+        env:
+            NODE_ENV: production
+        cmds:
+            - node dist/index.js
+
+    clean:
+        desc: Remove build output for the bot and the dashboard
+        cmds:
+            - rm -rf dist dashboard/dist
