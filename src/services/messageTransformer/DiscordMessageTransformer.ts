@@ -98,9 +98,9 @@ export default class DiscordMessageTransformer extends MessageTransformer<
               )
             : emojiReplacedContent;
 
-        const embeds: WebhookEmbed[] = message.embeds.map((embed) =>
-            WebhookEmbed.fromDiscordEmbed(embed)
-        );
+        const embeds: WebhookEmbed[] = message.embeds
+            .filter((embed) => embed.data.type === 'rich')
+            .map((embed) => WebhookEmbed.fromDiscordEmbed(embed));
 
         if (message.reference) {
             const referencedMessage = await message.fetchReference();
