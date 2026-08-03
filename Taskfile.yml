@@ -1,0 +1,12 @@
+version: '3'
+
+includes:
+    dev: ./Taskfile.dev.yml
+    prod: ./Taskfile.prod.yml
+
+tasks:
+    default:
+        desc: List available tasks
+        cmds:
+            - task --list
+        silent: true

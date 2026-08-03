@@ -1,3 +1,7 @@
+packages:
+    - '.'
+    - 'dashboard'
+
 onlyBuiltDependencies:
     - sqlite3
     - esbuild
