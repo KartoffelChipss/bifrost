@@ -11,11 +11,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
+COPY dashboard/package.json ./dashboard/package.json
 RUN pnpm install --frozen-lockfile --unsafe-perm --ignore-scripts=false
 
 COPY . .
 
 RUN pnpm build
+RUN pnpm --dir dashboard build
 
 RUN mkdir -p /config
 
