@@ -286,6 +286,21 @@ export function createChannelsRouter({
             return;
         }
 
+        const { unlinkedDiscordChannels, unlinkedFluxerChannels } =
+            await getChannelState(link);
+        if (!unlinkedDiscordChannels.some((c) => c.id === discordChannelId)) {
+            res.status(400).json({
+                error: 'discordChannelId does not belong to this guild link',
+            });
+            return;
+        }
+        if (!unlinkedFluxerChannels.some((c) => c.id === fluxerChannelId)) {
+            res.status(400).json({
+                error: 'fluxerChannelId does not belong to this guild link',
+            });
+            return;
+        }
+
         try {
             const discordWebhook = await webhookService.createDiscordWebhook(
                 discordChannelId,
