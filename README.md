@@ -28,14 +28,14 @@ You can find the docs here: https://bifrost-bot.com/
 
 ### Hosted Bot
 
-You can find a guide on how to use the hosted bot here: https://bifrost-bot.com/guide/getting-started.html
+You can find a guide on how to use the hosted bot here: https://bifrost-bot.com/docs/getting-started/
 
 > [!NOTE]  
 > You can check the uptime of the hosted instance [here](https://status.bifrost-bot.com)
 
 ### Self-Hosting with Docker
 
-You can find a guide on how to self-host the bot using Docker here: https://bifrost-bot.com/guide/self-hosting/
+You can find a guide on how to self-host the bot using Docker here: https://bifrost-bot.com/docs/self-hosting/
 
 ## License
 
