@@ -3,7 +3,7 @@ export const buildFluxerStickerUrl = (
     animated: boolean,
     size?: number
 ) => {
-    const url = `https://fluxerusercontent.com/stickers/${id}?size=${size || 320}&animated=${animated}`;
+    const url = `https://fluxerusercontent.com/stickers/${id}.webp?size=${size || 320}&animated=${animated}`;
     return url;
 };
 
