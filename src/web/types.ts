@@ -7,6 +7,7 @@ export interface Identity {
 export interface MeResponse {
     discord: Identity | null;
     fluxer: Identity | null;
+    isOwner: boolean;
 }
 
 export interface GuildSummary {
@@ -92,4 +93,32 @@ export interface AutolinkResponse {
 
 export interface ApiErrorResponse {
     error: string;
+}
+
+export interface AdminStatsResponse {
+    discordGuildCount: number | null;
+    fluxerGuildCount: number | null;
+    discordUserCount: number | null;
+    fluxerUserCount: number | null;
+    discordPingMs: number | null;
+    fluxerPingMs: number | null;
+    channelLinksCount: number;
+    messageLinksCount: number;
+    uptimeSeconds: number;
+    memoryUsageMB: number;
+    gitCommit: string | null;
+    repoUrl: string | null;
+    discordHealthy: boolean;
+    fluxerHealthy: boolean;
+}
+
+export interface AdminGuildLinkSummary {
+    guildLinkId: string;
+    createdAt: string;
+    discord: GuildSummary;
+    fluxer: GuildSummary;
+}
+
+export interface AdminGuildLinksResponse {
+    guildLinks: AdminGuildLinkSummary[];
 }

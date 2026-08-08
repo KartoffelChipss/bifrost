@@ -3,6 +3,8 @@ import path from 'path';
 import type { Client as DiscordClient } from 'discord.js';
 import { LinkService } from '../services/LinkService';
 import { WebhookService } from '../services/WebhookService';
+import { DbStatsService } from '../services/DbStatsService';
+import type StatsService from '../services/statsService/StatsService';
 import { isProduction, WEB_TRUST_PROXY } from '../utils/env';
 import logger from '../utils/logging/logger';
 import type { FluxerClientRef } from './clientRefs';
@@ -11,6 +13,7 @@ import authRouter from './routes/auth';
 import invitesRouter from './routes/invites';
 import { createGuildsRouter } from './routes/guilds';
 import { createChannelsRouter } from './routes/channels';
+import { createAdminRouter } from './routes/admin';
 
 const DASHBOARD_DIST = path.join(__dirname, '..', '..', 'dashboard', 'dist');
 
@@ -19,11 +22,19 @@ export function createWebApp({
     webhookService,
     discordClient,
     fluxerClientRef,
+    discordStatsService,
+    fluxerStatsService,
+    dbStatsService,
 }: {
     linkService: LinkService;
     webhookService: WebhookService;
     discordClient: DiscordClient;
     fluxerClientRef: FluxerClientRef;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    discordStatsService: StatsService<any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    fluxerStatsService: StatsService<any>;
+    dbStatsService: DbStatsService;
 }): express.Express {
     const app = express();
     app.set('trust proxy', WEB_TRUST_PROXY);
@@ -50,6 +61,18 @@ export function createWebApp({
             webhookService,
             discordClient,
             fluxerClientRef,
+        })
+    );
+    app.use(
+        '/api',
+        createAdminRouter({
+            linkService,
+            webhookService,
+            discordClient,
+            fluxerClientRef,
+            discordStatsService,
+            fluxerStatsService,
+            dbStatsService,
         })
     );
 

@@ -54,5 +54,10 @@ ChannelLinkModel.init(
         tableName: 'channel_links',
         createdAt: 'createdAt',
         updatedAt: false,
+        indexes: [
+            { unique: true, fields: ['discordChannelId'] },
+            { unique: true, fields: ['fluxerChannelId'] },
+            { fields: ['guildLinkId'] },
+        ],
     }
 );

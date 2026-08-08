@@ -3,6 +3,7 @@ import { PermissionFlagsBits } from 'discord.js';
 import { PermissionFlags as FluxerPermissionFlags } from '@fluxerjs/util';
 import { guildPermissions as discordGuildPermissions } from '../oauth/discordOAuth';
 import { guildPermissions as fluxerGuildPermissions } from '../oauth/fluxerOAuth';
+import { DISCORD_OWNER_ID, FLUXER_OWNER_ID } from '../../utils/env';
 
 export const DiscordManageGuild = PermissionFlagsBits.ManageGuild;
 export const DiscordManageWebhooks = PermissionFlagsBits.ManageWebhooks;
@@ -34,6 +35,22 @@ export function requireBoth(req: Request, res: Response, next: NextFunction) {
         res.status(401).json({
             error: 'Must be logged in with both Discord and Fluxer',
         });
+        return;
+    }
+    next();
+}
+
+export function isOwner(req: Request): boolean {
+    const discordMatch =
+        !!DISCORD_OWNER_ID && req.session.discord?.id === DISCORD_OWNER_ID;
+    const fluxerMatch =
+        !!FLUXER_OWNER_ID && req.session.fluxer?.id === FLUXER_OWNER_ID;
+    return discordMatch || fluxerMatch;
+}
+
+export function requireOwner(req: Request, res: Response, next: NextFunction) {
+    if (!isOwner(req)) {
+        res.status(403).json({ error: 'Bot owner only' });
         return;
     }
     next();
