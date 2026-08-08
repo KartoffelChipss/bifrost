@@ -4,7 +4,7 @@ import {
     OmitPartialGroupDMChannel,
     TextChannel,
 } from 'discord.js';
-import { WebhookMessageData } from '../WebhookService';
+import { WebhookAttachment, WebhookMessageData } from '../WebhookService';
 import MessageTransformer from './MessageTransformer';
 import { sanitizeMentions } from '../../utils/sanitizeMentions';
 import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
@@ -31,6 +31,38 @@ export default class DiscordMessageTransformer extends MessageTransformer<
             default:
                 return 'png';
         }
+    }
+
+    private buildAttachments(
+        source: Pick<DiscordMessage, 'attachments' | 'stickers'>
+    ): WebhookAttachment[] {
+        const attachments: WebhookAttachment[] =
+            source.attachments?.map((attachment) => ({
+                url: attachment.url,
+                name: attachment.name || 'attachment',
+                spoiler: attachment.spoiler,
+            })) ?? [];
+
+        source.stickers?.forEach((sticker) => {
+            attachments.push({
+                url: buildDiscordStickerUrl(sticker.id, 160),
+                name:
+                    sticker.name +
+                    '.' +
+                    this.stickerFormatToExtension(sticker.format),
+                spoiler: false,
+            });
+        });
+
+        return attachments;
+    }
+
+    private buildRichEmbeds(
+        source: Pick<DiscordMessage, 'embeds'>
+    ): WebhookEmbed[] {
+        return source.embeds
+            .filter((embed) => embed.data.type === 'rich')
+            .map((embed) => WebhookEmbed.fromDiscordEmbed(embed));
     }
 
     private sanitizeContent(
@@ -89,22 +121,7 @@ export default class DiscordMessageTransformer extends MessageTransformer<
             fluxerEmojis
         );
 
-        const attachments = message.attachments.map((attachment) => ({
-            url: attachment.url,
-            name: attachment.name || 'attachment',
-            spoiler: attachment.spoiler,
-        }));
-
-        message.stickers.forEach((sticker) => {
-            attachments.push({
-                url: buildDiscordStickerUrl(sticker.id, 160),
-                name:
-                    sticker.name +
-                    '.' +
-                    this.stickerFormatToExtension(sticker.format),
-                spoiler: false,
-            });
-        });
+        const attachments = this.buildAttachments(message);
 
         const isPollPresent =
             message.poll &&
@@ -122,9 +139,7 @@ export default class DiscordMessageTransformer extends MessageTransformer<
               )
             : emojiReplacedContent;
 
-        const embeds: WebhookEmbed[] = message.embeds
-            .filter((embed) => embed.data.type === 'rich')
-            .map((embed) => WebhookEmbed.fromDiscordEmbed(embed));
+        const embeds: WebhookEmbed[] = this.buildRichEmbeds(message);
 
         if (message.reference) {
             const isForwarded = message.flags.has(MessageFlags.HasSnapshot);
@@ -140,6 +155,12 @@ export default class DiscordMessageTransformer extends MessageTransformer<
                     embeds,
                 };
             }
+
+            if (isForwarded) {
+                attachments.push(...this.buildAttachments(referencedMessage));
+                embeds.push(...this.buildRichEmbeds(referencedMessage));
+            }
+
             const content = this.sanitizeContent(referencedMessage);
             const refrenceEmoji = isForwarded ? '⏩' : '↩️';
             if (content && content.trim() !== '') {
@@ -158,6 +179,14 @@ export default class DiscordMessageTransformer extends MessageTransformer<
                             iconURL: referencedAuthor?.avatarURL() || undefined,
                         },
                         footer,
+                    })
+                );
+            } else if (attachments.length > 0 || embeds.length > 0) {
+                embeds.unshift(
+                    new WebhookEmbed({
+                        description: `Forwarded message ${refrenceEmoji}`,
+                        color: 0x0b0d0e,
+                        footer: this.buildForwardSourceFooter(message),
                     })
                 );
             }
