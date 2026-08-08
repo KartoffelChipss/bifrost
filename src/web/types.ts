@@ -33,6 +33,13 @@ export interface ChannelSummary {
     name: string;
 }
 
+export interface UnlinkedChannelSummary extends ChannelSummary {
+    categoryId: string | null;
+    categoryName: string | null;
+    position: number;
+    categoryPosition: number | null;
+}
+
 export interface ChannelLinkSummary {
     id: string;
     discordChannel: ChannelSummary;
@@ -41,8 +48,8 @@ export interface ChannelLinkSummary {
 
 export interface GuildChannelsResponse {
     linked: ChannelLinkSummary[];
-    unlinkedDiscordChannels: ChannelSummary[];
-    unlinkedFluxerChannels: ChannelSummary[];
+    unlinkedDiscordChannels: UnlinkedChannelSummary[];
+    unlinkedFluxerChannels: UnlinkedChannelSummary[];
 }
 
 export interface CreateGuildLinkBody {

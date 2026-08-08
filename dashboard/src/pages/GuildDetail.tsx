@@ -1,24 +1,8 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import {
-    ArrowLeft,
-    ArrowLeftRight,
-    Hash,
-    PackageOpen,
-    Plus,
-    Trash,
-    Wand2,
-} from 'lucide-react';
+import { ArrowLeft, PackageOpen, Trash, Wand2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-    Combobox,
-    ComboboxEmpty,
-    ComboboxInput,
-    ComboboxItem,
-    ComboboxList,
-    ComboboxPopup,
-} from '@/components/ui/combobox';
 import {
     Dialog,
     DialogClose,
@@ -42,12 +26,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { toastManager } from '@/components/ui/toast';
 import {
     useAutolinkPreview,
-    useCreateChannelLink,
     useDeleteChannelLink,
     useGuildChannels,
     useRunAutolink,
 } from '@/api/client';
-import type { ChannelSummary } from '../../../src/web/types';
 import { Layout } from '../components/Layout';
 import {
     Empty,
@@ -57,187 +39,7 @@ import {
     EmptyMedia,
     EmptyTitle,
 } from '../components/ui/empty';
-
-function sortByName(a: ChannelSummary, b: ChannelSummary) {
-    return a.name.localeCompare(b.name);
-}
-
-function CreateChannelLinkDialog({
-    guildLinkId,
-    discordChannels,
-    fluxerChannels,
-}: {
-    guildLinkId: string;
-    discordChannels: ChannelSummary[];
-    fluxerChannels: ChannelSummary[];
-}) {
-    const [open, setOpen] = useState(false);
-    const [discordId, setDiscordId] = useState<string | null>(null);
-    const [fluxerId, setFluxerId] = useState<string | null>(null);
-    const createChannelLink = useCreateChannelLink();
-
-    const discordItems = [...discordChannels]
-        .sort(sortByName)
-        .map((c) => ({ label: c.name, value: c.id }));
-    const fluxerItems = [...fluxerChannels]
-        .sort(sortByName)
-        .map((c) => ({ label: c.name, value: c.id }));
-
-    const selectedDiscordItem =
-        discordItems.find((i) => i.value === discordId) ?? null;
-    const selectedFluxerItem =
-        fluxerItems.find((i) => i.value === fluxerId) ?? null;
-
-    return (
-        <Dialog
-            open={open}
-            onOpenChange={(next) => {
-                setOpen(next);
-                if (!next) {
-                    setDiscordId(null);
-                    setFluxerId(null);
-                }
-            }}
-        >
-            <DialogTrigger render={<Button />}>
-                <Plus aria-hidden="true" />
-                Link a channel
-            </DialogTrigger>
-            <DialogPopup className="sm:max-w-2xl">
-                <DialogHeader>
-                    <DialogTitle>Link a channel</DialogTitle>
-                    <DialogDescription>
-                        Messages posted in either channel will be mirrored to
-                        the other.
-                    </DialogDescription>
-                </DialogHeader>
-                <DialogPanel className="flex flex-col gap-4">
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_1fr]">
-                        <div className="flex flex-col gap-1.5">
-                            <label className="text-sm font-medium">
-                                Discord channel
-                            </label>
-                            <Combobox
-                                items={discordItems}
-                                value={selectedDiscordItem}
-                                onValueChange={(item) =>
-                                    setDiscordId(item?.value ?? null)
-                                }
-                            >
-                                <ComboboxInput
-                                    placeholder="Search Discord channels..."
-                                    startAddon={
-                                        <Hash
-                                            aria-hidden="true"
-                                            className="size-4.5"
-                                        />
-                                    }
-                                />
-                                <ComboboxPopup>
-                                    <ComboboxEmpty>
-                                        No unlinked Discord channels.
-                                    </ComboboxEmpty>
-                                    <ComboboxList>
-                                        {(item) => (
-                                            <ComboboxItem
-                                                key={item.value}
-                                                value={item}
-                                            >
-                                                #{item.label}
-                                            </ComboboxItem>
-                                        )}
-                                    </ComboboxList>
-                                </ComboboxPopup>
-                            </Combobox>
-                        </div>
-
-                        <div className="text-muted-foreground hidden items-center justify-center pt-7 sm:flex">
-                            <ArrowLeftRight
-                                aria-hidden="true"
-                                className="size-5"
-                            />
-                        </div>
-
-                        <div className="flex flex-col gap-1.5">
-                            <label className="text-sm font-medium">
-                                Fluxer channel
-                            </label>
-                            <Combobox
-                                items={fluxerItems}
-                                value={selectedFluxerItem}
-                                onValueChange={(item) =>
-                                    setFluxerId(item?.value ?? null)
-                                }
-                            >
-                                <ComboboxInput
-                                    placeholder="Search Fluxer channels..."
-                                    startAddon={
-                                        <Hash
-                                            aria-hidden="true"
-                                            className="size-4.5"
-                                        />
-                                    }
-                                />
-                                <ComboboxPopup>
-                                    <ComboboxEmpty>
-                                        No unlinked Fluxer channels.
-                                    </ComboboxEmpty>
-                                    <ComboboxList>
-                                        {(item) => (
-                                            <ComboboxItem
-                                                key={item.value}
-                                                value={item}
-                                            >
-                                                #{item.label}
-                                            </ComboboxItem>
-                                        )}
-                                    </ComboboxList>
-                                </ComboboxPopup>
-                            </Combobox>
-                        </div>
-                    </div>
-                </DialogPanel>
-                <DialogFooter>
-                    <DialogClose render={<Button variant="ghost" />}>
-                        Cancel
-                    </DialogClose>
-                    <Button
-                        type="button"
-                        disabled={!discordId || !fluxerId}
-                        loading={createChannelLink.isPending}
-                        onClick={() => {
-                            if (!discordId || !fluxerId) return;
-                            createChannelLink.mutate(
-                                {
-                                    guildLinkId,
-                                    discordChannelId: discordId,
-                                    fluxerChannelId: fluxerId,
-                                },
-                                {
-                                    onSuccess: () => {
-                                        toastManager.add({
-                                            type: 'success',
-                                            title: 'Channels linked',
-                                        });
-                                        setOpen(false);
-                                    },
-                                    onError: (err) =>
-                                        toastManager.add({
-                                            type: 'error',
-                                            title: 'Could not link channels',
-                                            description: err.message,
-                                        }),
-                                }
-                            );
-                        }}
-                    >
-                        Link channels
-                    </Button>
-                </DialogFooter>
-            </DialogPopup>
-        </Dialog>
-    );
-}
+import { CreateChannelLinkDialog } from '../components/CreateChannelLinkDialog';
 
 function AutolinkDialog({
     guildLinkId,

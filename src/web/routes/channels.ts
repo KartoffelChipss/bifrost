@@ -1,5 +1,8 @@
 import { Router, Request } from 'express';
-import { ChannelType, TextChannel as DiscordTextChannel } from 'discord.js';
+import {
+    ChannelType as DiscordChannelType,
+    TextChannel as DiscordTextChannel,
+} from 'discord.js';
 import type { Client as DiscordClient } from 'discord.js';
 import { GuildLink } from '../../db/entities/GuildLink';
 import { LinkService } from '../../services/LinkService';
@@ -18,10 +21,11 @@ import type {
     AutolinkResponse,
     AutolinkResultItem,
     ChannelLinkSummary,
-    ChannelSummary,
     CreateChannelLinkBody,
     GuildChannelsResponse,
+    UnlinkedChannelSummary,
 } from '../types';
+import { ChannelType as FluxerChannelType } from '@fluxerjs/core';
 
 export function createChannelsRouter({
     linkService,
@@ -69,19 +73,65 @@ export function createChannelsRouter({
             link.fluxerGuildId
         );
 
-        const discordChannels: ChannelSummary[] = discordGuild
+        const discordChannels: UnlinkedChannelSummary[] = discordGuild
             ? [...discordGuild.channels.cache.values()]
                   .filter(
                       (c): c is DiscordTextChannel =>
-                          c.type === ChannelType.GuildText
+                          c.type === DiscordChannelType.GuildText
                   )
-                  .map((c) => ({ id: c.id, name: c.name }))
+                  .map((c) => {
+                      const category = c.parentId
+                          ? discordGuild.channels.cache.get(c.parentId)
+                          : null;
+                      const categoryPosition =
+                          category &&
+                          category.type === DiscordChannelType.GuildCategory
+                              ? category.position
+                              : null;
+                      return {
+                          id: c.id,
+                          name: c.name,
+                          categoryId: c.parentId ?? null,
+                          categoryName: category?.name ?? null,
+                          position: c.position,
+                          categoryPosition: categoryPosition,
+                      };
+                  })
+                  .sort((a, b) => {
+                      const catA = a.categoryPosition ?? -1;
+                      const catB = b.categoryPosition ?? -1;
+                      if (catA !== catB) return catA - catB;
+                      return a.position - b.position;
+                  })
             : [];
 
-        const fluxerChannels: ChannelSummary[] = fluxerGuild
+        const fluxerChannels: UnlinkedChannelSummary[] = fluxerGuild
             ? (await fluxerGuild.fetchChannels())
                   .filter((c) => c.isTextBased())
-                  .map((c) => ({ id: c.id, name: c.name ?? c.id }))
+                  .map((c) => {
+                      const category = c.parentId
+                          ? fluxerGuild.channels.get(c.parentId)
+                          : null;
+                      const categoryPosition: number =
+                          category &&
+                          category.type === FluxerChannelType.GuildCategory
+                              ? (category.position ?? -1)
+                              : -1;
+                      return {
+                          id: c.id,
+                          name: c.name ?? '',
+                          categoryId: c.parentId ?? null,
+                          categoryName: category?.name ?? null,
+                          position: c.position ?? -1,
+                          categoryPosition: categoryPosition,
+                      };
+                  })
+                  .sort((a, b) => {
+                      const catA = a.categoryPosition ?? -1;
+                      const catB = b.categoryPosition ?? -1;
+                      if (catA !== catB) return catA - catB;
+                      return a.position - b.position;
+                  })
             : [];
 
         const linkedDiscordIds = new Set(
