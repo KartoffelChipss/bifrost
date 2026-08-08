@@ -9,7 +9,7 @@ import MessageTransformer from './MessageTransformer';
 import { sanitizeMentions } from '../../utils/sanitizeMentions';
 import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
 import { getPollMessage } from '../../utils/pollMessageFormatter';
-import WebhookEmbed from '../WebhookEmbed';
+import WebhookEmbed, { WebhookEmbedFooter } from '../WebhookEmbed';
 import { GeneralEmoji } from '../../utils/emojis';
 
 type DiscordMessage = OmitPartialGroupDMChannel<Message<boolean>>;
@@ -33,7 +33,9 @@ export default class DiscordMessageTransformer extends MessageTransformer<
         }
     }
 
-    private sanitizeContent(message: DiscordMessage): string {
+    private sanitizeContent(
+        message: Pick<DiscordMessage, 'content' | 'client' | 'guild'>
+    ): string {
         return sanitizeMentions(message.content, {
             resolveUser: (id) => {
                 const user = message.client.users.cache.get(id);
@@ -53,6 +55,28 @@ export default class DiscordMessageTransformer extends MessageTransformer<
                     : null;
             },
         });
+    }
+
+    private buildForwardSourceFooter(
+        message: DiscordMessage
+    ): WebhookEmbedFooter | null {
+        const reference = message.reference;
+        if (!reference) return null;
+
+        const guild = reference.guildId
+            ? message.client.guilds.cache.get(reference.guildId)
+            : null;
+        const channel = message.client.channels.cache.get(reference.channelId);
+        const channelName =
+            channel instanceof TextChannel ? `#${channel.name}` : null;
+
+        if (guild && channelName) {
+            return { text: `From ${channelName} in ${guild.name}` };
+        }
+        if (guild) {
+            return { text: `From ${guild.name}` };
+        }
+        return { text: 'From another server' };
     }
 
     public async transformMessage(
@@ -103,23 +127,37 @@ export default class DiscordMessageTransformer extends MessageTransformer<
             .map((embed) => WebhookEmbed.fromDiscordEmbed(embed));
 
         if (message.reference) {
-            const referencedMessage = await message.fetchReference();
-            const content = this.sanitizeContent(referencedMessage);
             const isForwarded = message.flags.has(MessageFlags.HasSnapshot);
+            const referencedMessage = isForwarded
+                ? message.messageSnapshots.first()
+                : await message.fetchReference();
+            if (!referencedMessage) {
+                return {
+                    content: messageContent,
+                    username: message.author.username,
+                    avatarURL: message.author.avatarURL() || '',
+                    attachments: attachments,
+                    embeds,
+                };
+            }
+            const content = this.sanitizeContent(referencedMessage);
             const refrenceEmoji = isForwarded ? '⏩' : '↩️';
             if (content && content.trim() !== '') {
+                const referencedAuthor = referencedMessage.author;
+                const footer = isForwarded
+                    ? this.buildForwardSourceFooter(message)
+                    : null;
                 embeds.unshift(
                     new WebhookEmbed({
                         description: `${content}`,
                         color: 0x0b0d0e,
                         author: {
-                            name:
-                                referencedMessage.author.username +
-                                ` ${refrenceEmoji}`,
-                            iconURL:
-                                referencedMessage.author.avatarURL() ||
-                                undefined,
+                            name: referencedAuthor
+                                ? `${referencedAuthor.username} ${refrenceEmoji}`
+                                : `Forwarded message ${refrenceEmoji}`,
+                            iconURL: referencedAuthor?.avatarURL() || undefined,
                         },
+                        footer,
                     })
                 );
             }
