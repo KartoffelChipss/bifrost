@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+    AdminGuildLinksResponse,
+    AdminStatsResponse,
     AutolinkPreviewResponse,
     AutolinkResponse,
     ChannelLinkSummary,
@@ -137,6 +139,33 @@ export function useRunAutolink(guildLinkId: string | undefined) {
             queryClient.invalidateQueries({
                 queryKey: ['guild-channels', guildLinkId],
             }),
+    });
+}
+
+export function useAdminStats() {
+    return useQuery({
+        queryKey: ['admin-stats'],
+        queryFn: () => apiFetch<AdminStatsResponse>('/admin/stats'),
+        refetchInterval: 30_000,
+    });
+}
+
+export function useAdminGuildLinks() {
+    return useQuery({
+        queryKey: ['admin-guild-links'],
+        queryFn: () => apiFetch<AdminGuildLinksResponse>('/admin/guild-links'),
+    });
+}
+
+export function useAdminDeleteGuildLink() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: (guildLinkId: string) =>
+            apiFetch<void>(`/admin/guild-links/${guildLinkId}`, {
+                method: 'DELETE',
+            }),
+        onSuccess: () =>
+            queryClient.invalidateQueries({ queryKey: ['admin-guild-links'] }),
     });
 }
 

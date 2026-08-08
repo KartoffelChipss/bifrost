@@ -3,6 +3,7 @@ import { randomBytes } from 'crypto';
 import * as discordOAuth from '../oauth/discordOAuth';
 import * as fluxerOAuth from '../oauth/fluxerOAuth';
 import logger from '../../utils/logging/logger';
+import { isOwner } from '../middleware/auth';
 import type { MeResponse } from '../types';
 
 const router: Router = Router();
@@ -77,6 +78,7 @@ router.get('/me', (req, res) => {
                   avatarUrl: req.session.fluxer.avatarUrl,
               }
             : null,
+        isOwner: isOwner(req),
     };
     res.json(response);
 });

@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { LogOut } from 'lucide-react';
+import { LogOut, ShieldUser } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { useLogout, useMe } from '@/api/client';
@@ -81,6 +81,16 @@ export function Layout({
                     Bifröst Dashboard
                 </Link>
                 <div className="flex items-center gap-2">
+                    {me?.isOwner && (
+                        <Button
+                            aria-label="Admin dashboard"
+                            variant="ghost"
+                            size="icon-sm"
+                            render={<Link to="/admin" />}
+                        >
+                            <ShieldUser aria-hidden="true" />
+                        </Button>
+                    )}
                     <IdentityChip platform="discord" identity={me?.discord} />
                     <IdentityChip platform="fluxer" identity={me?.fluxer} />
                     {(me?.discord || me?.fluxer) && (

@@ -215,6 +215,9 @@ const main = async () => {
             webhookService,
             discordClient,
             fluxerClientRef,
+            discordStatsService,
+            fluxerStatsService,
+            dbStatsService,
         });
         webApp.listen(WEB_PORT, () => {
             logger.info(`Web dashboard listening on port ${WEB_PORT}`);
