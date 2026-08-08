@@ -1,7 +1,7 @@
 import { CachedChannelLinkRepository } from './db/cachedrepos/CachedChannelLinkRepository';
 import { CachedGuildLinkRepository } from './db/cachedrepos/CachedGuildLinkRepository';
 import { CachedMessageLinkRepository } from './db/cachedrepos/CachedMessageLinkRepository';
-import { initDatabase } from './db/sequelize';
+import { initDatabase } from './db/migrator';
 import { SequelizeChannelLinkRepository } from './db/sequelizerepos/SequelizeChannelLinkRepository';
 import { SequelizeGuildLinkRepository } from './db/sequelizerepos/SequelizeGuildLinkRepository';
 import { SequelizeMessageLinkRepository } from './db/sequelizerepos/SequelizeMessageLinkRepository';

@@ -30,26 +30,4 @@ if (DB_DIALECT === 'postgres') {
     logger.info('Using SQLite database');
 }
 
-export const initDatabase = async () => {
-    try {
-        await sequelize.authenticate();
-        logger.info('Database connection has been established successfully.');
-
-        await sequelize.sync();
-        logger.info('Database synchronized successfully.');
-    } catch (error) {
-        logger.error(
-            'Unable to initialize database connection',
-            {
-                dialect: DB_DIALECT,
-                host: DB_HOST,
-                port: DB_PORT,
-                database: DB_NAME,
-            },
-            error
-        );
-        process.exit(1);
-    }
-};
-
 export default sequelize;
