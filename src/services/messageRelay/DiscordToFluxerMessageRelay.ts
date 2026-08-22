@@ -1,4 +1,9 @@
-import { Message, MessageType, OmitPartialGroupDMChannel } from 'discord.js';
+import {
+    Message,
+    MessageFlags,
+    MessageType,
+    OmitPartialGroupDMChannel,
+} from 'discord.js';
 import MessageRelay from './MessageRelay';
 import logger from '../../utils/logging/logger';
 import { formatJoinMessage } from '../../utils/formatJoinMessage';
@@ -8,6 +13,9 @@ import FluxerEntityResolver from '../entityResolver/FluxerEntityResolver';
 import { LinkService } from '../LinkService';
 import MessageTransformer from '../messageTransformer/MessageTransformer';
 import MetricsService from '../MetricsService';
+import { GeneralEmoji } from '../../utils/emojis';
+
+const MAX_MENTION_CONTENT = 2000;
 
 export default class DiscordToFluxerMessageRelay extends MessageRelay<
     OmitPartialGroupDMChannel<Message<boolean>>
@@ -52,13 +60,22 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
             await linkService.getChannelLinkByDiscordChannelId(
                 message.channelId
             );
-        if (!linkedChannel) return;
+        if (!linkedChannel) {
+            logger.warn(
+                `Discord message ${message.id} not relayed to Fluxer: no channel link for Discord channel ${message.channelId}`
+            );
+            return;
+        }
         const guildLink = await linkService.getGuildLinkById(
             linkedChannel.guildLinkId
         );
-        if (!guildLink) return;
+        if (!guildLink) {
+            logger.warn(
+                `Discord message ${message.id} not relayed to Fluxer: no guild link for channel link ${linkedChannel.linkId}`
+            );
+            return;
+        }
 
-        // Build payload before attempting send so it can be queued on failure
         let msg: WebhookMessageData;
         if (message.type === MessageType.UserJoin) {
             msg = {
@@ -67,13 +84,51 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
                 avatarURL: message.client.user?.avatarURL() || '',
             };
         } else {
-            const fluxerEmojis = await this.fluxerEntityResolver.fetchEmojis(
-                guildLink.fluxerGuildId
-            );
-            msg = await this.getMessageTransformer().transformMessage(
-                message,
-                fluxerEmojis
-            );
+            let fluxerEmojis: GeneralEmoji[] = [];
+            try {
+                fluxerEmojis = await this.fluxerEntityResolver.fetchEmojis(
+                    guildLink.fluxerGuildId
+                );
+            } catch (error) {
+                logger.warn(
+                    'Failed to fetch Fluxer emojis, relaying without emoji replacement:',
+                    error
+                );
+            }
+
+            try {
+                msg = await this.getMessageTransformer().transformMessage(
+                    message,
+                    fluxerEmojis
+                );
+            } catch (error) {
+                logger.error(
+                    'Failed to transform Discord message, relaying raw content:',
+                    error
+                );
+                msg = {
+                    content: message.content,
+                    username: message.author.username,
+                    avatarURL: message.author.avatarURL() || '',
+                };
+            }
+
+            if (
+                message.reference &&
+                !message.flags.has(MessageFlags.HasSnapshot)
+            ) {
+                try {
+                    msg = await this.addReplyMention(
+                        msg,
+                        message.reference.messageId
+                    );
+                } catch (error) {
+                    logger.error(
+                        'Failed to resolve reply mention, relaying without mention:',
+                        error
+                    );
+                }
+            }
         }
 
         try {
@@ -91,6 +146,8 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
                     fluxerMessageId: webhookMessageId,
                     guildLinkId: linkedChannel.guildLinkId,
                     channelLinkId: linkedChannel.id,
+                    discordAuthorId: message.author.id,
+                    discordAuthorUsername: message.author.username,
                 });
             }
             this.metricsService?.messagesRelayed.inc({
@@ -101,12 +158,57 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
             this.metricsService?.messageRelayErrors.inc({
                 direction: 'discord_to_fluxer',
             });
+            const serializable = toSerializable(msg);
+            serializable.authorMeta = {
+                discordAuthorId: message.author.id,
+                discordAuthorUsername: message.author.username,
+            };
             await this.queueService?.enqueue(
                 'discord_to_fluxer',
                 linkedChannel.id,
                 message.id,
-                toSerializable(msg)
+                serializable
             );
         }
+    }
+
+    public async addReplyMention(
+        msg: WebhookMessageData,
+        referencedMessageId: string | undefined | null
+    ): Promise<WebhookMessageData> {
+        if (!referencedMessageId) return msg;
+
+        const linkService = this.getLinkService();
+        const messageLink =
+            await linkService.getMessageLinkByDiscordMessageId(
+                referencedMessageId
+            );
+        if (!messageLink) {
+            logger.warn(
+                `Reply mention skipped: no message link for referenced Discord message ${referencedMessageId}`
+            );
+            return msg;
+        }
+        if (!messageLink.fluxerAuthorId) {
+            logger.debug(
+                `Reply mention skipped: message link ${messageLink.id} has no fluxerAuthorId (referenced message did not originate from Fluxer)`
+            );
+            return msg;
+        }
+
+        const mention = `<@${messageLink.fluxerAuthorId}>`;
+        if (msg.content.includes(mention)) return msg;
+
+        if (msg.content.length + mention.length + 1 > MAX_MENTION_CONTENT) {
+            logger.warn(
+                `Dropping reply mention: content length ${msg.content.length} + mention ${mention.length} exceeds ${MAX_MENTION_CONTENT}`
+            );
+            return msg;
+        }
+
+        return {
+            ...msg,
+            content: `${mention} ${msg.content}`,
+        };
     }
 }

@@ -35,13 +35,21 @@ export class CachedMessageLinkRepository implements MessageLinkRepository {
         guildLinkId: string,
         channelLinkId: string,
         discordMessageId: string,
-        fluxerMessageId: string
+        fluxerMessageId: string,
+        discordAuthorId?: string | null,
+        discordAuthorUsername?: string | null,
+        fluxerAuthorId?: string | null,
+        fluxerAuthorUsername?: string | null
     ): Promise<void> {
         await this.repository.createMessageLink(
             guildLinkId,
             channelLinkId,
             discordMessageId,
-            fluxerMessageId
+            fluxerMessageId,
+            discordAuthorId,
+            discordAuthorUsername,
+            fluxerAuthorId,
+            fluxerAuthorUsername
         );
 
         const created =

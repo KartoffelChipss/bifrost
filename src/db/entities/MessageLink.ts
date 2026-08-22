@@ -6,5 +6,10 @@ export interface MessageLink {
     discordMessageId: string;
     fluxerMessageId: string;
 
+    discordAuthorId: string | null;
+    discordAuthorUsername: string | null;
+    fluxerAuthorId: string | null;
+    fluxerAuthorUsername: string | null;
+
     createdAt: Date;
 }

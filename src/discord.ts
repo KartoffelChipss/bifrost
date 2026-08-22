@@ -3,8 +3,8 @@ import {
     EmbedBuilder,
     Events,
     GatewayIntentBits,
+    MessageFlags,
     Partials,
-    TextChannel,
 } from 'discord.js';
 import { COMMAND_PREFIX, DELETE_INVOCATION, DISCORD_TOKEN } from './utils/env';
 import { EmbedColors } from './utils/embeds';
@@ -233,11 +233,23 @@ const startDiscordClient = async ({
             newMessage,
             fluxerEmojis
         );
+
+        let finalMsg = newMsg;
+        if (
+            newMessage.reference &&
+            !newMessage.flags.has(MessageFlags.HasSnapshot)
+        ) {
+            finalMsg = await messageRelay.addReplyMention(
+                finalMsg,
+                newMessage.reference.messageId
+            );
+        }
+
         try {
             await webhookService.editMessageViaFluxerWebhook(
                 webhook,
                 linkedMessage.fluxerMessageId,
-                newMsg
+                finalMsg
             );
         } catch (error) {
             logger.error('Error editing message via Fluxer webhook:', error);
@@ -246,6 +258,10 @@ const startDiscordClient = async ({
 
     client.on(Events.MessageCreate, async (message) => {
         if (message.author.id === client.user?.id) return;
+
+        logger.debug(
+            `Discord message received: id=${message.id} channelId=${message.channelId} guildId=${message.guildId ?? null} webhookId=${message.webhookId ?? null} content="${message.content.slice(0, 50)}"`
+        );
 
         if (message.inGuild() && message.webhookId) {
             const webhookLink =
@@ -309,10 +325,13 @@ const startDiscordClient = async ({
 
         if (
             message.inGuild() &&
-            message.channel instanceof TextChannel &&
             !isCommandString(message.content, COMMAND_PREFIX)
         ) {
-            await messageRelay.relayMessage(message);
+            try {
+                await messageRelay.relayMessage(message);
+            } catch (error) {
+                logger.error('Error relaying message to Fluxer:', error);
+            }
         }
     });
 
