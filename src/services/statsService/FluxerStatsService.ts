@@ -27,7 +27,7 @@ export default class FluxerStatsService extends StatsService<Client> {
         }
 
         const start = Date.now();
-        await client.rest.get('/gateway/bot');
+        await client.fetchApplication();
         const end = Date.now();
 
         this.lastPing = end - start;
