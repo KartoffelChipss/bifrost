@@ -186,7 +186,16 @@ const main = async () => {
     );
     logger.info(`Fluxer Bot Invite Link: ${fluxerBotInviteLink}`);
 
-    const [discordClient, initialFluxerClient] = await Promise.all([
+    const connectFluxer = async () => {
+        try {
+            fluxerClientRef.current = await startFluxerClient(fluxerArgs);
+        } catch (err) {
+            logger.error('[Fluxer] Initial connection failed:', err);
+            enterFluxerBackoff();
+        }
+    };
+
+    const [discordClient] = await Promise.all([
         startDiscordClient({
             linkService,
             webhookService,
@@ -199,9 +208,8 @@ const main = async () => {
             fluxerStatsService,
             dbStatsService,
         }),
-        startFluxerClient(fluxerArgs),
+        connectFluxer(),
     ]);
-    fluxerClientRef.current = initialFluxerClient;
 
     setInterval(async () => {
         await healthCheckService.pushFluxerHealthStatus();
@@ -225,4 +233,7 @@ const main = async () => {
     }
 };
 
-main();
+main().catch((err) => {
+    logger.error('Fatal error during startup:', err);
+    process.exit(1);
+});
