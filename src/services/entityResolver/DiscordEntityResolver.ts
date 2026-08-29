@@ -1,4 +1,5 @@
 import { Channel, Client, Guild, GuildEmoji, Message } from 'discord.js';
+import NodeCache from 'node-cache';
 import EntityResolver from '../entityResolver/EntityResolver';
 
 export default class DiscordEntityResolver implements EntityResolver<
@@ -8,6 +9,7 @@ export default class DiscordEntityResolver implements EntityResolver<
     GuildEmoji
 > {
     private discordClient: Client | null = null;
+    private readonly emojiCache = new NodeCache({ stdTTL: 60 });
 
     setDiscordClient(client: Client) {
         this.discordClient = client;
@@ -72,6 +74,11 @@ export default class DiscordEntityResolver implements EntityResolver<
     async fetchEmojis(guildOrId: string | Guild): Promise<GuildEmoji[]> {
         this.ensureClient();
 
+        const id = typeof guildOrId === 'string' ? guildOrId : guildOrId.id;
+
+        const cached = this.emojiCache.get<GuildEmoji[]>(id);
+        if (cached) return cached;
+
         const guild =
             typeof guildOrId === 'string'
                 ? await this.fetchGuild(guildOrId)
@@ -82,6 +89,8 @@ export default class DiscordEntityResolver implements EntityResolver<
         }
 
         const emojiCollection = await guild.emojis.fetch();
-        return emojiCollection.map((emoji) => emoji);
+        const emojis = emojiCollection.map((emoji) => emoji);
+        this.emojiCache.set(id, emojis);
+        return emojis;
     }
 }
