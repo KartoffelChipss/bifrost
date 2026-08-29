@@ -1,4 +1,5 @@
 import { Channel, Client, Guild, GuildEmoji, Message } from '@fluxerjs/core';
+import NodeCache from 'node-cache';
 import EntityResolver from '../entityResolver/EntityResolver';
 
 export default class FluxerEntityResolver implements EntityResolver<
@@ -8,6 +9,7 @@ export default class FluxerEntityResolver implements EntityResolver<
     GuildEmoji
 > {
     private fluxerClient: Client | null = null;
+    private readonly emojiCache = new NodeCache({ stdTTL: 60 });
 
     setFluxerClient(client: Client) {
         this.fluxerClient = client;
@@ -76,6 +78,11 @@ export default class FluxerEntityResolver implements EntityResolver<
     }
 
     async fetchEmojis(guildId: string | Guild): Promise<GuildEmoji[]> {
+        const id = typeof guildId === 'string' ? guildId : guildId.id;
+
+        const cached = this.emojiCache.get<GuildEmoji[]>(id);
+        if (cached) return cached;
+
         const guild =
             typeof guildId === 'string'
                 ? await this.fetchGuild(guildId)
@@ -86,6 +93,8 @@ export default class FluxerEntityResolver implements EntityResolver<
         }
 
         const emojisColl = await guild.fetchEmojis();
-        return emojisColl.map((e) => e);
+        const emojis = emojisColl.map((e) => e);
+        this.emojiCache.set(id, emojis);
+        return emojis;
     }
 }
