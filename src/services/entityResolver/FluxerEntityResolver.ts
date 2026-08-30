@@ -9,7 +9,10 @@ export default class FluxerEntityResolver implements EntityResolver<
     GuildEmoji
 > {
     private fluxerClient: Client | null = null;
-    private readonly emojiCache = new NodeCache({ stdTTL: 60 });
+    private readonly emojiCache = new NodeCache({
+        stdTTL: 60,
+        useClones: false,
+    });
 
     setFluxerClient(client: Client) {
         this.fluxerClient = client;

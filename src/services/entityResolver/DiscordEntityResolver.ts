@@ -9,7 +9,10 @@ export default class DiscordEntityResolver implements EntityResolver<
     GuildEmoji
 > {
     private discordClient: Client | null = null;
-    private readonly emojiCache = new NodeCache({ stdTTL: 60 });
+    private readonly emojiCache = new NodeCache({
+        stdTTL: 60,
+        useClones: false,
+    });
 
     setDiscordClient(client: Client) {
         this.discordClient = client;
