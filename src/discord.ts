@@ -9,6 +9,7 @@ import {
 import { COMMAND_PREFIX, DELETE_INVOCATION, DISCORD_TOKEN } from './utils/env';
 import { EmbedColors } from './utils/embeds';
 import logger from './utils/logging/logger';
+import { isFluxerApiBlocked } from './utils/fluxerApiGuard';
 import CommandRegistry from './commands/CommandRegistry';
 import DiscordCommandHandler from './commands/discord/DiscordCommandHandler';
 import {
@@ -177,6 +178,8 @@ const startDiscordClient = async ({
         );
         if (!guildLink) return;
 
+        if (isFluxerApiBlocked()) return;
+
         const msg = await fluxerEntityResolver.fetchMessage(
             guildLink.fluxerGuildId,
             channelLink.fluxerChannelId,
@@ -213,6 +216,8 @@ const startDiscordClient = async ({
             linkedChannel.guildLinkId
         );
         if (!guildLink) return;
+
+        if (isFluxerApiBlocked()) return;
 
         const webhook = await webhookService.getFluxerWebhook(
             linkedChannel.fluxerWebhookId,

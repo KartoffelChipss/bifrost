@@ -1,6 +1,11 @@
 import { Message, MessageType, OmitPartialGroupDMChannel } from 'discord.js';
 import MessageRelay from './MessageRelay';
 import logger from '../../utils/logging/logger';
+import {
+    isFluxerApiBlockError,
+    isFluxerApiBlocked,
+    markFluxerApiBlocked,
+} from '../../utils/fluxerApiGuard';
 import { formatJoinMessage } from '../../utils/formatJoinMessage';
 import MessageQueueService, { toSerializable } from '../MessageQueueService';
 import { WebhookMessageData, WebhookService } from '../WebhookService';
@@ -76,6 +81,19 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
             );
         }
 
+        if (isFluxerApiBlocked()) {
+            logger.debug(
+                `Fluxer API blocked, queueing message ${message.id} without sending`
+            );
+            await this.queueService?.enqueue(
+                'discord_to_fluxer',
+                linkedChannel.id,
+                message.id,
+                toSerializable(msg)
+            );
+            return;
+        }
+
         try {
             const webhook = await webhookService.getFluxerWebhook(
                 linkedChannel.fluxerWebhookId,
@@ -97,6 +115,7 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
                 direction: 'discord_to_fluxer',
             });
         } catch (error) {
+            if (isFluxerApiBlockError(error)) markFluxerApiBlocked();
             logger.error('Error relaying message to Fluxer:', error);
             this.metricsService?.messageRelayErrors.inc({
                 direction: 'discord_to_fluxer',

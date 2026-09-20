@@ -1,6 +1,12 @@
 import { Client as FluxerClient } from '@fluxerjs/core';
 import { ActivityType, Client as DiscordClient } from 'discord.js';
 import logger from '../utils/logging/logger';
+import {
+    isFluxerApiBlockError,
+    isFluxerApiBlocked,
+    markFluxerApiBlocked,
+    markFluxerApiOk,
+} from '../utils/fluxerApiGuard';
 import MetricsService from './MetricsService';
 
 interface HealthStatus {
@@ -79,8 +85,14 @@ export default class HealthCheckService {
     private async checkFluxerHealth(): Promise<HealthStatus> {
         if (!this.fluxerClient)
             return { healthy: false, message: 'Fluxer client not initialized' };
+        if (isFluxerApiBlocked())
+            return {
+                healthy: false,
+                message: 'Fluxer API blocked this IP — backing off',
+            };
         try {
             const application = await this.fluxerClient.fetchApplication();
+            markFluxerApiOk();
             logger.debug(
                 `Fluxer /applications/@me response: ${JSON.stringify(application)}`
             );
@@ -119,6 +131,12 @@ export default class HealthCheckService {
             }
             return { healthy: true };
         } catch (err) {
+            if (isFluxerApiBlockError(err)) {
+                const cooldownMin = Math.round(markFluxerApiBlocked() / 60_000);
+                logger.warn(
+                    `Fluxer API blocked this IP — pausing Fluxer API calls for ~${cooldownMin} min`
+                );
+            }
             return {
                 healthy: false,
                 message: `Error checking Fluxer health: ${err}`,
@@ -297,7 +315,9 @@ export default class HealthCheckService {
             if (platformStatus) {
                 logger.warn(`Fluxer platform status: ${platformStatus}`);
             }
-            this.onFluxerDown?.(this.fluxerConsecutiveDowns);
+            if (!isFluxerApiBlocked()) {
+                this.onFluxerDown?.(this.fluxerConsecutiveDowns);
+            }
         }
         this.metricsService?.fluxerUp.set(healthStatus.healthy ? 1 : 0);
         this.metricsService?.healthPingMs.set({ bot: 'fluxer' }, ping);

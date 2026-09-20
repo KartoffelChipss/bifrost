@@ -8,6 +8,11 @@ import {
     WebhookService,
 } from './WebhookService';
 import logger from '../utils/logging/logger';
+import {
+    isFluxerApiBlockError,
+    isFluxerApiBlocked,
+    markFluxerApiBlocked,
+} from '../utils/fluxerApiGuard';
 
 export type SerializableEmbed = ReturnType<WebhookEmbed['toPlainObject']>;
 
@@ -82,6 +87,13 @@ export default class MessageQueueService {
         );
 
         for (const entry of pending) {
+            if (
+                entry.direction === 'discord_to_fluxer' &&
+                isFluxerApiBlocked()
+            ) {
+                continue;
+            }
+
             try {
                 const payload = toWebhookMessageData(
                     JSON.parse(entry.payload) as SerializableWebhookMessageData
@@ -141,6 +153,7 @@ export default class MessageQueueService {
                     `Queue drain: relayed queued message ${entry.id} (${entry.direction})`
                 );
             } catch (err) {
+                if (isFluxerApiBlockError(err)) markFluxerApiBlocked();
                 await entry.update({
                     retryCount: entry.retryCount + 1,
                     lastError: String(err),
