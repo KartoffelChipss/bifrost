@@ -1,4 +1,5 @@
 import { Client } from '@fluxerjs/core';
+import { isFluxerApiBlocked } from '../../utils/fluxerApiGuard';
 import StatsService from './StatsService';
 
 export default class FluxerStatsService extends StatsService<Client> {
@@ -15,7 +16,7 @@ export default class FluxerStatsService extends StatsService<Client> {
     }
     async getPing(): Promise<number> {
         const client = this.getClient();
-        if (!client) return NaN;
+        if (!client || isFluxerApiBlocked()) return NaN;
 
         if (
             this.lastPing &&

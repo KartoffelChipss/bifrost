@@ -1,6 +1,14 @@
 import { Channel, Client, Guild, GuildEmoji, Message } from '@fluxerjs/core';
 import NodeCache from 'node-cache';
+import logger from '../../utils/logging/logger';
+import {
+    isFluxerApiBlockError,
+    isFluxerApiBlocked,
+    markFluxerApiBlocked,
+} from '../../utils/fluxerApiGuard';
 import EntityResolver from '../entityResolver/EntityResolver';
+
+const EMOJI_FAILURE_TTL_SECONDS = 30;
 
 export default class FluxerEntityResolver implements EntityResolver<
     Guild,
@@ -85,19 +93,26 @@ export default class FluxerEntityResolver implements EntityResolver<
 
         const cached = this.emojiCache.get<GuildEmoji[]>(id);
         if (cached) return cached;
+        if (isFluxerApiBlocked()) return [];
 
-        const guild =
-            typeof guildId === 'string'
-                ? await this.fetchGuild(guildId)
-                : guildId;
+        try {
+            const guild =
+                typeof guildId === 'string'
+                    ? await this.ensureClient().guilds.fetch(guildId)
+                    : guildId;
 
-        if (!guild) {
-            throw new Error('Fluxer guild not found');
+            const emojisColl = await guild.fetchEmojis();
+            const emojis = emojisColl.map((e) => e);
+            this.emojiCache.set(id, emojis);
+            return emojis;
+        } catch (err) {
+            if (isFluxerApiBlockError(err)) markFluxerApiBlocked();
+            logger.warn(
+                `Could not fetch Fluxer emojis for guild ${id}, relaying without emoji resolution:`,
+                err
+            );
+            this.emojiCache.set(id, [], EMOJI_FAILURE_TTL_SECONDS);
+            return [];
         }
-
-        const emojisColl = await guild.fetchEmojis();
-        const emojis = emojisColl.map((e) => e);
-        this.emojiCache.set(id, emojis);
-        return emojis;
     }
 }
