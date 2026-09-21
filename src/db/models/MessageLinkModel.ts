@@ -35,6 +35,22 @@ MessageLinkModel.init(
             type: DataTypes.STRING,
             allowNull: false,
         },
+        discordAuthorId: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
+        discordAuthorUsername: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
+        fluxerAuthorId: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
+        fluxerAuthorUsername: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
     },
     {
         sequelize,

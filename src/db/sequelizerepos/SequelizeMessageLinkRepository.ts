@@ -8,7 +8,11 @@ export class SequelizeMessageLinkRepository implements MessageLinkRepository {
         guildLinkId: string,
         channelLinkId: string,
         discordMessageId: string,
-        fluxerMessageId: string
+        fluxerMessageId: string,
+        discordAuthorId?: string | null,
+        discordAuthorUsername?: string | null,
+        fluxerAuthorId?: string | null,
+        fluxerAuthorUsername?: string | null
     ): Promise<void> {
         await MessageLinkModel.create({
             id: randomUUID(),
@@ -16,6 +20,10 @@ export class SequelizeMessageLinkRepository implements MessageLinkRepository {
             channelLinkId,
             discordMessageId,
             fluxerMessageId,
+            discordAuthorId: discordAuthorId ?? null,
+            discordAuthorUsername: discordAuthorUsername ?? null,
+            fluxerAuthorId: fluxerAuthorId ?? null,
+            fluxerAuthorUsername: fluxerAuthorUsername ?? null,
         });
     }
 

@@ -4,7 +4,6 @@ import {
     EmbedBuilder,
     Events,
     PartialMessage,
-    TextChannel,
 } from '@fluxerjs/core';
 import CommandRegistry from './commands/CommandRegistry';
 import {
@@ -233,11 +232,24 @@ const startFluxerClient = async ({
             newMessage,
             discordEmojis
         );
+
+        let finalMsg = newMsg;
+        const referencedMessageId =
+            newMessage.referencedMessage?.id ??
+            newMessage.messageReference?.message_id;
+
+        if (referencedMessageId) {
+            finalMsg = await messageRelay.addReplyMention(
+                finalMsg,
+                referencedMessageId
+            );
+        }
+
         try {
             await webhookService.editMessageViaDiscordWebhook(
                 webhook,
                 linkedMessage.discordMessageId,
-                newMsg
+                finalMsg
             );
         } catch (error) {
             logger.error('Error editing message via Discord webhook:', error);
@@ -246,6 +258,10 @@ const startFluxerClient = async ({
 
     client.on(Events.MessageCreate, async (message) => {
         if (message.author.id === client.user?.id) return;
+
+        logger.debug(
+            `Fluxer message received: id=${message.id} channelId=${message.channelId} guildId=${message.guildId ?? null} webhookId=${message.webhookId ?? null} content="${message.content.slice(0, 50)}"`
+        );
 
         if (message.guildId && message.webhookId) {
             const webhookLink =
@@ -313,10 +329,13 @@ const startFluxerClient = async ({
 
         if (
             message.guildId &&
-            message.channel instanceof TextChannel &&
             !isCommandString(message.content, COMMAND_PREFIX)
         ) {
-            await messageRelay.relayMessage(message);
+            try {
+                await messageRelay.relayMessage(message);
+            } catch (error) {
+                logger.error('Error relaying message to Discord:', error);
+            }
         }
     });
 
