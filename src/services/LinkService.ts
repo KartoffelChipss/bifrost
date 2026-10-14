@@ -196,17 +196,29 @@ export class LinkService {
         fluxerMessageId,
         guildLinkId,
         channelLinkId,
+        discordAuthorId,
+        discordAuthorUsername,
+        fluxerAuthorId,
+        fluxerAuthorUsername,
     }: {
         discordMessageId: string;
         fluxerMessageId: string;
         guildLinkId: string;
         channelLinkId: string;
+        discordAuthorId?: string | null;
+        discordAuthorUsername?: string | null;
+        fluxerAuthorId?: string | null;
+        fluxerAuthorUsername?: string | null;
     }) {
         return this.messageRepo.createMessageLink(
             guildLinkId,
             channelLinkId,
             discordMessageId,
-            fluxerMessageId
+            fluxerMessageId,
+            discordAuthorId,
+            discordAuthorUsername,
+            fluxerAuthorId,
+            fluxerAuthorUsername
         );
     }
 

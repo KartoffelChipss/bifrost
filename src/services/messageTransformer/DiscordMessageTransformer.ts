@@ -7,6 +7,7 @@ import {
 import { WebhookAttachment, WebhookMessageData } from '../WebhookService';
 import MessageTransformer from './MessageTransformer';
 import { sanitizeMentions } from '../../utils/sanitizeMentions';
+import logger from '../../utils/logging/logger';
 import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
 import { getPollMessage } from '../../utils/pollMessageFormatter';
 import WebhookEmbed, { WebhookEmbedFooter } from '../WebhookEmbed';
@@ -143,9 +144,24 @@ export default class DiscordMessageTransformer extends MessageTransformer<
 
         if (message.reference) {
             const isForwarded = message.flags.has(MessageFlags.HasSnapshot);
-            const referencedMessage = isForwarded
-                ? message.messageSnapshots.first()
-                : await message.fetchReference();
+            let referencedMessage;
+            try {
+                referencedMessage = isForwarded
+                    ? message.messageSnapshots.first()
+                    : await message.fetchReference();
+            } catch {
+                logger.warn(
+                    'Failed to fetch referenced message for reply embed:',
+                    message.reference.messageId
+                );
+                return {
+                    content: messageContent,
+                    username: message.author.username,
+                    avatarURL: message.author.avatarURL() || '',
+                    attachments: attachments,
+                    embeds,
+                };
+            }
             if (!referencedMessage) {
                 return {
                     content: messageContent,

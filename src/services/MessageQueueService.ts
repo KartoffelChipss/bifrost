@@ -16,12 +16,20 @@ import {
 
 export type SerializableEmbed = ReturnType<WebhookEmbed['toPlainObject']>;
 
+export type AuthorMeta = {
+    discordAuthorId?: string | null;
+    discordAuthorUsername?: string | null;
+    fluxerAuthorId?: string | null;
+    fluxerAuthorUsername?: string | null;
+};
+
 export type SerializableWebhookMessageData = {
     content: string;
     username: string;
     avatarURL: string;
     attachments?: WebhookAttachment[];
     embeds?: SerializableEmbed[];
+    authorMeta?: AuthorMeta;
 };
 
 export function toSerializable(
@@ -95,9 +103,11 @@ export default class MessageQueueService {
             }
 
             try {
-                const payload = toWebhookMessageData(
-                    JSON.parse(entry.payload) as SerializableWebhookMessageData
-                );
+                const raw = JSON.parse(
+                    entry.payload
+                ) as SerializableWebhookMessageData;
+                const payload = toWebhookMessageData(raw);
+                const authorMeta = raw.authorMeta;
                 const channelLink = await linkService.getChannelLinkById(
                     entry.channelLinkId
                 );
@@ -124,6 +134,9 @@ export default class MessageQueueService {
                         fluxerMessageId,
                         guildLinkId: channelLink.guildLinkId,
                         channelLinkId: channelLink.id,
+                        discordAuthorId: authorMeta?.discordAuthorId ?? null,
+                        discordAuthorUsername:
+                            authorMeta?.discordAuthorUsername ?? null,
                     });
                 } else {
                     const webhook = await webhookService.getDiscordWebhook(
@@ -145,6 +158,9 @@ export default class MessageQueueService {
                         fluxerMessageId: entry.sourceMessageId,
                         guildLinkId: channelLink.guildLinkId,
                         channelLinkId: channelLink.id,
+                        fluxerAuthorId: authorMeta?.fluxerAuthorId ?? null,
+                        fluxerAuthorUsername:
+                            authorMeta?.fluxerAuthorUsername ?? null,
                     });
                 }
 
