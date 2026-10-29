@@ -1,3 +1,5 @@
+import { SequelizeAccountLinkRepository } from './db/sequelizerepos/SequelizeAccountLinkRepository';
+import { AccountLinkService } from './services/AccountLinkService';
 import { CachedChannelLinkRepository } from './db/cachedrepos/CachedChannelLinkRepository';
 import { CachedGuildLinkRepository } from './db/cachedrepos/CachedGuildLinkRepository';
 import { CachedMessageLinkRepository } from './db/cachedrepos/CachedMessageLinkRepository';
@@ -79,6 +81,9 @@ const main = async () => {
         cachedChannelLinkRepo,
         cachedMessageLinkRepo
     );
+    const accountLinkService = new AccountLinkService(
+        new SequelizeAccountLinkRepository()
+    );
     const webhookService = new WebhookService();
     const discordEntityResolver = new DiscordEntityResolver();
     const fluxerEntityResolver = new FluxerEntityResolver();
@@ -94,6 +99,7 @@ const main = async () => {
     const FLUXER_BACKOFF_MS = 20 * 60_000; // 20 min wait after exhausting restarts
 
     const fluxerArgs = {
+        accountLinkService,
         linkService,
         webhookService,
         healthCheckService,
@@ -201,6 +207,7 @@ const main = async () => {
 
     const [discordClient] = await Promise.all([
         startDiscordClient({
+            accountLinkService,
             linkService,
             webhookService,
             healthCheckService,
@@ -223,6 +230,7 @@ const main = async () => {
 
     if (ENABLE_WEB_DASHBOARD) {
         const webApp = createWebApp({
+            accountLinkService,
             linkService,
             webhookService,
             discordClient,

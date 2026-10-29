@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+    AccountLinkSummary,
+    AccountPresentationSettings,
     AdminGuildLinksResponse,
     AdminStatsResponse,
     AutolinkPreviewResponse,
@@ -181,5 +183,70 @@ export function useInviteLink() {
             apiFetch<InviteLinkResponse>(
                 `/invite-link?platform=${platform}&guildId=${guildId}`
             ),
+    });
+}
+
+export function useAccountLinks() {
+    return useQuery({
+        queryKey: ['account-links'],
+        queryFn: () => apiFetch<AccountLinkSummary[]>('/accounts'),
+        retry: false,
+    });
+}
+
+export function useCreateAccountLink() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: (body: { discordUserId: string; fluxerUserId: string }) =>
+            apiFetch<{ id: string }>('/accounts', {
+                method: 'POST',
+                body: JSON.stringify(body),
+            }),
+        onSuccess: () =>
+            queryClient.invalidateQueries({ queryKey: ['account-links'] }),
+    });
+}
+
+export function useDeleteAccountLink() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: (id: string) =>
+            apiFetch<void>(`/accounts/${id}`, { method: 'DELETE' }),
+        onSuccess: () =>
+            queryClient.invalidateQueries({ queryKey: ['account-links'] }),
+    });
+}
+
+export function useAccountPresentation(guildLinkId: string) {
+    return useQuery({
+        queryKey: ['account-presentation', guildLinkId],
+        queryFn: () =>
+            apiFetch<AccountPresentationSettings>(
+                `/guild-links/${guildLinkId}/account-presentation`
+            ),
+    });
+}
+
+export function useSetAccountPresentation(guildLinkId: string) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: ({
+            platform,
+            enabled,
+        }: {
+            platform: 'discord' | 'fluxer';
+            enabled: boolean;
+        }) =>
+            apiFetch<void>(
+                `/guild-links/${guildLinkId}/account-presentation/${platform}`,
+                {
+                    method: 'PATCH',
+                    body: JSON.stringify({ enabled }),
+                }
+            ),
+        onSuccess: () =>
+            queryClient.invalidateQueries({
+                queryKey: ['account-presentation', guildLinkId],
+            }),
     });
 }

@@ -1,3 +1,4 @@
+import { AccountLinkService } from '../AccountLinkService';
 import { Message } from '@fluxerjs/core';
 import MessageRelay from './MessageRelay';
 import logger from '../../utils/logging/logger';
@@ -10,9 +11,11 @@ import MessageTransformer from '../messageTransformer/MessageTransformer';
 import MetricsService from '../MetricsService';
 
 export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
+    private readonly accountLinkService: AccountLinkService;
     private readonly discordEntityResolver: DiscordEntityResolver;
 
     constructor({
+        accountLinkService,
         linkService,
         webhookService,
         messageTransformer,
@@ -20,6 +23,7 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
         queueService,
         discordEntityResolver,
     }: {
+        accountLinkService: AccountLinkService;
         linkService: LinkService;
         webhookService: WebhookService;
         messageTransformer: MessageTransformer<Message, WebhookMessageData>;
@@ -34,6 +38,7 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
             metricsService,
             queueService,
         });
+        this.accountLinkService = accountLinkService;
         this.discordEntityResolver = discordEntityResolver;
     }
 
@@ -71,6 +76,23 @@ export default class FluxerToDiscordMessageRelay extends MessageRelay<Message> {
                 message,
                 discordEmojis
             );
+            const counterpart = guildLink.discordAccountPresentationEnabled
+                ? await this.accountLinkService.counterpart(
+                      'fluxer',
+                      message.author.id
+                  )
+                : null;
+            if (counterpart) {
+                const identity =
+                    await this.discordEntityResolver.fetchAccountIdentity(
+                        guildLink.discordGuildId,
+                        counterpart
+                    );
+                if (identity) {
+                    msg.username = identity.username;
+                    msg.avatarURL = identity.avatarURL;
+                }
+            }
         }
 
         try {

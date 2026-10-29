@@ -48,6 +48,18 @@ export class SequelizeGuildLinkRepository implements GuildLinkRepository {
         return models.map((m) => m.toJSON() as GuildLink);
     }
 
+    async setAccountPresentation(
+        id: string,
+        platform: 'discord' | 'fluxer',
+        enabled: boolean
+    ) {
+        const field =
+            platform === 'discord'
+                ? 'discordAccountPresentationEnabled'
+                : 'fluxerAccountPresentationEnabled';
+        await GuildLinkModel.update({ [field]: enabled }, { where: { id } });
+    }
+
     async deleteById(id: string) {
         await GuildLinkModel.destroy({
             where: { id },

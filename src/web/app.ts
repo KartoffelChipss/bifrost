@@ -1,3 +1,5 @@
+import { AccountLinkService } from '../services/AccountLinkService';
+import { createAccountsRouter } from './routes/accounts';
 import express from 'express';
 import path from 'path';
 import type { Client as DiscordClient } from 'discord.js';
@@ -18,6 +20,7 @@ import { createAdminRouter } from './routes/admin';
 const DASHBOARD_DIST = path.join(__dirname, '..', '..', 'dashboard', 'dist');
 
 export function createWebApp({
+    accountLinkService,
     linkService,
     webhookService,
     discordClient,
@@ -26,6 +29,7 @@ export function createWebApp({
     fluxerStatsService,
     dbStatsService,
 }: {
+    accountLinkService: AccountLinkService;
     linkService: LinkService;
     webhookService: WebhookService;
     discordClient: DiscordClient;
@@ -43,6 +47,14 @@ export function createWebApp({
     app.use(express.json());
     app.use(createSessionMiddleware());
 
+    app.use(
+        '/api',
+        createAccountsRouter({
+            discordClient,
+            fluxerClientRef,
+            accountLinkService,
+        })
+    );
     app.use('/api/auth', authRouter);
     app.use('/api', invitesRouter);
     app.use(

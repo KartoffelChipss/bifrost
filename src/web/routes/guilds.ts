@@ -10,8 +10,10 @@ import {
     hasDiscordGuildPermission,
     hasFluxerGuildPermission,
     requireBoth,
+    isOwner,
 } from '../middleware/auth';
 import type {
+    AccountPresentationSettings,
     CreateGuildLinkBody,
     GuildPair,
     GuildsResponse,
@@ -122,6 +124,91 @@ export function createGuildsRouter({
         };
         res.json(response);
     });
+
+    router.get('/guild-links/:id/account-presentation', async (req, res) => {
+        const link = await linkService.getGuildLinkById(req.params.id);
+        if (!link) {
+            res.status(404).json({ error: 'Guild link not found' });
+            return;
+        }
+        const discord =
+            isOwner(req) ||
+            hasDiscordGuildPermission(
+                req,
+                link.discordGuildId,
+                DiscordManageGuild
+            );
+        const fluxer =
+            isOwner(req) ||
+            hasFluxerGuildPermission(
+                req,
+                link.fluxerGuildId,
+                FluxerManageGuild
+            );
+        if (!discord && !fluxer) {
+            res.status(403).json({
+                error: 'You do not manage either linked guild',
+            });
+            return;
+        }
+        const settings: AccountPresentationSettings = {
+            discord: {
+                enabled: link.discordAccountPresentationEnabled,
+                canManage: discord,
+            },
+            fluxer: {
+                enabled: link.fluxerAccountPresentationEnabled,
+                canManage: fluxer,
+            },
+        };
+        res.json(settings);
+    });
+
+    router.patch(
+        '/guild-links/:id/account-presentation/:platform',
+        async (req, res) => {
+            const { platform } = req.params;
+            if (
+                !['discord', 'fluxer'].includes(platform) ||
+                typeof req.body?.enabled !== 'boolean'
+            ) {
+                res.status(400).json({
+                    error: 'Choose Discord or Fluxer and a boolean enabled value',
+                });
+                return;
+            }
+            const link = await linkService.getGuildLinkById(req.params.id);
+            if (!link) {
+                res.status(404).json({ error: 'Guild link not found' });
+                return;
+            }
+            const canManage =
+                isOwner(req) ||
+                (platform === 'discord'
+                    ? hasDiscordGuildPermission(
+                          req,
+                          link.discordGuildId,
+                          DiscordManageGuild
+                      )
+                    : hasFluxerGuildPermission(
+                          req,
+                          link.fluxerGuildId,
+                          FluxerManageGuild
+                      ));
+            if (!canManage) {
+                res.status(403).json({
+                    error: 'You do not manage that destination guild',
+                });
+                return;
+            }
+            await linkService.setAccountPresentation(
+                link.id,
+                platform as 'discord' | 'fluxer',
+                req.body.enabled
+            );
+            res.status(204).end();
+        }
+    );
 
     router.post('/guild-links', requireBoth, async (req, res) => {
         const { discordGuildId, fluxerGuildId } =

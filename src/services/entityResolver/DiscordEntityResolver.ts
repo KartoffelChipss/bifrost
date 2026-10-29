@@ -1,3 +1,4 @@
+import { discordIdentity } from '../accountIdentity';
 import { Channel, Client, Guild, GuildEmoji, Message } from 'discord.js';
 import NodeCache from 'node-cache';
 import EntityResolver from '../entityResolver/EntityResolver';
@@ -23,6 +24,10 @@ export default class DiscordEntityResolver implements EntityResolver<
             throw new Error('Discord client not set in DiscordEntityResolver');
         }
         return this.discordClient;
+    }
+
+    async fetchAccountIdentity(guildId: string, userId: string) {
+        return discordIdentity(this.ensureClient(), guildId, userId);
     }
 
     async fetchGuild(guildId: string): Promise<Guild | null> {

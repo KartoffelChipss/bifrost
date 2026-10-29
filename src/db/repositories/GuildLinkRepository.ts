@@ -11,5 +11,11 @@ export interface GuildLinkRepository {
 
     findAll(): Promise<GuildLink[]>;
 
+    setAccountPresentation(
+        id: string,
+        platform: 'discord' | 'fluxer',
+        enabled: boolean
+    ): Promise<void>;
+
     deleteById(id: string): Promise<void>;
 }

@@ -9,6 +9,16 @@ GuildLinkModel.init(
             type: DataTypes.UUID,
             primaryKey: true,
         },
+        discordAccountPresentationEnabled: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: false,
+        },
+        fluxerAccountPresentationEnabled: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: false,
+        },
         discordGuildId: {
             type: DataTypes.STRING,
             unique: true,

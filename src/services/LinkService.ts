@@ -21,6 +21,14 @@ export class LinkService {
         return this.guildRepo.findByFluxerGuildId(fluxerGuildId);
     }
 
+    async setAccountPresentation(
+        id: string,
+        platform: 'discord' | 'fluxer',
+        enabled: boolean
+    ) {
+        return this.guildRepo.setAccountPresentation(id, platform, enabled);
+    }
+
     async getAllGuildLinks() {
         return this.guildRepo.findAll();
     }

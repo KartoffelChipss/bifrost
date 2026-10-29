@@ -83,6 +83,15 @@ export function Layout({
                 <div className="flex items-center gap-2">
                     {me?.isOwner && (
                         <Button
+                            variant="ghost"
+                            size="sm"
+                            render={<Link to="/accounts" />}
+                        >
+                            Account links
+                        </Button>
+                    )}
+                    {me?.isOwner && (
+                        <Button
                             aria-label="Admin dashboard"
                             variant="ghost"
                             size="icon-sm"

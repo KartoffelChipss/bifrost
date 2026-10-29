@@ -122,3 +122,16 @@ export interface AdminGuildLinkSummary {
 export interface AdminGuildLinksResponse {
     guildLinks: AdminGuildLinkSummary[];
 }
+
+export interface AccountPresentationSettings {
+    discord: { enabled: boolean; canManage: boolean };
+    fluxer: { enabled: boolean; canManage: boolean };
+}
+
+export interface AccountLinkSummary {
+    id: string;
+    discordUserId: string;
+    fluxerUserId: string;
+    discord: { username: string; avatarURL: string } | null;
+    fluxer: { username: string; avatarURL: string } | null;
+}

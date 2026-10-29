@@ -1,3 +1,4 @@
+import { AccountLinkService } from '../AccountLinkService';
 import { Message, MessageType, OmitPartialGroupDMChannel } from 'discord.js';
 import MessageRelay from './MessageRelay';
 import logger from '../../utils/logging/logger';
@@ -17,9 +18,11 @@ import MetricsService from '../MetricsService';
 export default class DiscordToFluxerMessageRelay extends MessageRelay<
     OmitPartialGroupDMChannel<Message<boolean>>
 > {
+    private readonly accountLinkService: AccountLinkService;
     private readonly fluxerEntityResolver: FluxerEntityResolver;
 
     constructor({
+        accountLinkService,
         linkService,
         webhookService,
         messageTransformer,
@@ -27,6 +30,7 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
         queueService,
         fluxerEntityResolver,
     }: {
+        accountLinkService: AccountLinkService;
         linkService: LinkService;
         webhookService: WebhookService;
         messageTransformer: MessageTransformer<
@@ -44,6 +48,7 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
             metricsService,
             queueService,
         });
+        this.accountLinkService = accountLinkService;
         this.fluxerEntityResolver = fluxerEntityResolver;
     }
 
@@ -79,6 +84,23 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
                 message,
                 fluxerEmojis
             );
+            const counterpart = guildLink.fluxerAccountPresentationEnabled
+                ? await this.accountLinkService.counterpart(
+                      'discord',
+                      message.author.id
+                  )
+                : null;
+            if (counterpart) {
+                const identity =
+                    await this.fluxerEntityResolver.fetchAccountIdentity(
+                        guildLink.fluxerGuildId,
+                        counterpart
+                    );
+                if (identity) {
+                    msg.username = identity.username;
+                    msg.avatarURL = identity.avatarURL;
+                }
+            }
         }
 
         if (isFluxerApiBlocked()) {

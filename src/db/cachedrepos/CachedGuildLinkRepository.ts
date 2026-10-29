@@ -86,6 +86,16 @@ export class CachedGuildLinkRepository implements GuildLinkRepository {
         return this.repository.findAll();
     }
 
+    async setAccountPresentation(
+        id: string,
+        platform: 'discord' | 'fluxer',
+        enabled: boolean
+    ): Promise<void> {
+        await this.repository.setAccountPresentation(id, platform, enabled);
+        const existing = await this.repository.findById(id);
+        if (existing) this.primeCache(existing);
+    }
+
     async deleteById(id: string): Promise<void> {
         const existing = await this.repository.findById(id);
         if (!existing) return;
