@@ -232,10 +232,15 @@ const startFluxerClient = async ({
         );
         if (!guildLink) return;
 
-        const webhook = await webhookService.getDiscordWebhook(
-            linkedChannel.discordWebhookId,
-            linkedChannel.discordWebhookToken
-        );
+        let webhook;
+        try {
+            webhook = await webhookService.getDiscordWebhook(
+                linkedChannel.discordWebhookId,
+                linkedChannel.discordWebhookToken
+            );
+        } catch {
+            return;
+        }
         if (!webhook) {
             logger.warn(
                 `No webhook found for linked channel ${linkedChannel.linkId}, cannot relay message update`

@@ -1,6 +1,9 @@
 import { Channel, Client, Guild, GuildEmoji, Message } from 'discord.js';
 import NodeCache from 'node-cache';
+import logger from '../../utils/logging/logger';
 import EntityResolver from '../entityResolver/EntityResolver';
+
+const EMOJI_FAILURE_TTL_SECONDS = 30;
 
 export default class DiscordEntityResolver implements EntityResolver<
     Guild,
@@ -82,18 +85,27 @@ export default class DiscordEntityResolver implements EntityResolver<
         const cached = this.emojiCache.get<GuildEmoji[]>(id);
         if (cached) return cached;
 
-        const guild =
-            typeof guildOrId === 'string'
-                ? await this.fetchGuild(guildOrId)
-                : guildOrId;
+        try {
+            const guild =
+                typeof guildOrId === 'string'
+                    ? await this.fetchGuild(guildOrId)
+                    : guildOrId;
 
-        if (!guild) {
-            throw new Error('Discord guild not found');
+            if (!guild) {
+                throw new Error('Discord guild not found');
+            }
+
+            const emojiCollection = await guild.emojis.fetch();
+            const emojis = emojiCollection.map((emoji) => emoji);
+            this.emojiCache.set(id, emojis);
+            return emojis;
+        } catch (err) {
+            logger.warn(
+                `Could not fetch Discord emojis for guild ${id}, relaying without emoji resolution:`,
+                err
+            );
+            this.emojiCache.set(id, [], EMOJI_FAILURE_TTL_SECONDS);
+            return [];
         }
-
-        const emojiCollection = await guild.emojis.fetch();
-        const emojis = emojiCollection.map((emoji) => emoji);
-        this.emojiCache.set(id, emojis);
-        return emojis;
     }
 }
