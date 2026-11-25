@@ -537,12 +537,12 @@ function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
             type: 'skipped',
             kind: 'thread',
             id: parentId,
-            detail: 'the thread list here is incomplete (unreadable, or more archived threads than one read pages through); no thread is removed until it is complete',
+            detail: 'the thread list here is incomplete (unreadable, or more archived threads than one read pages through); no thread in this channel is removed until it is complete',
         });
     }
     // Creates and updates follow the object map, so an incomplete list
     // cannot duplicate anything. Removals wait instead: trackMissing counts
-    // no thread as missing while any list has a gap.
+    // no thread in a channel with a gap as missing.
     const mapped = (t: ThreadSnap) => ctx.map.dest('channel', t.parentId);
     const included = (t: ThreadSnap) => !input.excluded?.has(t.id);
     diffObjects(

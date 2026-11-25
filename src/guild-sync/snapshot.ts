@@ -175,8 +175,9 @@ export interface GuildSnapshot {
     /**
      * Channels whose thread list is incomplete: unreadable (for example
      * without Read Message History) or with more archived threads than a
-     * read pages through. While this is not empty, no thread counts as
-     * missing, so nothing is removed on an incomplete list.
+     * read pages through. No thread in these channels counts as missing,
+     * nor any thread whose parent cannot be told, so nothing is removed
+     * on an incomplete list.
      */
     readonly threadGaps: readonly string[];
     /**
