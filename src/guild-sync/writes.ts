@@ -99,6 +99,8 @@ export type WriteAction =
     | { readonly type: 'archive-sticker'; name: string }
     | { readonly type: 'delete' }
     | { readonly type: 'link' }
+    /** Records an object an earlier create made (adopt.ts). No write. */
+    | { readonly type: 'adopt'; destId: string; applied: Fields }
     | {
           readonly type: 'create-thread';
           parentId: string;
@@ -341,6 +343,11 @@ type ReorderOp = Extract<PlanOp, { op: 'reorder' }>;
 type ArchiveOp = Extract<PlanOp, { op: 'archive' }>;
 
 function createAction(op: CreateOp, ctx: WriteContext): WriteAction {
+    // An empty base makes the next diff bring every field in line with
+    // the source, whatever the earlier create left unfinished.
+    if (op.existingDestId && op.adopt) {
+        return { type: 'adopt', destId: op.existingDestId, applied: {} };
+    }
     if (op.existingDestId) {
         return skip(
             `a destination ${op.kind} named "${op.name}" already exists; adopting it is not built yet`

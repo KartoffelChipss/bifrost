@@ -54,8 +54,11 @@ describe('cycle errors', () => {
 
     it('raises OwnershipLostError when a written create cannot be recorded', async () => {
         const s = setup(discordGuild());
-        s.store.audit = async () => {
-            throw new Error('database gone');
+        const audit = s.store.audit.bind(s.store);
+        // The intent before the write is saved; the record after it fails.
+        s.store.audit = async (entry, now) => {
+            if (entry.result === 'ok') throw new Error('database gone');
+            return audit(entry, now);
         };
         await assert.rejects(s.cycle(), OwnershipLostError);
     });

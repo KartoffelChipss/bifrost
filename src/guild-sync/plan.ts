@@ -41,6 +41,9 @@ export const SUMMARY_OP_LIMIT = 20;
 function describeOp(op: PlanOp): string {
     switch (op.op) {
         case 'create': {
+            if (op.adopt) {
+                return `adopt ${op.kind} "${op.name}" (${op.existingDestId}, made by an earlier create)`;
+            }
             const match = op.existingDestId
                 ? ` (unmapped destination ${op.kind} ${op.existingDestId} has the same name)`
                 : '';

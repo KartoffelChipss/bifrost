@@ -49,6 +49,8 @@ export function pauseAfter(action: Write, kind: PlanOp['kind']): number {
             return SLOW_WRITE_MS;
         case 'link':
             return SLOW_WRITE_MS;
+        case 'adopt':
+            return 0;
         case 'create-emoji':
         case 'create-sticker':
         case 'create-thread':
@@ -296,6 +298,8 @@ async function performLifecycle(
             );
         case 'link':
             return linkChannels(state, op);
+        case 'adopt':
+            return action.destId;
         case 'delete':
             await deleteObject(state, op, destId);
             return null;
@@ -510,6 +514,7 @@ function auditFields(op: PlanOp, action: WriteAction): JsonValue {
     }
     if (op.op === 'reorder') return [...op.destIds];
     if (action.type === 'gone') return { gone: true };
+    if (action.type === 'adopt') return { adopted: true };
     return 'applied' in action ? action.applied : null;
 }
 
@@ -647,6 +652,46 @@ async function followUp(
     return true;
 }
 
+/** The name a create gives its object, for its intent; null for others. */
+function createdName(action: Write): string | null {
+    switch (action.type) {
+        case 'create-role':
+        case 'create-channel':
+            return action.spec.name;
+        case 'create-emoji':
+        case 'create-sticker':
+        case 'create-thread':
+            return action.name;
+        default:
+            return null;
+    }
+}
+
+/**
+ * Records that a create is about to be sent, before it is sent. If the
+ * create then times out after the platform made the object, or the
+ * process stops before the map row is saved, a later cycle adopts the
+ * object instead of skipping it forever or making a duplicate (adopt.ts).
+ */
+async function recordIntent(
+    state: RunState,
+    op: PlanOp,
+    action: Write
+): Promise<void> {
+    const name = createdName(action);
+    if (name === null) return;
+    await state.deps.store.audit(
+        {
+            ...auditBase(state.input.plan, op),
+            op: 'create-intent',
+            destId: null,
+            after: { name },
+            result: 'intent',
+        },
+        state.deps.now()
+    );
+}
+
 /** Audit, ownership and removal state for a write that went through. */
 async function recordOutcome(
     state: RunState,
@@ -732,6 +777,7 @@ async function applyOp(
             gone: true,
         });
     }
+    await recordIntent(state, op, action);
     const result = await attempt(state, action, op);
     if (!result.ok) {
         if (result.notReady) {

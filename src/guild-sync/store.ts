@@ -16,7 +16,8 @@ import {
 } from '../addons/db/schema';
 import type { MissingUpdate, GuardSettings } from './guards';
 import type { ShrinkLimits } from './health';
-import type { JsonValue, MapRow } from './ops';
+import { MAX_INTENTS, type CreateIntent } from './adopt';
+import type { JsonValue, MapRow, SyncKind } from './ops';
 import type { Plan, PlanBody } from './plan';
 import type { GuildSnapshot } from './snapshot';
 import { countObjects } from './snapshot';
@@ -55,7 +56,8 @@ export interface AuditEntry {
     readonly destId: string | null;
     readonly before: JsonValue | null;
     readonly after: JsonValue | null;
-    readonly result: 'ok' | 'failed';
+    /** 'intent' marks a create about to be sent (adopt.ts). */
+    readonly result: 'ok' | 'failed' | 'intent';
 }
 
 /** The two copies of one message relayed inside a thread. */
@@ -123,6 +125,8 @@ export interface GuildSyncStore {
     savePlan(plan: Plan, now: Date): Promise<void>;
     removalsSince(guildLinkId: string, since: Date): Promise<number>;
     pruneSnapshots(before: Date): Promise<void>;
+    /** Create intents recorded since `since`, newest first, bounded. */
+    createIntents(guildLinkId: string, since: Date): Promise<CreateIntent[]>;
     /**
      * Deletes tombstoned map rows. A row is tombstoned only once its
      * destination object is confirmed deleted, so nothing reads it again;
@@ -342,6 +346,29 @@ export class MapTooLargeError extends Error {
     }
 }
 
+/** A create-intent audit row, or nothing when it is malformed. */
+function parseIntent(row: Row): CreateIntent[] {
+    const after = row.after as { name?: unknown } | null;
+    const kind = OBJECT_KINDS.find((k) => k === row.kind);
+    if (
+        !kind ||
+        kind === 'overwrite' ||
+        typeof row.sourceId !== 'string' ||
+        typeof after?.name !== 'string' ||
+        !(row.at instanceof Date)
+    ) {
+        return [];
+    }
+    return [
+        {
+            kind: kind as SyncKind,
+            sourceId: row.sourceId,
+            name: after.name,
+            at: row.at,
+        },
+    ];
+}
+
 /** Rows a DELETE removed, from the pg result Sequelize passes back. */
 function rowCount(meta: unknown): number {
     const count = (meta as { rowCount?: unknown } | null)?.rowCount;
@@ -524,6 +551,19 @@ export class PostgresGuildSyncStore
                 WHERE healthy ORDER BY "guildLinkId", side, "takenAt" DESC)`,
             { bind: [before] }
         );
+    }
+
+    async createIntents(
+        guildLinkId: string,
+        since: Date
+    ): Promise<CreateIntent[]> {
+        const rows = await this.db.query<Row>(
+            `SELECT kind, "sourceId", after, at FROM ${TABLES.auditLog}
+             WHERE "guildLinkId" = $1 AND op = 'create-intent' AND at >= $2
+             ORDER BY at DESC LIMIT $3`,
+            { bind: [guildLinkId, since, MAX_INTENTS], type: QueryTypes.SELECT }
+        );
+        return rows.flatMap(parseIntent);
     }
 
     async pruneTombstoned(before: Date): Promise<number> {

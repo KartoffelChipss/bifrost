@@ -1,6 +1,7 @@
 import type { SyncDirection } from '../addons/db/schema';
 import type { AddonLogger } from '../addons/isolation';
 import type { AddonMode } from '../addons/config';
+import { INTENT_WINDOW_MS, markAdoptions } from './adopt';
 import { applyPlan, type ApplyResult } from './apply';
 import type { FailureLedger } from './failures';
 import type { AssetSource } from './assets';
@@ -383,8 +384,19 @@ async function buildBody(
     );
 
     const map = IdMap.from(rows, direction, source, destination);
+    const intents = await deps.store.createIntents(
+        link.id,
+        new Date(now.getTime() - INTENT_WINDOW_MS)
+    );
+    const adopted = markAdoptions({
+        ops: found.ops,
+        intents,
+        source,
+        destination,
+        map,
+    });
     const owned = enforceOwnership(
-        [...found.ops, ...removals.ops],
+        [...adopted, ...removals.ops],
         map,
         protectedIds(destination)
     );

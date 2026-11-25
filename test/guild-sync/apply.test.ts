@@ -78,7 +78,10 @@ describe('applying a plan', () => {
             'role',
         ]);
         assert.equal(store.plans[0].status, 'applied');
-        assert.ok(store.audits.every((a) => a.result === 'ok'));
+        assert.ok(store.audits.every((a) => a.result !== 'failed'));
+        // Each create records its intent first (adopt.ts).
+        const intents = store.audits.filter((a) => a.result === 'intent');
+        assert.equal(intents.length, 3);
     });
 
     it('plans nothing more once the structure is applied', async () => {

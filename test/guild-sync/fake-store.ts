@@ -42,6 +42,8 @@ export class FakeStore implements GuildSyncStore {
     missingWrites: MissingUpdate[][] = [];
     plans: Plan[] = [];
     audits: AuditEntry[] = [];
+    /** When each audit row was written, by index into `audits`. */
+    auditTimes: Date[] = [];
     lockHeld = false;
     /** Set by a test to make the held check fail. */
     lockLost = false;
@@ -146,8 +148,25 @@ export class FakeStore implements GuildSyncStore {
         );
     }
 
-    async audit(entry: AuditEntry) {
+    async audit(entry: AuditEntry, now: Date) {
         this.audits.push(entry);
+        this.auditTimes.push(now);
+    }
+
+    async createIntents(_link: string, since: Date) {
+        return this.audits.flatMap((entry, i) => {
+            const at = this.auditTimes[i];
+            const name = (entry.after as { name?: unknown } | null)?.name;
+            const intent =
+                entry.op === 'create-intent' &&
+                at >= since &&
+                entry.sourceId !== null &&
+                entry.kind !== 'overwrite' &&
+                typeof name === 'string';
+            return intent
+                ? [{ kind: entry.kind, sourceId: entry.sourceId, name, at }]
+                : [];
+        });
     }
 
     async setPlanStatus(

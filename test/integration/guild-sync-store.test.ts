@@ -492,4 +492,32 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         assert.ok(!ids.includes(gone.id));
         assert.ok(ids.includes(kept.id));
     });
+
+    it('reads back create intents from the audit log', async () => {
+        const at = new Date();
+        await store.audit(
+            {
+                planId: randomUUID(),
+                guildLinkId: linkId,
+                op: 'create-intent',
+                kind: 'channel',
+                sourceId: 'src-1',
+                destId: null,
+                before: null,
+                after: { name: 'general' },
+                result: 'intent',
+            },
+            at
+        );
+        const intents = await store.createIntents(
+            linkId,
+            new Date(at.getTime() - 1000)
+        );
+        assert.deepEqual(
+            intents.map((i) => [i.kind, i.sourceId, i.name]),
+            [['channel', 'src-1', 'general']]
+        );
+        assert.equal(intents[0].at.getTime(), at.getTime());
+        assert.equal(await store.removalsSince(linkId, new Date(0)), 1);
+    });
 });
