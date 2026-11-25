@@ -16,7 +16,8 @@ import {
 } from '../addons/db/schema';
 import type { MissingUpdate, GuardSettings } from './guards';
 import type { ShrinkLimits } from './health';
-import type { JsonValue, MapRow } from './ops';
+import { MAX_INTENTS, type CreateIntent } from './adopt';
+import type { JsonValue, MapRow, SyncKind } from './ops';
 import type { Plan, PlanBody } from './plan';
 import type { GuildSnapshot } from './snapshot';
 import { countObjects } from './snapshot';
@@ -30,6 +31,8 @@ export interface SyncSettings extends GuardSettings, ShrinkLimits {
     readonly adminChannelId: string | null;
     /** The pending plan an admin approved. Used once, then cleared. */
     readonly approvedPlanId: string | null;
+    /** Revert Fluxer edits to managed fields instead of reporting drift. */
+    readonly enforceDrift: boolean;
 }
 
 type AppliedFields = Readonly<Record<string, JsonValue>>;
@@ -38,8 +41,9 @@ type AppliedFields = Readonly<Record<string, JsonValue>>;
 export interface NewMapping {
     readonly guildLinkId: string;
     readonly kind: ObjectKind;
-    readonly discordId: string;
-    readonly fluxerId: string;
+    /** Null on the source side for an object with no source (archive category). */
+    readonly discordId: string | null;
+    readonly fluxerId: string | null;
     /** False for an object that existed before, such as @everyone. */
     readonly createdBySync: boolean;
     readonly appliedFields: AppliedFields;
@@ -55,7 +59,8 @@ export interface AuditEntry {
     readonly destId: string | null;
     readonly before: JsonValue | null;
     readonly after: JsonValue | null;
-    readonly result: 'ok' | 'failed';
+    /** 'intent' marks a create about to be sent (adopt.ts). */
+    readonly result: 'ok' | 'failed' | 'intent';
 }
 
 /** The two copies of one message relayed inside a thread. */
@@ -123,6 +128,20 @@ export interface GuildSyncStore {
     savePlan(plan: Plan, now: Date): Promise<void>;
     removalsSince(guildLinkId: string, since: Date): Promise<number>;
     pruneSnapshots(before: Date): Promise<void>;
+    /**
+     * Deletes plans saved before `before`, keeping per link the newest
+     * PLANS_KEPT_PER_LINK plans and the newest pending-approval plan, and
+     * the plan an admin approved. Returns how many went.
+     */
+    prunePlans(before: Date): Promise<number>;
+    /** Create intents recorded since `since`, newest first, bounded. */
+    createIntents(guildLinkId: string, since: Date): Promise<CreateIntent[]>;
+    /**
+     * Deletes tombstoned map rows. A row is tombstoned only once its
+     * destination object is confirmed deleted, so nothing reads it again;
+     * the audit log keeps the record.
+     */
+    pruneTombstoned(before: Date): Promise<number>;
     /** Records ownership of a destination object (guard 1). */
     insertMapping(mapping: NewMapping, now: Date): Promise<MapRow>;
     /** Records the fields a successful update wrote. */
@@ -136,6 +155,7 @@ export interface GuildSyncStore {
     ): Promise<void>;
     setMode(guildLinkId: string, mode: SyncMode, now: Date): Promise<void>;
     setKillSwitch(guildLinkId: string, on: boolean, now: Date): Promise<void>;
+    setEnforceDrift(guildLinkId: string, on: boolean, now: Date): Promise<void>;
     setAdminChannel(
         guildLinkId: string,
         channelId: string | null,
@@ -200,10 +220,14 @@ export function parseSettings(row: Row): SyncSettings {
     if (typeof row.killSwitch !== 'boolean') {
         throw new StoreDataError('killSwitch is not a boolean');
     }
+    if (typeof row.enforceDrift !== 'boolean') {
+        throw new StoreDataError('enforceDrift is not a boolean');
+    }
     return {
         mode: oneOf(SYNC_MODES, row.mode, 'mode'),
         direction: oneOf(SYNC_DIRECTIONS, row.direction, 'direction'),
         killSwitch: row.killSwitch,
+        enforceDrift: row.enforceDrift,
         adminChannelId: optionalId(
             row.adminChannelId ?? null,
             'adminChannelId'
@@ -319,8 +343,54 @@ export function parseSnapshot(payload: unknown): GuildSnapshot {
     } as unknown as GuildSnapshot;
 }
 
-/** Upper bound on map rows per guild link: roles + channels + expressions. */
-export const MAX_MAP_ROWS = 5_000;
+/** Plans kept per link however old: `sync status` and debugging use them. */
+export const PLANS_KEPT_PER_LINK = 20;
+
+/**
+ * Upper bound on map rows per guild link: roles, channels, expressions and
+ * every synced thread and forum post, which is where most rows come from.
+ */
+export const MAX_MAP_ROWS = 100_000;
+
+/**
+ * The object map is over MAX_MAP_ROWS. Only that link's cycle stops: it is
+ * a size limit, not corrupt data, so the add-ons stay in their mode.
+ */
+export class MapTooLargeError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'MapTooLargeError';
+    }
+}
+
+/** A create-intent audit row, or nothing when it is malformed. */
+function parseIntent(row: Row): CreateIntent[] {
+    const after = row.after as { name?: unknown } | null;
+    const kind = OBJECT_KINDS.find((k) => k === row.kind);
+    if (
+        !kind ||
+        kind === 'overwrite' ||
+        typeof row.sourceId !== 'string' ||
+        typeof after?.name !== 'string' ||
+        !(row.at instanceof Date)
+    ) {
+        return [];
+    }
+    return [
+        {
+            kind: kind as SyncKind,
+            sourceId: row.sourceId,
+            name: after.name,
+            at: row.at,
+        },
+    ];
+}
+
+/** Rows a DELETE removed, from the pg result Sequelize passes back. */
+function rowCount(meta: unknown): number {
+    const count = (meta as { rowCount?: unknown } | null)?.rowCount;
+    return typeof count === 'number' ? count : 0;
+}
 
 /** {@link GuildSyncStore} on the fork's Postgres database. */
 export class PostgresGuildSyncStore
@@ -392,7 +462,7 @@ export class PostgresGuildSyncStore
             { bind: [guildLinkId, MAX_MAP_ROWS + 1], type: QueryTypes.SELECT }
         );
         if (rows.length > MAX_MAP_ROWS) {
-            throw new StoreDataError(
+            throw new MapTooLargeError(
                 `object map has over ${MAX_MAP_ROWS} rows`
             );
         }
@@ -500,6 +570,48 @@ export class PostgresGuildSyncStore
         );
     }
 
+    async createIntents(
+        guildLinkId: string,
+        since: Date
+    ): Promise<CreateIntent[]> {
+        const rows = await this.db.query<Row>(
+            `SELECT kind, "sourceId", after, at FROM ${TABLES.auditLog}
+             WHERE "guildLinkId" = $1 AND op = 'create-intent' AND at >= $2
+             ORDER BY at DESC LIMIT $3`,
+            { bind: [guildLinkId, since, MAX_INTENTS], type: QueryTypes.SELECT }
+        );
+        return rows.flatMap(parseIntent);
+    }
+
+    async prunePlans(before: Date): Promise<number> {
+        const [, meta] = await this.db.query(
+            `DELETE FROM ${TABLES.plans} WHERE "createdAt" < $1
+               AND id NOT IN (
+                 SELECT "approvedPlanId" FROM ${TABLES.settings}
+                 WHERE "approvedPlanId" IS NOT NULL)
+               AND id NOT IN (
+                 SELECT id FROM (
+                   SELECT id, row_number() OVER (
+                     PARTITION BY "guildLinkId" ORDER BY "createdAt" DESC) AS n
+                   FROM ${TABLES.plans}) ranked
+                 WHERE n <= $2)
+               AND id NOT IN (
+                 SELECT DISTINCT ON ("guildLinkId") id FROM ${TABLES.plans}
+                 WHERE status = 'pending-approval'
+                 ORDER BY "guildLinkId", "createdAt" DESC)`,
+            { bind: [before, PLANS_KEPT_PER_LINK] }
+        );
+        return rowCount(meta);
+    }
+
+    async pruneTombstoned(before: Date): Promise<number> {
+        const [, meta] = await this.db.query(
+            `DELETE FROM ${TABLES.objectMap} WHERE state = 'tombstoned' AND "updatedAt" < $1`,
+            { bind: [before] }
+        );
+        return rowCount(meta);
+    }
+
     async insertMapping(mapping: NewMapping, now: Date): Promise<MapRow> {
         const id = randomUUID();
         await this.db.query(
@@ -595,6 +707,18 @@ export class PostgresGuildSyncStore
         await this.loadSettings(guildLinkId);
         await this.db.query(
             `UPDATE ${TABLES.settings} SET "killSwitch" = $2, "updatedAt" = $3 WHERE "guildLinkId" = $1`,
+            { bind: [guildLinkId, on, now] }
+        );
+    }
+
+    async setEnforceDrift(
+        guildLinkId: string,
+        on: boolean,
+        now: Date
+    ): Promise<void> {
+        await this.loadSettings(guildLinkId);
+        await this.db.query(
+            `UPDATE ${TABLES.settings} SET "enforceDrift" = $2, "updatedAt" = $3 WHERE "guildLinkId" = $1`,
             { bind: [guildLinkId, on, now] }
         );
     }

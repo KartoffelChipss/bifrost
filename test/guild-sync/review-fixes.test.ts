@@ -76,7 +76,7 @@ describe('what an update records as its base', () => {
         assert.deepEqual(action.applied, { name: 'new' });
     });
 
-    it('leaves out sticker tags, which Fluxer cannot change', () => {
+    it('writes sticker tags with the name and description', () => {
         const ctx = context(
             discordGuild({
                 stickers: [
@@ -96,7 +96,12 @@ describe('what an update records as its base', () => {
             ctx
         );
         assert.ok(action.type === 'update-sticker');
-        assert.deepEqual(action.applied, { name: 'new' });
+        assert.deepEqual(action.patch, {
+            name: 'new',
+            description: '',
+            tags: ['b'],
+        });
+        assert.deepEqual(action.applied, { name: 'new', tags: 'b' });
     });
 
     it('treats an archive of an object already gone as done', () => {

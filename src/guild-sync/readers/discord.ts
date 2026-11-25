@@ -7,6 +7,7 @@ import {
     type AnyThreadChannel,
     type Client,
     type ForumChannel,
+    type MediaChannel,
     type Guild,
     type GuildEmoji,
     type GuildMember,
@@ -84,7 +85,10 @@ export function discordChannel(
         tags: 'availableTags' in c ? c.availableTags.map((t) => t.name) : [],
         ...(bridgeable === undefined ? {} : { bridgeable }),
         ...threadDefaults(c),
-        ...(c.type === ChannelType.GuildForum ? { forum: forumOf(c) } : {}),
+        ...(c.type === ChannelType.GuildForum ||
+        c.type === ChannelType.GuildMedia
+            ? { forum: forumOf(c) }
+            : {}),
     };
 }
 
@@ -104,11 +108,13 @@ const emojiRef = (
 ): EmojiRef | null =>
     emoji ? { emojiId: emoji.id ?? null, emojiName: emoji.name ?? null } : null;
 
-function forumOf(c: ForumChannel): ForumSnap {
+/** Forum settings; a media channel has no layout. */
+function forumOf(c: ForumChannel | MediaChannel): ForumSnap {
     return {
         defaultReaction: emojiRef(c.defaultReactionEmoji),
         sortOrder: c.defaultSortOrder ?? null,
-        layout: c.defaultForumLayout ?? null,
+        layout:
+            'defaultForumLayout' in c ? (c.defaultForumLayout ?? null) : null,
         tags: c.availableTags.map((tag) => ({
             name: tag.name,
             moderated: tag.moderated,
@@ -149,8 +155,9 @@ function discordThread(
 }
 
 /**
- * The archived private threads of a text channel. Listing them needs
- * Manage Threads, so a refusal is reported, not thrown.
+ * The archived private threads of a text channel, paged like public ones.
+ * Listing them needs Manage Threads, so a refusal is reported, not thrown,
+ * and so is a list longer than MAX_ARCHIVE_PAGES.
  */
 async function archivedPrivate(
     parent: NonThreadGuildBasedChannel
@@ -159,33 +166,27 @@ async function archivedPrivate(
         return { threads: [], readable: true };
     }
     try {
-        const result = await parent.threads.fetchArchived(
-            { type: 'private', limit: 100 },
-            false
-        );
-        // More than one page counts as incomplete, like an unreadable list.
-        return {
-            threads: [...result.threads.values()],
-            readable: !result.hasMore,
-        };
+        const result = await archivedThreads(parent, 'private');
+        return { threads: result.threads, readable: result.complete };
     } catch {
         return { threads: [], readable: false };
     }
 }
 
 /**
- * The archived public threads of one channel, newest first. `complete` is
- * false when more pages remain after MAX_ARCHIVE_PAGES.
+ * The archived threads of one channel, newest first. `complete` is false
+ * when more pages remain after MAX_ARCHIVE_PAGES.
  */
 async function archivedThreads(
-    parent: NonThreadGuildBasedChannel
+    parent: NonThreadGuildBasedChannel,
+    type: 'public' | 'private' = 'public'
 ): Promise<{ threads: AnyThreadChannel[]; complete: boolean }> {
     if (!('threads' in parent)) return { threads: [], complete: true };
     const found: AnyThreadChannel[] = [];
     let before: AnyThreadChannel | undefined;
     for (let page = 0; page < MAX_ARCHIVE_PAGES; page++) {
         const result = await parent.threads.fetchArchived(
-            { type: 'public', limit: 100, before },
+            { type, limit: 100, before },
             false
         );
         found.push(...result.threads.values());

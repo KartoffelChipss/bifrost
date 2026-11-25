@@ -29,6 +29,11 @@ export type PlanOp =
           readonly name: string;
           /** An unmapped destination object with the same name and type. */
           readonly existingDestId: string | null;
+          /**
+           * The existing object is this create's own earlier result (see
+           * adopt.ts): it is recorded as created by sync, not created again.
+           */
+          readonly adopt?: true;
       }
     | {
           readonly op: 'update';

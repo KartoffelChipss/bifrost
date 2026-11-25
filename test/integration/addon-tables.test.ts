@@ -24,6 +24,7 @@ const MIGRATIONS = [
     '00005-history-identity',
     '00006-parked-messages',
     '00007-history-resilience',
+    '00008-settings-enforce-drift',
 ];
 
 describe('add-on tables on Postgres', { skip: !url }, () => {

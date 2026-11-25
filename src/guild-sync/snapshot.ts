@@ -14,7 +14,10 @@ export const SYNCED_CHANNEL_TYPES = {
     2: 'voice',
     4: 'category',
     5: 'announcement',
+    // Fluxer has no stage channels; they are copied as voice channels.
+    13: 'voice',
     15: 'forum',
+    16: 'media',
 } as const;
 
 export type ChannelKind =
@@ -104,14 +107,23 @@ export interface GuildSettingsSnap {
     readonly explicitContentFilter: number;
 }
 
-/** Channel types that can hold threads or posts: text, announcement, forum. */
-export const THREAD_PARENT_TYPES: ReadonlySet<number> = new Set([0, 5, 15]);
+/** Forum and media channels: they hold only posts, started by a message. */
+export const THREAD_ONLY_TYPES: ReadonlySet<number> = new Set([15, 16]);
+
+/**
+ * Channel types that can hold threads or posts: text, announcement,
+ * forum and media.
+ */
+export const THREAD_PARENT_TYPES: ReadonlySet<number> = new Set([0, 5, 15, 16]);
 
 /**
  * Channel types the relay bridges: text, voice (its text chat),
- * announcement, and forum (whose webhook starts posts).
+ * announcement, and forum and media (whose webhook starts posts; Fluxer
+ * allows webhooks there, WEBHOOK_CHANNEL_TYPES in ThreadConstants.ts).
  */
-export const LINKED_CHANNEL_TYPES: ReadonlySet<number> = new Set([0, 2, 5, 15]);
+export const LINKED_CHANNEL_TYPES: ReadonlySet<number> = new Set([
+    0, 2, 5, 15, 16,
+]);
 
 /** Thread types that are synced: announcement, public and private. */
 export const SYNCED_THREAD_TYPES: ReadonlySet<number> = new Set([10, 11, 12]);
@@ -175,8 +187,9 @@ export interface GuildSnapshot {
     /**
      * Channels whose thread list is incomplete: unreadable (for example
      * without Read Message History) or with more archived threads than a
-     * read pages through. While this is not empty, no thread counts as
-     * missing, so nothing is removed on an incomplete list.
+     * read pages through. No thread in these channels counts as missing,
+     * nor any thread whose parent cannot be told, so nothing is removed
+     * on an incomplete list.
      */
     readonly threadGaps: readonly string[];
     /**
@@ -187,6 +200,8 @@ export interface GuildSnapshot {
     readonly privateThreadGaps?: readonly string[];
     /** Undefined in older snapshots. */
     readonly settings?: GuildSettingsSnap;
+    /** The server's feature flags. Read on Fluxer only; undefined otherwise. */
+    readonly features?: readonly string[];
     readonly bot: BotSnap | null;
 }
 
@@ -225,6 +240,15 @@ function sortKeys(value: unknown, depth: number): unknown {
  */
 export function stableJson(value: unknown): string {
     return JSON.stringify(sortKeys(value, 0));
+}
+
+/** Discord's stage channel type. */
+export const STAGE_TYPE = 13;
+const VOICE_TYPE = 2;
+
+/** The channel type a copy gets: a stage channel becomes a voice channel. */
+export function copyType(type: number): number {
+    return type === STAGE_TYPE ? VOICE_TYPE : type;
 }
 
 export function channelKind(type: number): ChannelKind | null {
