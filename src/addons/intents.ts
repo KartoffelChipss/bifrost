@@ -1,5 +1,7 @@
 import { GatewayIntentBits, Partials } from 'discord.js';
 import type { AddonConfig } from './config';
+import type { AddonDatabaseState } from './db/migrator';
+import { addonDatabaseState } from './state';
 
 /**
  * Extra Discord gateway intents the enabled add-ons need.
@@ -11,7 +13,12 @@ import type { AddonConfig } from './config';
  * Guild Message Reactions (not privileged) feeds the live reaction relay
  * that starts with guild-sync (src/relay-extras).
  */
-export function addonDiscordIntents(config: AddonConfig): GatewayIntentBits[] {
+export function addonDiscordIntents(
+    config: AddonConfig,
+    databaseState: AddonDatabaseState | null = addonDatabaseState()
+): GatewayIntentBits[] {
+    // Add-ons stay off after a failed migration; upstream's intents stand.
+    if (databaseState === 'failed') return [];
     const intents = new Set<GatewayIntentBits>();
     if (config.guildSync) {
         intents.add(GatewayIntentBits.GuildExpressions);
@@ -29,7 +36,11 @@ export function addonDiscordIntents(config: AddonConfig): GatewayIntentBits[] {
  * discord.js drops a reaction on an uncached message (Reaction) or by an
  * uncached user (User). Upstream already enables Message and Channel.
  */
-export function addonDiscordPartials(config: AddonConfig): Partials[] {
+export function addonDiscordPartials(
+    config: AddonConfig,
+    databaseState: AddonDatabaseState | null = addonDatabaseState()
+): Partials[] {
+    if (databaseState === 'failed') return [];
     return config.guildSync ? [Partials.Reaction, Partials.User] : [];
 }
 

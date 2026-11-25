@@ -4,6 +4,7 @@ import { GatewayIntentBits } from 'discord.js';
 import type { AddonConfig } from '../../src/addons/config';
 import {
     addonDiscordIntents,
+    addonDiscordPartials,
     upstreamCommandAllowed,
 } from '../../src/addons/intents';
 
@@ -50,5 +51,14 @@ describe('upstreamCommandAllowed', () => {
     it('leaves upstream unchanged when add-ons ask for no DMs', () => {
         assert.equal(upstreamCommandAllowed(false, []), true);
         assert.equal(upstreamCommandAllowed(true, []), true);
+    });
+});
+
+describe('after failed add-on migrations', () => {
+    it('asks for no extra intents or partials', () => {
+        const all = { ...OFF, guildSync: true, history: true, identity: true };
+        assert.deepEqual(addonDiscordIntents(all, 'failed'), []);
+        assert.deepEqual(addonDiscordPartials(all, 'failed'), []);
+        assert.ok(addonDiscordIntents(all, 'ready').length > 0);
     });
 });
