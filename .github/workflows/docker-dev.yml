@@ -7,7 +7,7 @@ on:
 
 # Unreleased builds for testing, published only to the GitHub Container
 # Registry. Every run pushes ghcr.io/<owner>/bifrost:sha-<commit>. A run on
-# main also moves the edge tag. Releases are built by docker-release.yml.
+# main also moves the edge tag. Releases are built by docker-release-ghcr.yml.
 #
 # The job logs in to the registry only after the image is built and checked,
 # so no registry credential exists on the runner during the build.
