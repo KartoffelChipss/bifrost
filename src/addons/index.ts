@@ -75,6 +75,8 @@ export function addonFactories(
                     sequelize: deps.sequelize,
                     lookups: deps.bridge,
                     excludedChannels: config.excludedChannels,
+                    listGuildLinks: deps.listGuildLinks,
+                    links: deps.bridge,
                 })
             ),
         history: () =>

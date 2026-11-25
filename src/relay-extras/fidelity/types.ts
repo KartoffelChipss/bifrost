@@ -1,0 +1,105 @@
+import type { AddonLogger } from '../../addons/isolation';
+import type { WebhookMessageData } from '../../services/WebhookService';
+import type { MapRow } from '../../guild-sync/ops';
+import type { FindPair } from '../pairs';
+import type { Side } from '../types';
+
+/**
+ * Message fidelity: relayed copies that look like the source message on
+ * the other platform. Upstream Bifröst flattens mentions to text and posts
+ * every copy under the author's global username. This module maps
+ * mentions, emojis, pings, names, replies and stickers to the other
+ * platform through the fork's ID maps: channel links, guild-sync's object
+ * map, linked accounts and message pairs.
+ */
+
+export type { Side };
+
+/** Who a copy may ping, as IDs on the target platform. */
+export interface PingSpec {
+    readonly everyone: boolean;
+    readonly users: readonly string[];
+    readonly roles: readonly string[];
+    /** The author of the message a native reply answers. */
+    readonly repliedUser: boolean;
+}
+
+/** A message on the target platform. */
+export interface TargetMessageRef {
+    readonly channelId: string;
+    readonly messageId: string;
+}
+
+/**
+ * Fork fields on a webhook payload. Plain JSON, so upstream's retry queue
+ * (MessageQueueService.toSerializable) keeps them.
+ */
+export interface CopyFidelity {
+    readonly pings?: PingSpec;
+    /** The counterpart this copy replies to. Fluxer webhooks only. */
+    readonly replyTo?: TargetMessageRef;
+    /** Synced stickers on the target side. Fluxer webhooks only, max 3. */
+    readonly stickerIds?: readonly string[];
+}
+
+/** The parts of a source message fidelity reads, from either platform. */
+export interface SourceFacts {
+    readonly side: Side;
+    readonly guildId: string | null;
+    readonly channelId: string;
+    readonly content: string;
+}
+
+/** One upstream guild link. */
+export interface GuildLinkRef {
+    readonly id: string;
+    readonly discordGuildId: string;
+    readonly fluxerGuildId: string;
+}
+
+/** One upstream channel link. */
+export interface ChannelLinkRef {
+    readonly guildLinkId: string;
+    readonly discordChannelId: string;
+    readonly fluxerChannelId: string;
+}
+
+/** A linked account pair (addon_identity_links). */
+export interface AccountPair {
+    readonly discordUserId: string;
+    readonly fluxerUserId: string;
+}
+
+/** What fidelity reads from the database and the platforms. */
+export interface FidelityPorts {
+    listGuildLinks(): Promise<readonly GuildLinkRef[]>;
+    /** guild-sync's addon_object_map rows for one guild link. */
+    loadObjectMap(guildLinkId: string): Promise<readonly MapRow[]>;
+    listAccountPairs(): Promise<readonly AccountPair[]>;
+    channelLink(side: Side, channelId: string): Promise<ChannelLinkRef | null>;
+    findPair: FindPair;
+    now(): number;
+    readonly logger: AddonLogger;
+}
+
+/**
+ * What a transformer asks while it builds one copy. Every method is
+ * synchronous: the service looks everything up before the transform.
+ */
+export interface FidelityView {
+    /** The target-side form of a mention token, or null to flatten it. */
+    readonly mention: (token: string) => string | null;
+    /** Replaces source custom emojis with their synced target emojis. */
+    emojis(content: string, targetEmojis: readonly TargetEmoji[]): string;
+    /** Upstream's breakMentions, sparing mentions that may ping. */
+    breakMentions(content: string): string;
+    /** Adds the fork fields to a finished payload. */
+    finish(payload: WebhookMessageData): WebhookMessageData;
+}
+
+/** A custom emoji of the target server, as upstream's resolvers list it. */
+export interface TargetEmoji {
+    readonly id: string;
+    readonly name: string;
+    readonly animated: boolean;
+}
