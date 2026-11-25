@@ -9,6 +9,8 @@ import { TABLES } from '../schema';
  * - `skipped` counts messages given up on after repeated lasting errors.
  * - A message's `contentHash` lets crash recovery tell its copy from other
  *   posts by the same webhook, such as live relay messages.
+ * - `archiveThreadId` is the Fluxer thread a big channel's history goes to
+ *   in archive-thread mode (BF_HISTORY_INLINE_MAX).
  */
 
 const counter = {
@@ -21,6 +23,7 @@ const JOB_COLUMNS = {
     retries: counter,
     retryAt: { type: DataTypes.DATE, allowNull: true },
     skipped: counter,
+    archiveThreadId: { type: DataTypes.STRING, allowNull: true },
 } as const;
 
 export async function up({

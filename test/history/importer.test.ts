@@ -15,6 +15,7 @@ import {
     backoffMs,
     snowflakeTime,
     type HistoryMode,
+    type ImporterDeps,
 } from '../../src/history/importer';
 import { contentHash } from '../../src/history/format';
 import { SURVEY_MAX_PAGES, estimateMinutes } from '../../src/history/survey';
@@ -46,7 +47,11 @@ function source(): GuildSnapshot {
     });
 }
 
-function setup(mode: HistoryMode = 'apply', excluded: string[] = []) {
+function setup(
+    mode: HistoryMode = 'apply',
+    excluded: string[] = [],
+    inlineMax?: number
+) {
     const store = new FakeHistoryStore();
     const ports = new FakeHistoryPorts();
     const links = new FakeLinker();
@@ -70,9 +75,14 @@ function setup(mode: HistoryMode = 'apply', excluded: string[] = []) {
         ports,
         links,
         excluded: new Set(excluded),
+        inlineMax,
         writer: {
             async updateThread(_guild, id, patch) {
                 threadEdits.push(`${id} ${JSON.stringify(patch)}`);
+            },
+            async createThread(_guild, spec) {
+                threadEdits.push(`create ${spec.parentId} ${spec.name}`);
+                return `thread-of-${spec.parentId}`;
             },
         },
         recordThreadState: async (linkId, threadId, thread) => {
@@ -434,6 +444,121 @@ describe('earlier relay copies', () => {
             s.ports.sent.map((m) => m.content.split('\n')[0]),
             ['message 11', 'message 14']
         );
+    });
+});
+
+describe('archive-thread mode', () => {
+    const big = (s: ReturnType<typeof setup>, channelId: string) => {
+        for (let i = 0; i < 3; i++) s.ports.add(channelId, String(11 + i));
+    };
+
+    it('is off by default: a big channel imports inline and bridges after', async () => {
+        const s = setup('apply', ['20', '30']);
+        big(s, '10');
+        s.map('channel', '10', 'f10');
+        await s.importer.planJobs(LINK);
+        s.state.clockMoves = false;
+        await s.importer.run(LINK);
+        assert.ok(!s.threadEdits.some((e) => e.startsWith('create')));
+        assert.ok(s.ports.sent.every((m) => m.threadId === null));
+        await s.drain();
+        assert.deepEqual(
+            await s.store.channelsReadyToBridge(LINK.id),
+            new Set(['10'])
+        );
+    });
+
+    it('sends a channel above the limit to a locked thread and bridges it at once', async () => {
+        const s = setup('apply', ['20', '30'], 2);
+        big(s, '10');
+        s.map('channel', '10', 'f10');
+        const sendCopy = s.ports.sendCopy.bind(s.ports);
+        let checked = false;
+        s.ports.sendCopy = async (target, payload) => {
+            if (!checked) {
+                checked = true;
+                // Ready to bridge before the first copy is sent.
+                assert.deepEqual(
+                    await s.store.channelsReadyToBridge(LINK.id),
+                    new Set(['10'])
+                );
+            }
+            return sendCopy(target, payload);
+        };
+        await s.importer.run(LINK);
+        assert.equal(s.store.job('10').archiveThreadId, 'thread-of-f10');
+        assert.equal(await s.store.isArchiveThread('thread-of-f10'), true);
+        // Linked mid-import: the history still goes to the thread.
+        await s.links.link(LINK.id, '10', 'f10');
+        await s.drain();
+        assert.deepEqual(
+            s.ports.sent.map((m) => [m.webhook, m.threadId]),
+            [
+                ['import-f10', 'thread-of-f10'],
+                ['import-f10', 'thread-of-f10'],
+                ['import-f10', 'thread-of-f10'],
+            ]
+        );
+        assert.equal(s.threadEdits[0], 'create f10 History before 2026-11-25');
+        assert.equal(s.threadEdits[1], 'thread-of-f10 {"locked":true}');
+        assert.equal(
+            s.threadEdits[s.threadEdits.length - 1],
+            'thread-of-f10 {"archived":true,"locked":true}'
+        );
+        assert.equal(s.store.job('10').status, 'done');
+        assert.ok(s.store.messages.every((m) => m.inThread));
+    });
+
+    it('stops the archive at the link, leaving newer messages to the relay', async () => {
+        const s = setup('apply', ['20', '30'], 2);
+        big(s, '10');
+        const linkedAt = Date.parse('2026-11-25T11:00:00Z');
+        const live = (
+            BigInt(linkedAt + 1_000 - 1_420_070_400_000) << BigInt(22)
+        ).toString();
+        s.map('channel', '10', 'f10');
+        const sendCopy = s.ports.sendCopy.bind(s.ports);
+        s.ports.sendCopy = async (target, payload) => {
+            const id = await sendCopy(target, payload);
+            if (!(await s.links.byDiscordChannel('10'))) {
+                // Bridged after the first copy; a live message follows.
+                await s.links.link(LINK.id, '10', 'f10');
+                s.ports.linkTimes.set('10', new Date(linkedAt));
+                s.ports.add('10', live);
+            }
+            return id;
+        };
+        await s.drain();
+        assert.equal(s.ports.sent.length, 3);
+        assert.equal(await s.store.importedByDiscordId(live), null);
+    });
+
+    it('keeps a voice channel inline above the limit', async () => {
+        const s = setup('apply', ['10', '20'], 2);
+        big(s, '30');
+        s.map('channel', '30', 'f30');
+        await s.drain();
+        assert.equal(s.store.job('30').archiveThreadId, null);
+        assert.ok(s.ports.sent.every((m) => m.threadId === null));
+        assert.equal(s.store.job('30').status, 'ready');
+    });
+
+    it('imports inline when the thread cannot be made', async () => {
+        const s = setup('apply', ['20', '30'], 2);
+        big(s, '10');
+        s.map('channel', '10', 'f10');
+        const importer = new HistoryImporter({
+            ...(s.importer as unknown as { deps: ImporterDeps }).deps,
+            writer: {
+                updateThread: async () => {},
+                createThread: async () => {
+                    throw new Error('Missing Permissions');
+                },
+            },
+        });
+        await importer.run(LINK);
+        assert.equal(s.store.job('10').archiveThreadId, null);
+        assert.ok(s.ports.sent.every((m) => m.threadId === null));
     });
 });
 

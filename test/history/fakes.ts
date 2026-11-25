@@ -59,6 +59,7 @@ export class FakeHistoryStore implements HistoryStore {
             attachmentCount: null,
             surveyedAt: null,
             importWebhook: null,
+            archiveThreadId: null,
             lastError: null,
         });
     }
@@ -144,10 +145,16 @@ export class FakeHistoryStore implements HistoryStore {
                     (j) =>
                         j.guildLinkId === guildLinkId &&
                         j.kind === 'channel' &&
-                        (j.status === 'ready' || j.status === 'done')
+                        (j.status === 'ready' ||
+                            j.status === 'done' ||
+                            j.archiveThreadId !== null)
                 )
                 .map((j) => j.discordId)
         );
+    }
+
+    async isArchiveThread(id: string) {
+        return this.jobs.some((j) => j.archiveThreadId === id);
     }
 
     async retryFailed(guildLinkId: string) {

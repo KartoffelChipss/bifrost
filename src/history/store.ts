@@ -44,11 +44,14 @@ export interface HistoryStore {
     /** True when this Fluxer message is one side of a thread relay pair. */
     relayedInThreadByFluxerId(fluxerMessageId: string): Promise<boolean>;
     /**
-     * Discord channels whose history is copied, so guild-sync may bridge
-     * them: jobs that are ready or done. A failed job never counts; its
-     * channel stays unbridged until an admin retries it.
+     * Discord channels guild-sync may bridge: jobs whose history is
+     * copied (ready or done), and archive-thread jobs, whose history goes
+     * to a thread while live chat flows. A failed inline job never counts;
+     * its channel stays unbridged until an admin retries it.
      */
     channelsReadyToBridge(guildLinkId: string): Promise<Set<string>>;
+    /** True when this Fluxer thread is an archive thread of history. */
+    isArchiveThread(fluxerThreadId: string): Promise<boolean>;
     /**
      * Restarts a link's failed jobs where they stopped. Returns how many.
      * A job that never started goes back to pending.
@@ -130,6 +133,7 @@ export function parseJob(row: Row): HistoryJob {
         surveyedAt: surveyedAt instanceof Date ? surveyedAt : null,
         importWebhook:
             hookId && hookToken ? { id: hookId, token: hookToken } : null,
+        archiveThreadId: optStr(row, 'archiveThreadId'),
         lastError: optStr(row, 'lastError'),
     };
 }
@@ -165,6 +169,7 @@ const PATCH_COLUMNS: readonly (keyof JobPatch)[] = [
     'messageCount',
     'attachmentCount',
     'surveyedAt',
+    'archiveThreadId',
     'lastError',
 ];
 
@@ -317,11 +322,20 @@ export class PostgresHistoryStore implements HistoryStore {
     async channelsReadyToBridge(guildLinkId: string): Promise<Set<string>> {
         const rows = await this.db.query<Row>(
             `SELECT "discordId" FROM ${TABLES.historyJobs}
-             WHERE "guildLinkId" = $1 AND kind = 'channel' AND status IN ('ready', 'done')
+             WHERE "guildLinkId" = $1 AND kind = 'channel'
+               AND (status IN ('ready', 'done') OR "archiveThreadId" IS NOT NULL)
              LIMIT $2`,
             { bind: [guildLinkId, MAX_JOBS], type: QueryTypes.SELECT }
         );
         return new Set(rows.map((row) => str(row, 'discordId')));
+    }
+
+    async isArchiveThread(fluxerThreadId: string): Promise<boolean> {
+        const rows = await this.db.query<Row>(
+            `SELECT 1 FROM ${TABLES.historyJobs} WHERE "archiveThreadId" = $1 LIMIT 1`,
+            { bind: [fluxerThreadId], type: QueryTypes.SELECT }
+        );
+        return rows.length > 0;
     }
 
     async retryFailed(guildLinkId: string, now: Date): Promise<number> {

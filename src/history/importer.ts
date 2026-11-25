@@ -14,6 +14,7 @@ import {
     isTransient,
     isUploadError,
 } from './errors';
+import { ArchiveThreads } from './archive';
 import { CopyFormatter, contentHash, withNote } from './format';
 import {
     MAX_PARALLEL,
@@ -80,7 +81,12 @@ export interface ImporterDeps {
     };
     readonly ports: HistoryPorts;
     readonly links: ChannelLinker;
-    readonly writer: Pick<GuildWriter, 'updateThread'>;
+    readonly writer: Pick<GuildWriter, 'updateThread' | 'createThread'>;
+    /**
+     * Archive-thread mode: channels with more messages than this get their
+     * history in a thread and are bridged at once. 0 or absent: inline.
+     */
+    readonly inlineMax?: number;
     /**
      * Records a thread state written straight to Fluxer in guild-sync's
      * object map, so its next cycle does not take it for drift.
@@ -113,6 +119,8 @@ interface Pass {
     readonly deadline: number;
     /** Message channels guild-sync cannot bridge (see `plan`). */
     readonly unbridged: ReadonlySet<string>;
+    /** Discord channel types by ID, from the snapshot. */
+    readonly channelTypes: ReadonlyMap<string, number>;
 }
 
 /** Where a job's copies go, and the bridge whose Discord posts it skips. */
@@ -141,10 +149,15 @@ class StoppedError extends Error {}
 export class HistoryImporter {
     private readonly formatter: CopyFormatter;
     private readonly survey: HistorySurvey;
+    private readonly archive: ArchiveThreads;
 
     constructor(private readonly deps: ImporterDeps) {
         this.formatter = new CopyFormatter(deps);
         this.survey = new HistorySurvey(deps);
+        this.archive = new ArchiveThreads({
+            ...deps,
+            inlineMax: deps.inlineMax ?? 0,
+        });
     }
 
     /**
@@ -175,9 +188,13 @@ export class HistoryImporter {
                 )
                 .map((c) => c.id)
         );
+        const channelTypes = new Map(
+            (snapshot?.channels ?? []).map((c) => [c.id, c.type])
+        );
         return {
             jobs: jobs.filter((job) => !skip.has(job.discordId)),
             unbridged,
+            channelTypes,
         };
     }
 
@@ -246,9 +263,12 @@ export class HistoryImporter {
     ): Promise<boolean> {
         const mode = await this.deps.mode(link.id);
         if (mode === 'read-only') return false;
-        const { jobs, unbridged } = await this.plan(link);
+        const { jobs, unbridged, channelTypes } = await this.plan(link);
         if (mode === 'dry-run') return this.survey.run(link, jobs, deadline);
-        return this.importAll({ link, deadline, unbridged }, jobs);
+        return this.importAll(
+            { link, deadline, unbridged, channelTypes },
+            jobs
+        );
     }
 
     /**
@@ -323,6 +343,8 @@ export class HistoryImporter {
         job: HistoryJob
     ): Promise<HistoryJob | null> {
         if (job.status === 'done' || job.status === 'failed') return null;
+        // An archive thread's history goes on through the import webhook.
+        if (job.archiveThreadId) return job.status === 'importing' ? job : null;
         const bridged = await this.deps.links.byDiscordChannel(job.discordId);
         if (!bridged) return job.status === 'ready' ? null : job;
         if (job.status === 'pending') {
@@ -477,9 +499,10 @@ export class HistoryImporter {
             };
         }
         const relayHooks = await this.relayHooks(job.discordId, null);
+        const threadId = job.archiveThreadId;
         if (job.importWebhook) {
             return {
-                target: { webhook: job.importWebhook, threadId: null },
+                target: { webhook: job.importWebhook, threadId },
                 relayHooks,
             };
         }
@@ -489,7 +512,7 @@ export class HistoryImporter {
             { importWebhook: webhook },
             this.deps.now()
         );
-        return { target: { webhook, threadId: null }, relayHooks };
+        return { target: { webhook, threadId }, relayHooks };
     }
 
     /** The bridge webhook, if any, and earlier bridge webhooks still there. */
@@ -502,17 +525,28 @@ export class HistoryImporter {
         return hooks;
     }
 
-    /** Sets the cutoff the import copies up to. */
-    private async begin(job: HistoryJob): Promise<HistoryJob> {
+    /**
+     * Sets the cutoff the import copies up to, and opens the archive
+     * thread when the channel is big enough for archive-thread mode.
+     */
+    private async begin(pass: Pass, job: HistoryJob): Promise<HistoryJob> {
         const cutoffId =
             (await this.deps.ports.newestMessageId(job.discordId)) ?? '0';
-        // lastError may hold a dry-run survey note.
-        await this.deps.store.updateJob(
-            job.id,
-            { status: 'importing', cutoffId, lastError: null },
+        const archiveThreadId = await this.archive.open(
+            pass.link,
+            job,
+            pass.channelTypes.get(job.discordId),
             this.deps.now()
         );
-        return { ...job, status: 'importing', cutoffId, lastError: null };
+        // lastError may hold a dry-run survey note.
+        const patch = {
+            status: 'importing' as const,
+            cutoffId,
+            archiveThreadId,
+            lastError: null,
+        };
+        await this.deps.store.updateJob(job.id, patch, this.deps.now());
+        return { ...job, ...patch };
     }
 
     /**
@@ -564,7 +598,7 @@ export class HistoryImporter {
 
     private async importPage(pass: Pass, start: HistoryJob): Promise<boolean> {
         const job =
-            start.status === 'pending' ? await this.begin(start) : start;
+            start.status === 'pending' ? await this.begin(pass, start) : start;
         const route = await this.route(job);
         await this.recover(job);
         const cutoff = job.cutoffId ?? '0';
@@ -573,7 +607,10 @@ export class HistoryImporter {
             job.checkpointId,
             PAGE_SIZE
         );
-        const due = page.filter((m) => !later(m.id, cutoff));
+        const end = await this.archiveEnd(job);
+        const due = page.filter(
+            (m) => !later(m.id, cutoff) && snowflakeTime(m.id) < end
+        );
         if (due.length === 0) return this.finish(pass, job);
         return this.whileOpen(pass.link, job, () =>
             this.copyPage(pass, job, due, route)
@@ -592,20 +629,37 @@ export class HistoryImporter {
         job: HistoryJob,
         work: () => Promise<boolean>
     ): Promise<boolean> {
-        if (job.kind !== 'thread' || !job.fluxerId) return work();
-        const { locked } = await this.deps.ports.threadState(job.discordId);
-        if (!locked) return work();
+        const threadId = await this.lockedThread(job);
+        if (!threadId) return work();
         const { writer } = this.deps;
-        await writer.updateThread(link.fluxerGuildId, job.fluxerId, {
+        await writer.updateThread(link.fluxerGuildId, threadId, {
             locked: false,
         });
         try {
             return await work();
         } finally {
-            await writer.updateThread(link.fluxerGuildId, job.fluxerId, {
+            await writer.updateThread(link.fluxerGuildId, threadId, {
                 locked: true,
             });
         }
+    }
+
+    /** The Fluxer thread a job writes to, when it is kept locked. */
+    private async lockedThread(job: HistoryJob): Promise<string | null> {
+        if (job.archiveThreadId) return job.archiveThreadId;
+        if (job.kind !== 'thread' || !job.fluxerId) return null;
+        const { locked } = await this.deps.ports.threadState(job.discordId);
+        return locked ? job.fluxerId : null;
+    }
+
+    /**
+     * An archive thread's history ends where the bridge begins: messages
+     * from then on are relayed live. Without a bridge, there is no end.
+     */
+    private async archiveEnd(job: HistoryJob): Promise<number> {
+        if (!job.archiveThreadId) return Number.POSITIVE_INFINITY;
+        const linkedAt = await this.deps.ports.linkCreatedAt(job.discordId);
+        return linkedAt ? linkedAt.getTime() : Number.POSITIVE_INFINITY;
     }
 
     private async copyPage(
@@ -621,6 +675,7 @@ export class HistoryImporter {
             // relay the copy back to Discord.
             if (
                 state.kind === 'channel' &&
+                !state.archiveThreadId &&
                 (await this.deps.links.byDiscordChannel(state.discordId))
             ) {
                 await this.handOver(state);
@@ -825,6 +880,10 @@ export class HistoryImporter {
             return true;
         }
         await this.pinCopies(job);
+        if (job.archiveThreadId) {
+            await this.archive.close(pass.link, job.archiveThreadId);
+            return this.done(job);
+        }
         if (job.kind === 'channel') {
             // A channel that is never bridged has no gap to close.
             const status = pass.unbridged.has(job.discordId) ? 'done' : 'ready';

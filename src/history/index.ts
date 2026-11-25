@@ -35,7 +35,9 @@ export interface HistoryDeps {
     readonly listGuildLinks: () => Promise<readonly LinkedGuild[]>;
     readonly links: ChannelLinker;
     readonly ports: HistoryPorts;
-    readonly writer: Pick<GuildWriter, 'updateThread'>;
+    readonly writer: Pick<GuildWriter, 'updateThread' | 'createThread'>;
+    /** BF_HISTORY_INLINE_MAX: see ImporterDeps.inlineMax. */
+    readonly inlineMax?: number;
     readonly sendNotice: SendNotice;
     readonly excludedChannels: ReadonlySet<string>;
     /** Upstream's command prefix, which copies must not start with. */
@@ -91,6 +93,7 @@ function buildImporter(deps: HistoryDeps, context: AddonContext) {
         ports: deps.ports,
         links: deps.links,
         writer: deps.writer,
+        inlineMax: deps.inlineMax,
         recordThreadState: threadStateRecorder(sync),
         excluded: deps.excludedChannels,
         commandPrefix: deps.commandPrefix,

@@ -47,6 +47,11 @@ export interface HistoryJob {
     readonly surveyedAt: Date | null;
     /** A channel's own import webhook, used before the channel is bridged. */
     readonly importWebhook: WebhookRef | null;
+    /**
+     * Archive-thread mode: the Fluxer thread a big channel's history goes
+     * to, through the import webhook. Such a channel is bridged at once.
+     */
+    readonly archiveThreadId: string | null;
     readonly lastError: string | null;
 }
 
@@ -67,6 +72,7 @@ export type JobPatch = Partial<
         | 'attachmentCount'
         | 'surveyedAt'
         | 'importWebhook'
+        | 'archiveThreadId'
         | 'lastError'
     >
 >;

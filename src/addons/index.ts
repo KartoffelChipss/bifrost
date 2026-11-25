@@ -88,6 +88,7 @@ export function addonFactories(
                 sendNotice,
                 excludedChannels: config.excludedChannels,
                 commandPrefix: deps.commandPrefix,
+                inlineMax: config.historyInlineMax ?? 0,
             }),
         identity: () =>
             createIdentityAddon({
