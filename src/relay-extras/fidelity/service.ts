@@ -13,7 +13,9 @@ import type {
     FidelityView,
     GuildLinkRef,
     SourceFacts,
+    TargetMessageRef,
 } from './types';
+import { replyTarget } from './reply';
 import { createView, NO_FIDELITY, type Resolution } from './view';
 
 /** Upper bound on guild links and channels whose maps are cached. */
@@ -79,6 +81,7 @@ export class FidelityService {
         ]);
         const ids = objects[facts.side];
         const channels = await this.channelMap(facts, link.id, ids);
+        const replyTo = await this.replyTo(facts, link.id, channels);
         return {
             facts,
             target: otherSide(facts.side),
@@ -88,7 +91,23 @@ export class FidelityService {
                 channels,
             },
             emojis: ids.emojis,
+            replyTo,
         };
+    }
+
+    /** A failed reply lookup costs the native reply, not the rest. */
+    private async replyTo(
+        facts: SourceFacts,
+        guildLinkId: string,
+        channels: ReadonlyMap<string, string>
+    ): Promise<TargetMessageRef | null> {
+        try {
+            const channel = channels.get(facts.channelId);
+            return await replyTarget(facts, guildLinkId, channel, this.ports);
+        } catch (error) {
+            this.warn(error);
+            return null;
+        }
     }
 
     private async guildLink(facts: SourceFacts): Promise<GuildLinkRef | null> {

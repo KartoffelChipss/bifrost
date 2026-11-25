@@ -21,12 +21,26 @@ export { NO_FIDELITY } from './view';
 
 let installed: FidelityService | null = null;
 
+const NO_NATIVE_REPLY = Symbol('fidelity: no native reply');
+
+/**
+ * A view of a message whose copy keeps upstream's reply quote. History
+ * copies use it: their webhook replaces allowed_mentions with
+ * `{ parse: [] }` (src/history/quietWebhook.ts), which leaves Fluxer's
+ * `replied_user` on, so a native reply could ping.
+ */
+export function withoutNativeReply<M extends object>(message: M): M {
+    return Object.create(message, {
+        [NO_NATIVE_REPLY]: { value: true },
+    }) as M;
+}
+
 /** Sets or clears the service the transformer hooks use. */
 export function installFidelity(service: FidelityService | null): void {
     installed = service;
 }
 
-async function viewFor<M>(
+async function viewFor<M extends object>(
     message: M,
     facts: (message: M) => SourceFacts
 ): Promise<FidelityView> {
@@ -39,7 +53,8 @@ async function viewFor<M>(
         service.warn(error);
         return NO_FIDELITY;
     }
-    return service.prepare(read);
+    const quoted = NO_NATIVE_REPLY in message;
+    return service.prepare(quoted ? { ...read, reply: null } : read);
 }
 
 /** Fidelity for a Discord message copied to Fluxer. */

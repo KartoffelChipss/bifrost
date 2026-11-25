@@ -150,7 +150,8 @@ export default class DiscordMessageTransformer extends MessageTransformer<
 
         const embeds: WebhookEmbed[] = this.buildRichEmbeds(message);
 
-        if (message.reference) {
+        // Fork: a native reply on Fluxer replaces the quote embed.
+        if (message.reference && !fidelity.nativeReply) {
             const isForwarded = message.flags.has(MessageFlags.HasSnapshot);
             const referencedMessage = isForwarded
                 ? message.messageSnapshots.first()

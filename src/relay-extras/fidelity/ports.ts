@@ -1,4 +1,6 @@
+import type { Client as FluxerClient } from '@fluxerjs/core';
 import type { Sequelize } from 'sequelize';
+import { isNotFound } from '../../guild-sync/apply';
 import type { AddonLogger } from '../../addons/isolation';
 import type { ChannelLinker } from '../../guild-sync/links';
 import type { PostgresGuildSyncStore } from '../../guild-sync/store';
@@ -13,7 +15,25 @@ export interface FidelityPortDeps {
     /** Upstream's channel links (upstreamBridge.ts). */
     readonly links: Pick<ChannelLinker, 'byDiscordChannel' | 'byFluxerChannel'>;
     readonly findPair: FindPair;
+    readonly fluxerClientRef: { readonly current: FluxerClient | null };
     readonly logger: AddonLogger;
+}
+
+/** Whether a Fluxer message is still there; only Fluxer copies reply. */
+async function fluxerMessageExists(
+    ref: FidelityPortDeps['fluxerClientRef'],
+    channelId: string,
+    messageId: string
+): Promise<boolean> {
+    const client = ref.current;
+    if (!client?.isReady()) throw new Error('Fluxer gateway is not ready');
+    try {
+        await client.channels.fetchMessage(channelId, messageId);
+        return true;
+    } catch (error) {
+        if (isNotFound(error)) return false;
+        throw error;
+    }
 }
 
 /** Fidelity's lookups, on the stores and services the add-ons share. */
@@ -30,6 +50,13 @@ export function fidelityPorts(deps: FidelityPortDeps): FidelityPorts {
                 ? links.byDiscordChannel(id)
                 : links.byFluxerChannel(id),
         findPair: deps.findPair,
+        messageExists: async (side, channelId, messageId) =>
+            side === 'fluxer' &&
+            (await fluxerMessageExists(
+                deps.fluxerClientRef,
+                channelId,
+                messageId
+            )),
         now: Date.now,
         logger: deps.logger,
     };

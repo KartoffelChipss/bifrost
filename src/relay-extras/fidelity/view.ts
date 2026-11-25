@@ -7,7 +7,13 @@ import {
     type MentionMaps,
 } from './mentions';
 import { webhookName } from './profile';
-import type { FidelityView, PingSpec, Side, SourceFacts } from './types';
+import type {
+    FidelityView,
+    PingSpec,
+    Side,
+    SourceFacts,
+    TargetMessageRef,
+} from './types';
 
 /** A copy that pings nobody. */
 export const NO_PINGS: PingSpec = {
@@ -23,6 +29,8 @@ export interface Resolution {
     readonly target: Side;
     readonly mentions: MentionMaps;
     readonly emojis: ReadonlyMap<string, string>;
+    /** The counterpart a native reply answers, when it can be one. */
+    readonly replyTo: TargetMessageRef | null;
 }
 
 /** Upstream's behaviour: flat mentions, upstream's payload unchanged. */
@@ -30,6 +38,7 @@ export const NO_FIDELITY: FidelityView = {
     mention: () => null,
     emojis: (content) => content,
     breakMentions,
+    nativeReply: false,
     finish: (payload) => payload,
 };
 
@@ -57,7 +66,9 @@ export function copyPings(resolution: Resolution): PingSpec {
         everyone: pinged.everyone,
         users: mapIds(pinged.users, resolution.mentions.users),
         roles: mapIds(pinged.roles, resolution.mentions.roles),
-        repliedUser: false,
+        repliedUser: resolution.replyTo
+            ? resolution.facts.reply?.pinged === true
+            : false,
     };
 }
 
@@ -77,7 +88,11 @@ function finishWith(
             webhookName(author.displayName, resolution.target) ??
             payload.username,
         avatarURL: author.avatarUrl || payload.avatarURL,
-        fidelity: { ...payload.fidelity, pings },
+        fidelity: {
+            ...payload.fidelity,
+            pings,
+            ...(resolution.replyTo ? { replyTo: resolution.replyTo } : {}),
+        },
     };
 }
 
@@ -89,6 +104,7 @@ export function createView(resolution: Resolution): FidelityView {
         emojis: (content, targetEmojis) =>
             mapEmojis(content, resolution.emojis, targetEmojis),
         breakMentions: (content) => breakUnpinged(content, pings.everyone),
+        nativeReply: resolution.replyTo !== null,
         finish: (payload) => finishWith(payload, resolution, pings),
     };
 }

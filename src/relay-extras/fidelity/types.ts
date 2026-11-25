@@ -65,6 +65,14 @@ export interface SourceFacts {
     readonly content: string;
     readonly pinged: SourcePings;
     readonly author: SourceAuthor;
+    /** The message this one replies to, on the source side. */
+    readonly reply: SourceReply | null;
+}
+
+/** A source reply: the message it answers, and whether it pinged. */
+export interface SourceReply {
+    readonly messageId: string;
+    readonly pinged: boolean;
 }
 
 /** One upstream guild link. */
@@ -95,6 +103,12 @@ export interface FidelityPorts {
     listAccountPairs(): Promise<readonly AccountPair[]>;
     channelLink(side: Side, channelId: string): Promise<ChannelLinkRef | null>;
     findPair: FindPair;
+    /** False when the message is gone; other errors propagate. */
+    messageExists(
+        side: Side,
+        channelId: string,
+        messageId: string
+    ): Promise<boolean>;
     now(): number;
     readonly logger: AddonLogger;
 }
@@ -110,6 +124,8 @@ export interface FidelityView {
     emojis(content: string, targetEmojis: readonly TargetEmoji[]): string;
     /** Upstream's breakMentions, sparing mentions that may ping. */
     breakMentions(content: string): string;
+    /** The copy is a native reply, so upstream's quote embed is left out. */
+    readonly nativeReply: boolean;
     /** Adds the fork fields to a finished payload. */
     finish(payload: WebhookMessageData): WebhookMessageData;
 }

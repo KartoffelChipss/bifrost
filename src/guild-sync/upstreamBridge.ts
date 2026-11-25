@@ -52,6 +52,7 @@ import {
 } from './threadWebhook';
 import type { FluxerWebhookSend } from './writers/fluxer';
 import { NO_PINGS } from '../relay-extras/fidelity/view';
+import { withoutNativeReply } from '../relay-extras/fidelity';
 
 /**
  * Connects guild-sync to upstream Bifröst: its channel links, webhooks and
@@ -680,7 +681,8 @@ export class UpstreamBridge
                   reference: { value: null },
               }) as DiscordMessage)
             : message;
-        return this.toFluxerPayload(source, guildLinkId);
+        // A history copy quotes its reply; a native one could ping.
+        return this.toFluxerPayload(withoutNativeReply(source), guildLinkId);
     }
 
     /** Discord returns at most 50 pins per page. */

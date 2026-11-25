@@ -78,6 +78,15 @@ export class FakePorts implements FidelityPorts {
     ]);
     pairs: MessagePair[] = [];
     failObjectMap: Error | null = null;
+    /** Target message IDs that were deleted. */
+    gone = new Set<string>();
+    failExists: Error | null = null;
+
+    async messageExists(side: Side, channelId: string, messageId: string) {
+        this.calls.push(`exists ${side}:${channelId}/${messageId}`);
+        if (this.failExists) throw this.failExists;
+        return !this.gone.has(messageId);
+    }
 
     readonly logger = {
         info: () => undefined,

@@ -1,6 +1,15 @@
 import type { Message as FluxerMessage } from '@fluxerjs/core';
-import type { Message as DiscordMessage } from 'discord.js';
-import type { SourceAuthor, SourceFacts, SourcePings } from './types';
+import {
+    MessageFlags,
+    MessageType,
+    type Message as DiscordMessage,
+} from 'discord.js';
+import type {
+    SourceAuthor,
+    SourceFacts,
+    SourcePings,
+    SourceReply,
+} from './types';
 
 /**
  * Reads the facts fidelity needs from a platform message. Pure, so tests
@@ -9,7 +18,15 @@ import type { SourceAuthor, SourceFacts, SourcePings } from './types';
 
 export type DiscordSource = Pick<
     DiscordMessage,
-    'guildId' | 'channelId' | 'content' | 'mentions' | 'member' | 'author'
+    | 'guildId'
+    | 'channelId'
+    | 'content'
+    | 'mentions'
+    | 'member'
+    | 'author'
+    | 'type'
+    | 'flags'
+    | 'reference'
 >;
 
 export type FluxerSource = Pick<
@@ -76,6 +93,22 @@ function fluxerAuthor(message: FluxerSource): SourceAuthor {
     };
 }
 
+/**
+ * A Discord reply, not a forward. The API lists the replied-to author in
+ * `mentions` only when the reply pinged them; discord.js sets
+ * `repliedUser` from `referenced_message` either way (Message.js).
+ */
+function discordReply(message: DiscordSource): SourceReply | null {
+    const messageId = message.reference?.messageId;
+    if (!messageId || message.type !== MessageType.Reply) return null;
+    if (message.flags?.has(MessageFlags.HasSnapshot)) return null;
+    const replied = message.mentions.repliedUser;
+    return {
+        messageId,
+        pinged: replied ? message.mentions.users.has(replied.id) : false,
+    };
+}
+
 export function discordFacts(message: DiscordSource): SourceFacts {
     return {
         side: 'discord',
@@ -84,6 +117,7 @@ export function discordFacts(message: DiscordSource): SourceFacts {
         content: message.content ?? '',
         pinged: discordPings(message),
         author: discordAuthor(message),
+        reply: discordReply(message),
     };
 }
 
@@ -95,5 +129,7 @@ export function fluxerFacts(message: FluxerSource): SourceFacts {
         content: message.content ?? '',
         pinged: fluxerPings(message),
         author: fluxerAuthor(message),
+        // Discord webhooks cannot reply, so the quote embed stays.
+        reply: null,
     };
 }

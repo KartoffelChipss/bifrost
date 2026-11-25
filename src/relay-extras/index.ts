@@ -92,6 +92,7 @@ function buildRelays(deps: RelayExtrasDeps, context: AddonContext) {
             listGuildLinks: deps.listGuildLinks,
             links: deps.links,
             findPair: anyPair,
+            fluxerClientRef,
             logger,
         })
     );
