@@ -1,6 +1,10 @@
 import type { ChannelLinker } from '../guild-sync/links';
+import { clipContent } from './format';
+import { MAX_CONTENT_LENGTH } from './limits';
 import type { HistoryStore } from './store';
 import type { HistoryPorts, ImportedMessage, SendTarget } from './types';
+
+const EDITED_NOTE = '\n*Edited by its author*';
 
 /**
  * Edits and deletes imported copies for their authors. Neither platform can
@@ -40,16 +44,20 @@ export class HistoryEditor {
         return { webhook: bridge.fluxerWebhook, threadId };
     }
 
+    /** Sets the author's new text, marked as edited. */
     async edit(copy: ImportedMessage, text: string): Promise<void> {
-        await this.replace(copy, `${text}\n*Edited by its author*`);
+        await this.replace(copy, `${text}${EDITED_NOTE}`);
     }
 
-    /** Sets the copy's text as given. */
+    /**
+     * Sets the copy's text, cut to Fluxer's limit. The last line, such as
+     * the date note or the edit marker, is kept.
+     */
     async replace(copy: ImportedMessage, content: string): Promise<void> {
         await this.ports.editCopy(
             await this.target(copy),
             copy.fluxerMessageId ?? '',
-            content
+            clipContent(content, MAX_CONTENT_LENGTH)
         );
     }
 

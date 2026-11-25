@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { FlowDeps } from '../../src/identity/flow';
-import { answer, dryRunNotice } from '../../src/identity/index';
+import { FAILED_REPLY, answer, dryRunNotice } from '../../src/identity/index';
 import type { IdentityStore } from '../../src/identity/store';
 import { createRecordingLogger } from '../addons/fakes';
 
@@ -31,6 +31,7 @@ function flow(): FlowDeps {
         history: null,
         onLinked: async () => {},
         now: () => new Date(0),
+        logger: createRecordingLogger(),
     };
 }
 
@@ -54,6 +55,32 @@ describe('answer', () => {
         const warnings = logger.entries.filter((e) => e.level === 'warn');
         assert.equal(warnings.length, 1);
         assert.match(warnings[0].message, /discord user d1/);
+    });
+});
+
+describe('answer on a failure', () => {
+    it('apologises and logs instead of throwing when handling fails', async () => {
+        const logger = createRecordingLogger();
+        const sent: string[] = [];
+        const broken: FlowDeps = {
+            ...flow(),
+            store: {
+                ...linkedStore(),
+                deletePair: () => Promise.reject(new Error('db down')),
+            },
+        };
+        await answer(
+            { side: 'fluxer', userId: 'f1', text: 'unlink' },
+            broken,
+            {
+                sendDm: async (side, userId, text) => {
+                    sent.push(`${side}:${userId}:${text}`);
+                },
+            },
+            logger
+        );
+        assert.deepEqual(sent, [`fluxer:f1:${FAILED_REPLY}`]);
+        assert.equal(logger.entries.length, 1);
     });
 });
 

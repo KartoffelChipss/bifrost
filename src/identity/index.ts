@@ -23,7 +23,13 @@ import { HistoryEditor } from '../history/editor';
 import { PostgresHistoryStore } from '../history/store';
 import type { HistoryPorts } from '../history/types';
 import type { ChannelLinker } from '../guild-sync/links';
-import { describeUser, handleDm, type DmInput, type FlowDeps } from './flow';
+import {
+    describeUser,
+    handleDm,
+    type DmInput,
+    type DmReply,
+    type FlowDeps,
+} from './flow';
 import { DmGate } from './gate';
 import type { IdentityPorts } from './ports';
 import {
@@ -59,7 +65,8 @@ export interface IdentityDeps {
 function flowDeps(
     deps: IdentityDeps,
     roles: RoleSync,
-    store: PostgresIdentityStore
+    store: PostgresIdentityStore,
+    logger: AddonLogger
 ): FlowDeps {
     const historyStore = deps.historyEnabled
         ? new PostgresHistoryStore(deps.sequelize)
@@ -81,13 +88,33 @@ function flowDeps(
             : null,
         onLinked: (pair) => roles.pair(pair),
         now: () => new Date(),
+        logger,
     };
 }
 
+export const FAILED_REPLY = 'Something went wrong. Try again later.';
+
+/** The replies to a DM. A failure is logged and answered with an apology. */
+async function repliesTo(
+    input: DmInput,
+    flow: FlowDeps,
+    logger: AddonLogger
+): Promise<DmReply[]> {
+    try {
+        return await handleDm(input, flow);
+    } catch (error) {
+        logger.warn(
+            `[identity] Could not handle a DM from ${input.side} user ${input.userId}:`,
+            error
+        );
+        return [{ side: input.side, userId: input.userId, text: FAILED_REPLY }];
+    }
+}
+
 /**
- * Answers a DM and sends the replies. A reply that cannot be sent, such as
- * to a member with DMs closed, is logged and skipped: it is expected, and
- * must not switch the add-ons to read-only.
+ * Answers a DM and sends the replies. A failure while handling it, or a
+ * reply that cannot be sent, such as to a member with DMs closed, is
+ * logged: it is expected, and must not switch the add-ons to read-only.
  */
 export async function answer(
     input: DmInput,
@@ -95,7 +122,7 @@ export async function answer(
     ports: Pick<IdentityPorts, 'sendDm'>,
     logger: AddonLogger
 ): Promise<void> {
-    for (const reply of await handleDm(input, flow)) {
+    for (const reply of await repliesTo(input, flow, logger)) {
         try {
             await ports.sendDm(reply.side, reply.userId, reply.text);
         } catch (error) {
@@ -122,6 +149,23 @@ interface Listeners {
     readonly wrap: Wrap;
 }
 
+/**
+ * Runs a member event's work, logging a failure such as a database error.
+ * An event that reached the add-on boundary would switch every add-on to
+ * read-only.
+ */
+export async function quietly(
+    logger: AddonLogger,
+    what: string,
+    work: () => Promise<void>
+): Promise<void> {
+    try {
+        await work();
+    } catch (error) {
+        logger.warn(`[identity] ${what}:`, error);
+    }
+}
+
 /** Answers one DM unless the gate drops it. */
 async function onDirectMessage(l: Listeners, input: DmInput): Promise<void> {
     if (!l.gate.admit(input.side, input.userId, input.text, Date.now())) return;
@@ -142,14 +186,15 @@ function listenToDiscord(l: Listeners): () => void {
     });
     const onMember = l.wrap(
         'member',
-        async (_old: GuildMember | PartialGuildMember, member: GuildMember) => {
-            const pair = await l.store.pairFor('discord', member.id);
-            if (pair)
-                await l.roles.pair(
-                    pair,
-                    (link) => link.discordGuildId === member.guild.id
-                );
-        }
+        (_old: GuildMember | PartialGuildMember, member: GuildMember) =>
+            quietly(l.logger, `Member update of ${member.id}`, async () => {
+                const pair = await l.store.pairFor('discord', member.id);
+                if (pair)
+                    await l.roles.pair(
+                        pair,
+                        (link) => link.discordGuildId === member.guild.id
+                    );
+            })
     );
     client.on(Events.MessageCreate, onDm);
     client.on(Events.GuildMemberUpdate, onMember);
@@ -181,15 +226,19 @@ function listenToFluxer(l: Listeners, client: FluxerClient): () => void {
             text: message.content ?? '',
         });
     });
-    const onJoin = l.wrap('join', async (member: FluxerJoin) => {
-        const userId = member.user?.id ?? member.id;
-        const pair = userId ? await l.store.pairFor('fluxer', userId) : null;
-        if (pair)
-            await l.roles.pair(
-                pair,
-                (link) => link.fluxerGuildId === member.guild?.id
-            );
-    });
+    const onJoin = l.wrap('join', (member: FluxerJoin) =>
+        quietly(l.logger, 'Fluxer member join', async () => {
+            const userId = member.user?.id ?? member.id;
+            const pair = userId
+                ? await l.store.pairFor('fluxer', userId)
+                : null;
+            if (pair)
+                await l.roles.pair(
+                    pair,
+                    (link) => link.fluxerGuildId === member.guild?.id
+                );
+        })
+    );
     client.on(FluxerEvents.MessageCreate, onDm);
     client.on(FluxerEvents.GuildMemberAdd, onJoin);
     return () => {
@@ -294,7 +343,7 @@ export function createIdentityAddon(deps: IdentityDeps): Addon {
             const roles = createRoleSync(deps, context);
             stopListening = listen({
                 deps,
-                flow: flowDeps(deps, roles, store),
+                flow: flowDeps(deps, roles, store, context.logger),
                 roles,
                 store,
                 gate: new DmGate(deps.commandPrefix),

@@ -1,5 +1,7 @@
 import { createHash, randomInt } from 'node:crypto';
+import type { AddonLogger } from '../addons/isolation';
 import type { HistoryEditor } from '../history/editor';
+import type { ImportedMessage } from '../history/types';
 import type { UserInfo } from './ports';
 import type { AccountPair, IdentityStore, Side } from './store';
 
@@ -48,6 +50,8 @@ export interface FlowDeps {
     readonly onLinked: (pair: AccountPair) => Promise<void>;
     readonly now: () => Date;
     readonly newCode?: () => string;
+    /** Failures the member is told about in a reply are logged here. */
+    readonly logger: Pick<AddonLogger, 'warn'>;
 }
 
 export function generateCode(): string {
@@ -168,7 +172,7 @@ async function redeem(
         confirmUserId: ownerId,
         expiresAt: new Date(now().getTime() + CODE_TTL_MS),
     });
-    const name = await deps.nameOf(input.side, input.userId);
+    const name = await nameFor(input, deps);
     return [
         ...reply(
             input,
@@ -180,6 +184,22 @@ async function redeem(
             text: `Link this account to ${label(input.side)} user **${name}**? Reply \`yes\` or \`no\`.`,
         },
     ];
+}
+
+/**
+ * The redeeming user as the confirmation question names them. When the
+ * lookup fails, the unique ID alone still tells the accounts apart.
+ */
+async function nameFor(input: DmInput, deps: FlowDeps): Promise<string> {
+    try {
+        return await deps.nameOf(input.side, input.userId);
+    } catch (error) {
+        deps.logger.warn(
+            `[identity] Could not look up ${input.side} user ${input.userId}:`,
+            error
+        );
+        return `user ID ${input.userId}`;
+    }
 }
 
 async function confirm(
@@ -287,12 +307,36 @@ async function changeCopy(
             input,
             'That message was not imported from one of your messages.'
         );
-    if (verb === 'edit') await deps.history.editor.edit(copy, rest.join(' '));
-    else await deps.history.editor.remove(copy);
     return reply(
         input,
-        verb === 'edit' ? 'The message was edited.' : 'The message was deleted.'
+        await applyChange(deps.history.editor, verb, copy, rest.join(' '), deps)
     );
+}
+
+/**
+ * Edits or deletes one copy. A failure, such as a copy deleted on Fluxer,
+ * is logged and answered: it must not reach the add-on boundary.
+ */
+async function applyChange(
+    editor: HistoryEditor,
+    verb: string,
+    copy: ImportedMessage,
+    text: string,
+    deps: FlowDeps
+): Promise<string> {
+    try {
+        if (verb === 'edit') await editor.edit(copy, text);
+        else await editor.remove(copy);
+        return verb === 'edit'
+            ? 'The message was edited.'
+            : 'The message was deleted.';
+    } catch (error) {
+        deps.logger.warn(
+            `[identity] Could not ${verb} copy ${copy.fluxerMessageId ?? '?'}:`,
+            error
+        );
+        return 'That message could not be changed: it may have been deleted.';
+    }
 }
 
 /** Handles one DM to the bot. Returns the DMs to send back. */

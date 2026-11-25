@@ -33,6 +33,33 @@ export function defuseCommand(content: string, prefix: string): string {
         : content;
 }
 
+const ELLIPSIS = '…';
+
+/** Cuts `text` to at most `max` UTF-16 units without splitting a pair. */
+export function cut(text: string, max: number): string {
+    if (text.length <= max) return text;
+    if (max <= 0) return '';
+    const end = max;
+    const code = text.charCodeAt(end - 1);
+    const highSurrogate = code >= 0xd800 && code <= 0xdbff;
+    return text.slice(0, highSurrogate ? end - 1 : end);
+}
+
+/**
+ * Fits content within `max` characters, keeping its last line (the date
+ * note or an edit marker) and shortening what comes before it.
+ */
+export function clipContent(content: string, max: number): string {
+    if (content.length <= max) return content;
+    const split = content.lastIndexOf('\n');
+    const tail = split >= 0 ? content.slice(split) : '';
+    if (tail.length + ELLIPSIS.length >= max) {
+        return `${cut(content, max - ELLIPSIS.length)}${ELLIPSIS}`;
+    }
+    const head = cut(content, max - tail.length - ELLIPSIS.length);
+    return `${head}${ELLIPSIS}${tail}`;
+}
+
 function optOutBody(): RelayPayload {
     return {
         content: '*A message from a member who opted out of history import.*',
