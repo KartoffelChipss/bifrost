@@ -1,6 +1,7 @@
 import {
     DiscordAPIError,
     RESTJSONErrorCodes,
+    type AnyThreadChannel,
     type Client,
     type Guild,
     type GuildEmoji,
@@ -18,7 +19,9 @@ import type {
     OverwriteSnap,
     RoleSnap,
     StickerSnap,
+    ThreadSnap,
 } from '../snapshot';
+import { SYNCED_THREAD_TYPES, THREAD_PARENT_TYPES } from '../snapshot';
 import {
     READ_TIMEOUT_MS,
     guardedLookup,
@@ -60,7 +63,82 @@ export function discordChannel(c: NonThreadGuildBasedChannel): ChannelSnap {
         bitrate: 'bitrate' in c ? c.bitrate : null,
         userLimit: 'userLimit' in c ? c.userLimit : null,
         overwrites: c.permissionOverwrites.cache.map(overwrite),
+        tags: 'availableTags' in c ? c.availableTags.map((t) => t.name) : [],
     };
+}
+
+/** Archived threads are read 100 at a time, up to this many pages a channel. */
+export const MAX_ARCHIVE_PAGES = 5;
+
+function discordThread(
+    t: AnyThreadChannel,
+    tagNames: ReadonlyMap<string, string>
+): ThreadSnap {
+    const tags: string[] = [];
+    for (const id of t.appliedTags) {
+        const name = tagNames.get(id);
+        if (name !== undefined) tags.push(name);
+    }
+    return {
+        id: t.id,
+        parentId: t.parentId ?? '',
+        name: t.name,
+        archived: t.archived ?? false,
+        locked: t.locked ?? false,
+        tags: tags.sort(),
+    };
+}
+
+/** The archived public threads of one channel, newest first. */
+async function archivedThreads(
+    parent: NonThreadGuildBasedChannel
+): Promise<AnyThreadChannel[]> {
+    if (!('threads' in parent)) return [];
+    const found: AnyThreadChannel[] = [];
+    let before: AnyThreadChannel | undefined;
+    for (let page = 0; page < MAX_ARCHIVE_PAGES; page++) {
+        const result = await parent.threads.fetchArchived(
+            { type: 'public', limit: 100, before },
+            false
+        );
+        found.push(...result.threads.values());
+        before = result.threads.last();
+        if (!result.hasMore || !before) break;
+    }
+    return found;
+}
+
+/**
+ * Lists active and archived threads. A channel whose archive cannot be read
+ * is reported as a gap and never fails the whole read.
+ */
+async function readThreads(
+    guild: Guild,
+    channels: readonly NonThreadGuildBasedChannel[]
+): Promise<{ threads: ThreadSnap[]; gaps: string[] }> {
+    const tagNames = new Map<string, string>();
+    for (const channel of channels) {
+        if (!('availableTags' in channel)) continue;
+        for (const tag of channel.availableTags) tagNames.set(tag.id, tag.name);
+    }
+    const all = new Map<string, AnyThreadChannel>();
+    const active = await guild.channels.fetchActiveThreads(false);
+    for (const thread of active.threads.values()) all.set(thread.id, thread);
+    const gaps: string[] = [];
+    for (const parent of channels) {
+        if (!THREAD_PARENT_TYPES.has(parent.type)) continue;
+        try {
+            for (const thread of await archivedThreads(parent)) {
+                all.set(thread.id, thread);
+            }
+        } catch {
+            gaps.push(parent.id);
+        }
+    }
+    const threads = [...all.values()]
+        .filter((t) => SYNCED_THREAD_TYPES.has(t.type) && t.parentId !== null)
+        .map((t) => discordThread(t, tagNames));
+    return { threads, gaps };
 }
 
 export function discordRole(r: Role): RoleSnap {
@@ -97,6 +175,10 @@ async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
         guild.emojis.fetch(undefined, force),
         guild.stickers.fetch(undefined, force),
     ]);
+    const listed = [...channels.values()].filter(
+        (c): c is NonThreadGuildBasedChannel => c !== null
+    );
+    const { threads, gaps } = await readThreads(guild, listed);
     return {
         side: 'discord',
         guildId: guild.id,
@@ -105,11 +187,11 @@ async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
         banner: guild.banner,
         everyoneRoleId: guild.id,
         roles: roles.map(discordRole),
-        channels: [...channels.values()]
-            .filter((c): c is NonThreadGuildBasedChannel => c !== null)
-            .map(discordChannel),
+        channels: listed.map(discordChannel),
         emojis: emojis.map(discordEmoji),
         stickers: stickers.map(discordSticker),
+        threads,
+        threadGaps: gaps,
         bot: null,
     };
 }
@@ -174,6 +256,7 @@ export class DiscordGuildReader implements GuildReader {
                 return guild.roles.fetch(id, force);
             case 'category':
             case 'channel':
+            case 'thread':
                 return guild.channels.fetch(id, force);
             case 'emoji':
                 return guild.emojis.fetch(id, force);

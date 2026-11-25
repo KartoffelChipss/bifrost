@@ -36,6 +36,11 @@ export type PlanOp =
           readonly sourceId: string;
           readonly destId: string;
           readonly changes: readonly FieldChange[];
+          /**
+           * First sync of @everyone or the server itself: the destination
+           * was never written, so every difference follows the source.
+           */
+          readonly baseline?: true;
       }
     | {
           readonly op: 'reorder';
@@ -43,6 +48,13 @@ export type PlanOp =
           /** 'roles', 'top' or the destination category ID. */
           readonly scope: string;
           readonly destIds: readonly string[];
+      }
+    | {
+          /** Bridges a channel pair, so the relay copies its messages. */
+          readonly op: 'link';
+          readonly kind: 'channel';
+          readonly sourceId: string;
+          readonly destId: string;
       }
     | {
           readonly op: 'archive';
@@ -87,6 +99,8 @@ export interface MapRow {
     readonly createdBySync: boolean;
     readonly missingSince: Date | null;
     readonly missingCount: number;
+    /** Field values of the last successful write, or null if never written. */
+    readonly appliedFields: Readonly<Record<string, JsonValue>> | null;
 }
 
 export function sourceIdOf(row: MapRow, direction: SyncDirection) {

@@ -16,6 +16,12 @@ import { createRecordingLogger } from '../addons/fakes';
  * its public schema. Skipped when the variable is unset.
  */
 const url = process.env.BF_TEST_POSTGRES_URL;
+const MIGRATIONS = [
+    '00001-addon-baseline',
+    '00002-object-map-applied-fields',
+    '00003-settings-admin-approval',
+    '00004-threads',
+];
 
 describe('add-on tables on Postgres', { skip: !url }, () => {
     let db: Sequelize;
@@ -45,9 +51,7 @@ describe('add-on tables on Postgres', { skip: !url }, () => {
 
     it('applies the baseline once', async () => {
         const logger = createRecordingLogger();
-        assert.deepEqual(await runAddonMigrations(db, logger), [
-            '00001-addon-baseline',
-        ]);
+        assert.deepEqual(await runAddonMigrations(db, logger), MIGRATIONS);
         assert.deepEqual(await runAddonMigrations(db, logger), []);
         const tables = await db.getQueryInterface().showAllTables();
         for (const table of Object.values(TABLES)) {
@@ -60,7 +64,10 @@ describe('add-on tables on Postgres', { skip: !url }, () => {
             'SELECT name FROM addon_migrations ORDER BY name'
         );
         const [upstream] = await db.query('SELECT name FROM "SequelizeMeta"');
-        assert.deepEqual(addon, [{ name: '00001-addon-baseline' }]);
+        assert.deepEqual(
+            addon,
+            MIGRATIONS.map((name) => ({ name }))
+        );
         assert.deepEqual(upstream, []);
     });
 
@@ -168,7 +175,7 @@ describe('add-on baseline after a failure', { skip: !url }, () => {
         await db.query(`DROP TABLE ${TABLES.leaderLock}`);
         assert.deepEqual(
             await runAddonMigrations(db, createRecordingLogger()),
-            ['00001-addon-baseline']
+            MIGRATIONS
         );
     });
 });

@@ -132,4 +132,161 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         assert.deepEqual(plans, [{ status: 'dry-run' }]);
         assert.equal(await store.removalsSince(linkId, new Date(0)), 0);
     });
+
+    it('records ownership, applied fields and audit rows', async () => {
+        const now = new Date();
+        const row = await store.insertMapping(
+            {
+                guildLinkId: linkId,
+                kind: 'role',
+                discordId: 'd-role',
+                fluxerId: 'f-role',
+                createdBySync: true,
+                appliedFields: { name: 'Mods', permissions: '8' },
+            },
+            now
+        );
+        await store.saveApplied(
+            row.id,
+            { name: 'Mods', permissions: '2' },
+            now
+        );
+        const loaded = (await store.loadObjectMap(linkId)).find(
+            (r) => r.id === row.id
+        );
+        assert.deepEqual(loaded?.appliedFields, {
+            name: 'Mods',
+            permissions: '2',
+        });
+        assert.equal(loaded?.createdBySync, true);
+        // The same destination object cannot be owned twice.
+        await assert.rejects(
+            store.insertMapping(
+                {
+                    guildLinkId: linkId,
+                    kind: 'role',
+                    discordId: 'other',
+                    fluxerId: 'f-role',
+                    createdBySync: true,
+                    appliedFields: {},
+                },
+                now
+            )
+        );
+        const entry = {
+            planId: randomUUID(),
+            guildLinkId: linkId,
+            kind: 'role' as const,
+            sourceId: 'd-role',
+            destId: 'f-role',
+            before: null,
+            after: { name: 'Mods' },
+        };
+        await store.audit({ ...entry, op: 'create', result: 'ok' }, now);
+        await store.audit({ ...entry, op: 'archive', result: 'failed' }, now);
+        await store.audit({ ...entry, op: 'archive', result: 'ok' }, now);
+        // Only successful removals count against the delete budget.
+        assert.equal(await store.removalsSince(linkId, new Date(0)), 1);
+    });
+
+    it('changes the mode, the kill switch and a plan status', async () => {
+        const now = new Date();
+        await store.setMode(linkId, 'apply', now);
+        await store.setKillSwitch(linkId, true, now);
+        const settings = await store.loadSettings(linkId);
+        assert.equal(settings.mode, 'apply');
+        assert.equal(settings.killSwitch, true);
+        await assert.rejects(
+            store.setMode(linkId, 'yolo' as 'apply', now),
+            'the CHECK constraint refuses an unknown mode'
+        );
+        const id = randomUUID();
+        await store.savePlan(
+            {
+                id,
+                guildLinkId: linkId,
+                direction: 'discord-to-fluxer',
+                status: 'dry-run',
+                body: EMPTY_BODY,
+                abortReason: null,
+            },
+            new Date(now.getTime() + 60_000)
+        );
+        await store.setPlanStatus(id, 'aborted', 'apply: 1 failed', now);
+        const last = await store.lastPlan(linkId);
+        assert.equal(last?.id, id);
+        assert.equal(last?.status, 'aborted');
+        assert.equal(last?.abortReason, 'apply: 1 failed');
+        assert.deepEqual(last?.body, EMPTY_BODY);
+    });
+
+    it('stores the admin channel, an approval and a row state', async () => {
+        const now = new Date();
+        const planId = randomUUID();
+        await store.setAdminChannel(linkId, '123', now);
+        await store.setApprovedPlan(linkId, planId, now);
+        const set = await store.loadSettings(linkId);
+        assert.equal(set.adminChannelId, '123');
+        assert.equal(set.approvedPlanId, planId);
+        await store.setApprovedPlan(linkId, null, now);
+        await store.setAdminChannel(linkId, null, now);
+        const cleared = await store.loadSettings(linkId);
+        assert.equal(cleared.approvedPlanId, null);
+        assert.equal(cleared.adminChannelId, null);
+        assert.equal(await store.getPlan(planId), null);
+
+        const row = await store.insertMapping(
+            {
+                guildLinkId: linkId,
+                kind: 'emoji',
+                discordId: 'd-emoji',
+                fluxerId: 'f-emoji',
+                createdBySync: true,
+                appliedFields: { name: 'wave' },
+            },
+            now
+        );
+        await store.setRowState(row.id, 'archived', now);
+        const loaded = (await store.loadObjectMap(linkId)).find(
+            (r) => r.id === row.id
+        );
+        assert.equal(loaded?.state, 'archived');
+    });
+
+    it('finds a thread pair and keeps relayed thread messages', async () => {
+        const now = new Date();
+        await store.insertMapping(
+            {
+                guildLinkId: linkId,
+                kind: 'thread',
+                discordId: 'd-post',
+                fluxerId: 'f-post',
+                createdBySync: true,
+                appliedFields: { name: 'Patch notes' },
+            },
+            now
+        );
+        assert.deepEqual(await store.findThreadPair('fluxer', 'f-post'), {
+            guildLinkId: linkId,
+            discordId: 'd-post',
+            fluxerId: 'f-post',
+        });
+        assert.equal(await store.findThreadPair('discord', 'unknown'), null);
+
+        const message = {
+            guildLinkId: linkId,
+            discordThreadId: 'd-post',
+            fluxerThreadId: 'f-post',
+            discordMessageId: 'dm1',
+            fluxerMessageId: 'fm1',
+        };
+        await store.saveThreadMessage(message, now);
+        assert.deepEqual(
+            await store.findThreadMessage('fluxer', 'fm1'),
+            message
+        );
+        await assert.rejects(store.saveThreadMessage(message, now));
+        await store.deleteThreadMessage('discord', 'dm1');
+        assert.equal(await store.findThreadMessage('discord', 'dm1'), null);
+    });
 });

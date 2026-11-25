@@ -8,6 +8,7 @@ import type {
     OverwriteSnap,
     RoleSnap,
     StickerSnap,
+    ThreadSnap,
 } from './snapshot';
 import { channelKind } from './snapshot';
 
@@ -109,11 +110,13 @@ function kindFields(channel: ChannelSnap): Record<string, JsonValue> {
             userLimit: channel.userLimit,
         };
     }
-    return {
+    const fields: Record<string, JsonValue> = {
         nsfw: channel.nsfw,
         topic: channel.topic,
         rateLimitPerUser: channel.rateLimitPerUser,
     };
+    if (kind === 'forum') fields.tags = [...channel.tags];
+    return fields;
 }
 
 export function projectSourceChannel(
@@ -154,5 +157,31 @@ export function projectSticker(sticker: StickerSnap): Fields {
         name: sticker.name,
         description: sticker.description,
         tags: sticker.tags,
+    };
+}
+
+/** A thread or forum post. The parent is given as a destination ID. */
+export function projectSourceThread(
+    thread: ThreadSnap,
+    ctx: ProjectionContext
+): Fields {
+    const fields: Record<string, JsonValue> = {
+        name: thread.name,
+        archived: thread.archived,
+        locked: thread.locked,
+        tags: [...thread.tags],
+    };
+    const parent = ctx.map.dest('channel', thread.parentId);
+    if (parent) fields.parentId = parent;
+    return fields;
+}
+
+export function projectDestThread(thread: ThreadSnap): Fields {
+    return {
+        name: thread.name,
+        archived: thread.archived,
+        locked: thread.locked,
+        tags: [...thread.tags],
+        parentId: thread.parentId,
     };
 }

@@ -16,6 +16,7 @@ describe('parseAddonConfig', () => {
                 history: false,
                 identity: false,
                 initialMode: 'dry-run',
+                allowApply: false,
             },
         });
     });
@@ -54,7 +55,22 @@ describe('parseAddonConfig', () => {
     it('rejects apply mode from the environment', () => {
         const result = parseAddonConfig({ BF_ADDONS_MODE: 'apply' });
         assert.equal(result.ok, false);
-        assert.match(!result.ok ? result.error : '', /settings table/);
+        assert.match(!result.ok ? result.error : '', /BF_ADDONS_ALLOW_APPLY/);
+    });
+
+    it('allows apply only with its own switch and add-ons on', () => {
+        const on = parseAddonConfig({
+            BF_ADDONS_ENABLED: 'true',
+            BF_DB_DIALECT: 'postgres',
+            BF_ADDONS_ALLOW_APPLY: 'true',
+        });
+        assert.equal(on.ok && on.config.allowApply, true);
+        const addonsOff = parseAddonConfig({ BF_ADDONS_ALLOW_APPLY: 'true' });
+        assert.equal(addonsOff.ok && addonsOff.config.allowApply, false);
+        assert.equal(
+            parseAddonConfig({ BF_ADDONS_ALLOW_APPLY: 'maybe' }).ok,
+            false
+        );
     });
 
     it('rejects an unknown mode', () => {

@@ -38,6 +38,7 @@ export function channel(
         bitrate: null,
         userLimit: null,
         overwrites: [],
+        tags: [],
         ...overrides,
     };
 }
@@ -56,6 +57,8 @@ export function discordGuild(
         channels: [channel('101')],
         emojis: [],
         stickers: [],
+        threads: [],
+        threadGaps: [],
         bot: null,
         ...overrides,
     };
@@ -75,6 +78,8 @@ export function fluxerGuild(
         channels: [],
         emojis: [],
         stickers: [],
+        threads: [],
+        threadGaps: [],
         bot: { userId: 'bot', roleIds: [], isOwner: true },
         ...overrides,
     };
@@ -98,6 +103,7 @@ export function mapRow(
         createdBySync: true,
         missingSince: null,
         missingCount: 0,
+        appliedFields: null,
         ...overrides,
     };
 }

@@ -181,7 +181,7 @@ describe('diff', () => {
 
     it('translates overwrites through mapped role IDs and drops Discord-only bits', () => {
         const allow =
-            PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ManageThreads;
+            PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendPolls;
         const ow = (id: string, a: bigint) => ({
             id,
             type: 0 as const,

@@ -40,9 +40,11 @@ function describeOp(op: PlanOp): string {
             return `create ${op.kind} "${op.name}"${match}`;
         }
         case 'update':
-            return `update ${op.kind} ${op.destId}: ${op.changes.map((c) => c.field).join(', ')}`;
+            return `update ${op.kind} ${op.destId}: ${op.changes.map((c) => c.field).join(', ')}${op.baseline ? ' (first sync)' : ''}`;
         case 'reorder':
             return `reorder ${op.kind}s in ${op.scope} (${op.destIds.length})`;
+        case 'link':
+            return `link channel ${op.sourceId} to ${op.destId}`;
         case 'archive':
             return `archive ${op.kind} ${op.destId}`;
         case 'hard-delete':

@@ -4,7 +4,12 @@ import { runCycle, type CycleDeps } from '../../src/guild-sync/cycle';
 import { isRemoval, type MapRow, type PlanOp } from '../../src/guild-sync/ops';
 import type { Plan } from '../../src/guild-sync/plan';
 import { createRecordingLogger } from '../addons/fakes';
-import { DEFAULT_SETTINGS, FakeReader, FakeStore } from './fake-store';
+import {
+    DEFAULT_SETTINGS,
+    FakeReader,
+    FakeStore,
+    recordingNotices,
+} from './fake-store';
 import {
     D_GUILD,
     F_GUILD,
@@ -74,7 +79,15 @@ function randomWorld(rand: () => number): World {
                 }),
             }),
         },
+        writers: {},
+        assets: {},
+        links: null,
+        threadSources: {},
+        notices: recordingNotices().board,
+        commandPrefix: '!b ',
         processMode: () => 'dry-run',
+        allowApply: false,
+        pause: async () => {},
         logger: createRecordingLogger(),
         now: () => NOW,
         newId: () => 'plan',

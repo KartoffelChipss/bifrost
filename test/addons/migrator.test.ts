@@ -15,6 +15,7 @@ const OFF: AddonConfig = {
     history: false,
     identity: false,
     initialMode: 'dry-run',
+    allowApply: false,
 };
 
 describe('add-on migrations on SQLite', () => {

@@ -5,6 +5,7 @@ import type {
     GuildEmoji,
     GuildSticker,
     Role,
+    ThreadChannel,
 } from '@fluxerjs/core';
 import type { ReadResult } from '../health';
 import type { SyncKind } from '../ops';
@@ -15,7 +16,9 @@ import type {
     OverwriteSnap,
     RoleSnap,
     StickerSnap,
+    ThreadSnap,
 } from '../snapshot';
+import { SYNCED_THREAD_TYPES, THREAD_PARENT_TYPES } from '../snapshot';
 import {
     READ_TIMEOUT_MS,
     guardedLookup,
@@ -36,6 +39,14 @@ interface OptionalChannelFields {
     readonly rateLimitPerUser?: number;
     readonly bitrate?: number | null;
     readonly userLimit?: number | null;
+    readonly availableTags?: readonly { id: string; name: string }[];
+    readonly threads?: {
+        fetchArchived(options: {
+            type: 'public';
+            limit: number;
+            before?: string;
+        }): Promise<{ threads: ThreadChannel[]; hasMore: boolean }>;
+    };
 }
 
 export function fluxerChannel(c: GuildChannel): ChannelSnap {
@@ -61,7 +72,80 @@ export function fluxerChannel(c: GuildChannel): ChannelSnap {
         bitrate: extra.bitrate ?? null,
         userLimit: extra.userLimit ?? null,
         overwrites,
+        tags: (extra.availableTags ?? []).map((tag) => tag.name),
     };
+}
+
+/** Archived threads are read 100 at a time, up to this many pages a channel. */
+const MAX_ARCHIVE_PAGES = 5;
+
+function fluxerThread(
+    t: ThreadChannel,
+    tagNames: ReadonlyMap<string, string>
+): ThreadSnap {
+    const tags: string[] = [];
+    for (const id of t.appliedTags) {
+        const name = tagNames.get(id);
+        if (name !== undefined) tags.push(name);
+    }
+    return {
+        id: t.id,
+        parentId: t.parentId ?? '',
+        name: t.name ?? '',
+        archived: t.archived,
+        locked: t.locked,
+        tags: tags.sort(),
+    };
+}
+
+async function archivedThreads(parent: GuildChannel): Promise<ThreadChannel[]> {
+    const manager = (parent as GuildChannel & OptionalChannelFields).threads;
+    if (!manager) return [];
+    const found: ThreadChannel[] = [];
+    let before: string | undefined;
+    for (let page = 0; page < MAX_ARCHIVE_PAGES; page++) {
+        const result = await manager.fetchArchived({
+            type: 'public',
+            limit: 100,
+            before,
+        });
+        found.push(...result.threads);
+        const last = result.threads[result.threads.length - 1];
+        before = last?.archiveTimestamp ?? undefined;
+        if (!result.hasMore || !before) break;
+    }
+    return found;
+}
+
+/** Lists active and archived threads. An unreadable archive is a gap. */
+async function readThreads(
+    guild: Guild,
+    channels: readonly GuildChannel[]
+): Promise<{ threads: ThreadSnap[]; gaps: string[] }> {
+    const tagNames = new Map<string, string>();
+    for (const channel of channels) {
+        const tags = (channel as GuildChannel & OptionalChannelFields)
+            .availableTags;
+        for (const tag of tags ?? []) tagNames.set(tag.id, tag.name);
+    }
+    const all = new Map<string, ThreadChannel>();
+    const active = await guild.fetchActiveThreads();
+    for (const thread of active.threads) all.set(thread.id, thread);
+    const gaps: string[] = [];
+    for (const parent of channels) {
+        if (!THREAD_PARENT_TYPES.has(Number(parent.type))) continue;
+        try {
+            for (const thread of await archivedThreads(parent)) {
+                all.set(thread.id, thread);
+            }
+        } catch {
+            gaps.push(parent.id);
+        }
+    }
+    const threads = [...all.values()]
+        .filter((t) => SYNCED_THREAD_TYPES.has(Number(t.type)) && t.parentId)
+        .map((t) => fluxerThread(t, tagNames));
+    return { threads, gaps };
 }
 
 export function fluxerRole(r: Role): RoleSnap {
@@ -99,6 +183,7 @@ async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
         guild.fetchStickers(),
         guild.fetchMe(),
     ]);
+    const { threads, gaps } = await readThreads(guild, channels);
     return {
         side: 'fluxer',
         guildId: guild.id,
@@ -110,6 +195,8 @@ async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
         channels: channels.map(fluxerChannel),
         emojis: emojis.map(fluxerEmoji),
         stickers: stickers.map(fluxerSticker),
+        threads,
+        threadGaps: gaps,
         bot: {
             userId: me.id,
             roleIds: [...me.roles.roleIds],
@@ -174,6 +261,7 @@ function fetchOne(guild: Guild, kind: SyncKind, id: string): Promise<unknown> {
             return guild.fetchRole(id);
         case 'category':
         case 'channel':
+        case 'thread':
             return guild.client.channels.fetch(id, { force: true });
         case 'emoji':
             return guild.fetchEmoji(id);

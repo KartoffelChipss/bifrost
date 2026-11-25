@@ -1,5 +1,5 @@
 import type { SyncDirection } from '../addons/db/schema';
-import type { MapRow, SyncKind } from './ops';
+import type { JsonValue, MapRow, SyncKind } from './ops';
 import { destIdOf, sourceIdOf } from './ops';
 import type { GuildSnapshot } from './snapshot';
 
@@ -16,6 +16,10 @@ const IMPLICIT_KINDS: ReadonlySet<SyncKind> = new Set(['role', 'guild']);
 export class IdMap {
     private readonly pairs = new Map<SyncKind, Map<string, string>>();
     private readonly owned = new Map<SyncKind, Set<string>>();
+    private readonly appliedBySource = new Map<
+        string,
+        Readonly<Record<string, JsonValue>> | null
+    >();
 
     constructor(
         rows: readonly MapRow[],
@@ -31,6 +35,10 @@ export class IdMap {
             if (!sourceId || !destId) continue;
             this.pairsFor(row.kind).set(sourceId, destId);
             this.ownedFor(row.kind).add(destId);
+            this.appliedBySource.set(
+                `${row.kind}:${sourceId}`,
+                row.appliedFields
+            );
         }
     }
 
@@ -55,6 +63,19 @@ export class IdMap {
         }
         if (kind === 'guild') return null;
         return this.pairs.get(kind)?.get(sourceId) ?? null;
+    }
+
+    /** True when the source object has an `addon_object_map` row. */
+    hasRow(kind: SyncKind, sourceId: string): boolean {
+        return this.appliedBySource.has(`${kind}:${sourceId}`);
+    }
+
+    /** The fields last written for a source object, or null if none. */
+    applied(
+        kind: SyncKind,
+        sourceId: string
+    ): Readonly<Record<string, JsonValue>> | null {
+        return this.appliedBySource.get(`${kind}:${sourceId}`) ?? null;
     }
 
     /** True when the destination object has an `addon_object_map` row. */

@@ -7,6 +7,7 @@ import {
     FLUXER_ONLY_BITS,
     MANAGED_BITS,
     PERMISSION_TABLE,
+    THREAD_BITS,
     bitOf,
     mergePermissions,
     translatePermissions,
@@ -31,6 +32,7 @@ describe('permission table', () => {
         const known = new Set<string>([
             ...PERMISSION_TABLE.map(([name]) => name),
             ...Object.keys(DISCORD_ONLY_BITS),
+            ...Object.keys(THREAD_BITS),
         ]);
         for (const [alias, name] of Object.entries(DISCORD_ALIASES)) {
             assert.equal(discordFlags[alias], discordFlags[name], alias);
@@ -42,6 +44,15 @@ describe('permission table', () => {
         for (const [name, bit] of Object.entries(DISCORD_ONLY_BITS)) {
             assert.equal(discordFlags[name], bitOf(bit), name);
             assert.ok(!Object.values(fluxerFlags).includes(bitOf(bit)), name);
+        }
+    });
+
+    it('keeps thread permissions apart until @fluxerjs/util lists them', () => {
+        for (const [name, bit] of Object.entries(THREAD_BITS)) {
+            assert.equal(discordFlags[name], bitOf(bit), name);
+            assert.equal(MANAGED_BITS & bitOf(bit), bitOf(bit), name);
+            // When the library adds the flag, move the row into the table.
+            assert.equal(fluxerFlags[name], undefined, name);
         }
     });
 
@@ -66,8 +77,11 @@ describe('translatePermissions', () => {
             PermissionFlagsBits.ManageThreads |
             PermissionFlagsBits.SendPolls;
         const result = translatePermissions(source, 'discord-to-fluxer');
-        assert.equal(result.bits, PermissionFlags.ViewChannel);
-        assert.deepEqual(result.dropped, ['ManageThreads', 'SendPolls']);
+        assert.equal(
+            result.bits,
+            PermissionFlags.ViewChannel | PermissionFlagsBits.ManageThreads
+        );
+        assert.deepEqual(result.dropped, ['SendPolls']);
     });
 
     it('reports Fluxer-only bits by name in the reverse direction', () => {
