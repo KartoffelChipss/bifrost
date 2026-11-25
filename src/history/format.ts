@@ -60,6 +60,14 @@ export function clipContent(content: string, max: number): string {
     return `${head}${ELLIPSIS}${tail}`;
 }
 
+/**
+ * Breaks @everyone and @here with a zero-width space, so they never ping
+ * even where allowed_mentions is not sent.
+ */
+export function defuseMentions(content: string): string {
+    return content.replace(/@(everyone|here)/g, `@${ZERO_WIDTH_SPACE}$1`);
+}
+
 function optOutBody(): RelayPayload {
     return {
         content: '*A message from a member who opted out of history import.*',
@@ -87,7 +95,7 @@ export class CopyFormatter {
               });
         // The copy carries its original time, which Fluxer cannot set.
         const lines = [
-            base.content,
+            defuseMentions(base.content),
             reactionLine(message.reactions),
             dateNote(message.createdAt),
         ].filter((line): line is string => Boolean(line));

@@ -1,5 +1,5 @@
 import type { ChannelLinker } from '../guild-sync/links';
-import { clipContent } from './format';
+import { clipContent, defuseMentions } from './format';
 import { MAX_CONTENT_LENGTH } from './limits';
 import type { HistoryStore } from './store';
 import type { HistoryPorts, ImportedMessage, SendTarget } from './types';
@@ -50,14 +50,15 @@ export class HistoryEditor {
     }
 
     /**
-     * Sets the copy's text, cut to Fluxer's limit. The last line, such as
-     * the date note or the edit marker, is kept.
+     * Sets the copy's text, cut to Fluxer's limit, with @everyone and
+     * @here defused. The last line, such as the date note or the edit
+     * marker, is kept.
      */
     async replace(copy: ImportedMessage, content: string): Promise<void> {
         await this.ports.editCopy(
             await this.target(copy),
             copy.fluxerMessageId ?? '',
-            clipContent(content, MAX_CONTENT_LENGTH)
+            clipContent(defuseMentions(content), MAX_CONTENT_LENGTH)
         );
     }
 

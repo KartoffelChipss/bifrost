@@ -2,7 +2,6 @@ import {
     ForumChannel as FluxerForumChannel,
     Routes,
     ThreadChannel as FluxerThreadChannel,
-    Webhook as FluxerWebhook,
     type Client as FluxerClient,
     type Message as FluxerMessage,
 } from '@fluxerjs/core';
@@ -19,6 +18,8 @@ import type {
     SendTarget,
     SourceMessage,
 } from '../history/types';
+import { defuseMentions } from '../history/format';
+import { copyWebhook, NO_MENTIONS } from '../history/quietWebhook';
 import type { IdentityPorts, MemberState, UserInfo } from '../identity';
 import type { Side } from '../identity/store';
 import type { SnapshotSide } from '../addons/db/schema';
@@ -247,10 +248,15 @@ export class UpstreamBridge
         }
         const guildLink =
             await linkService.getGuildLinkForDiscordGuild(guildId);
-        const payload = await this.toFluxerPayload(
+        const relayed = await this.toFluxerPayload(
             message as DiscordMessage,
             guildLink?.id ?? ''
         );
+        // An old post's first message must not ping anyone again.
+        const payload = {
+            ...relayed,
+            content: defuseMentions(relayed.content),
+        };
         if (Date.now() - message.createdTimestamp < BACKFILL_AGE_MS)
             return payload;
         // Fluxer dates a message at the moment it is posted, so an older
@@ -584,21 +590,9 @@ export class UpstreamBridge
         );
     }
 
-    private copyWebhook(target: SendTarget) {
-        return target.threadId
-            ? fluxerThreadWebhook(this.fluxer(), target.webhook, {
-                  threadId: target.threadId,
-              })
-            : FluxerWebhook.fromToken(
-                  this.fluxer(),
-                  target.webhook.id,
-                  target.webhook.token
-              );
-    }
-
     async sendCopy(target: SendTarget, payload: RelayPayload): Promise<string> {
         const sent = await this.up.webhookService.sendMessageViaFluxerWebhook(
-            this.copyWebhook(target),
+            copyWebhook(this.fluxer(), target),
             payload
         );
         return sent.messageId;
@@ -619,7 +613,7 @@ export class UpstreamBridge
     ): Promise<void> {
         // Only the text changes, so the copy keeps its attachments.
         await this.fluxer().rest.patch(this.copyRoute(target, messageId), {
-            body: { content },
+            body: { content, allowed_mentions: NO_MENTIONS },
             auth: false,
         });
     }

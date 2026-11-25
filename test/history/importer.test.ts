@@ -631,6 +631,19 @@ describe('copy content', () => {
         assert.ok(s.ports.sent[0].content.startsWith('\u200b!b help'));
     });
 
+    it('breaks @everyone and @here so a copy never pings', async () => {
+        const s = setup();
+        s.ports.add('10', '11', {
+            raw: { id: '11', text: '@everyone and @here look' },
+        });
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        assert.equal(
+            s.ports.sent[0].content.split('\n')[0],
+            '@\u200beveryone and @\u200bhere look'
+        );
+    });
+
     it('lists reactions above the date', async () => {
         const s = setup();
         s.ports.add('10', '11', {
