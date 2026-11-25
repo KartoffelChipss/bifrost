@@ -124,6 +124,14 @@ interface Route {
 
 const later = (a: string, b: string) => BigInt(a) > BigInt(b);
 
+/** Discord's snowflake epoch: 2015-01-01T00:00:00Z. */
+const DISCORD_EPOCH_MS = 1_420_070_400_000;
+
+/** When a Discord snowflake was made, in ms since the Unix epoch. */
+export function snowflakeTime(id: string): number {
+    return Number(BigInt(id) >> BigInt(22)) + DISCORD_EPOCH_MS;
+}
+
 /** Stops a run cleanly when writes are switched off mid-way. */
 class StoppedError extends Error {}
 
@@ -242,17 +250,20 @@ export class HistoryImporter {
 
     /**
      * True while a job of this link waits for a time rather than for work:
-     * a backoff after an error. The add-on polls sooner than when idle.
+     * a backoff after an error, or a copied channel waiting for its
+     * bridge, whose gap pass should start soon after the link. The add-on
+     * polls sooner than when idle.
      */
     async waiting(linkId: string): Promise<boolean> {
         const now = this.deps.now().getTime();
         const jobs = await this.deps.store.listJobs(linkId);
         return jobs.some(
             (j) =>
-                j.status !== 'done' &&
-                j.status !== 'failed' &&
-                j.retryAt !== null &&
-                j.retryAt.getTime() > now
+                (j.kind === 'channel' && j.status === 'ready') ||
+                (j.status !== 'done' &&
+                    j.status !== 'failed' &&
+                    j.retryAt !== null &&
+                    j.retryAt.getTime() > now)
         );
     }
 
@@ -262,10 +273,16 @@ export class HistoryImporter {
 
     // ---- apply: copy
 
+    /**
+     * Jobs with the same key send through the same webhook, so they never
+     * run at once. A channel's gap pass sends through its bridge webhook,
+     * which its threads' jobs share.
+     */
     private webhookKey(job: HistoryJob): string {
-        return job.kind === 'channel'
-            ? `own:${job.id}`
-            : `parent:${job.parentDiscordId}`;
+        if (job.kind === 'thread') return `parent:${job.parentDiscordId}`;
+        return job.status === 'ready'
+            ? `parent:${job.discordId}`
+            : `own:${job.id}`;
     }
 
     /** Jobs that can run now. Bridged channels finish with a gap pass. */
@@ -786,12 +803,16 @@ export class HistoryImporter {
     /**
      * After the bridge exists, copies messages posted between the last
      * catch-up and the link, through the bridge's webhook (which the relay
-     * never copies back). It stops at the first message the relay copied.
-     * A gap longer than MAX_GAP_PAGES carries on in the next pass.
+     * never copies back). Only messages older than the link are copied:
+     * newer ones are the relay's, including those still in its retry
+     * queue. A gap longer than MAX_GAP_PAGES carries on in the next pass.
      */
     private async closeGap(pass: Pass, job: HistoryJob): Promise<boolean> {
         const bridge = await this.deps.links.byDiscordChannel(job.discordId);
         if (!bridge) return false;
+        const linkedAt =
+            (await this.deps.ports.linkCreatedAt(job.discordId)) ??
+            this.deps.now();
         const route: Route = {
             target: { webhook: bridge.fluxerWebhook, threadId: null },
             bridgeHook: bridge.discordWebhook.id,
@@ -806,9 +827,11 @@ export class HistoryImporter {
             );
             for (const message of batch) {
                 if (this.overdue(pass)) return true;
-                if (await this.deps.ports.relayedLive(message.id))
+                if (snowflakeTime(message.id) >= linkedAt.getTime())
                     return this.done(state);
-                state = await this.copy(pass.link, state, message, route);
+                state = (await this.deps.ports.relayedLive(message.id))
+                    ? await this.advance(state, message.id)
+                    : await this.copy(pass.link, state, message, route);
             }
             if (batch.length < PAGE_SIZE) return this.done(state);
         }

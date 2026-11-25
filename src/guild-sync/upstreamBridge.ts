@@ -681,6 +681,16 @@ export class UpstreamBridge
         };
     }
 
+    async linkCreatedAt(discordChannelId: string): Promise<Date | null> {
+        const link =
+            await this.up.linkService.getChannelLinkByDiscordChannelId(
+                discordChannelId
+            );
+        if (!link) return null;
+        const at = new Date(link.createdAt);
+        return Number.isNaN(at.getTime()) ? null : at;
+    }
+
     async relayedLive(discordMessageId: string): Promise<boolean> {
         const link =
             await this.up.linkService.getMessageLinkByDiscordMessageId(

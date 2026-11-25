@@ -171,6 +171,8 @@ export interface HistoryPorts {
     threadState(
         discordThreadId: string
     ): Promise<{ archived: boolean; locked: boolean }>;
+    /** When the channel's bridge was made, or null when it has none. */
+    linkCreatedAt(discordChannelId: string): Promise<Date | null>;
     /** True when the relay already copied this message after the link. */
     relayedLive(discordMessageId: string): Promise<boolean>;
     /** The pinned messages of a Discord channel or thread, oldest pin first. */

@@ -13,6 +13,7 @@ import {
     RETRY_MAX_MS,
     SEND_INTERVAL_MS,
     backoffMs,
+    snowflakeTime,
     type HistoryMode,
 } from '../../src/history/importer';
 import { contentHash } from '../../src/history/format';
@@ -765,6 +766,72 @@ describe('bridging during an import', () => {
             s.ports.sent.map((m) => m.webhook),
             ['import-f10', 'fw-f10']
         );
+    });
+
+    /** A Discord snowflake made at `ms` since the Unix epoch. */
+    const snowflakeAt = (ms: number) =>
+        (BigInt(ms - 1_420_070_400_000) << BigInt(22)).toString();
+
+    it('copies only gap messages older than the link, leaving newer ones to the relay', async () => {
+        const s = setup();
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        const linkedAt = Date.parse('2026-11-25T11:00:00Z');
+        const before = snowflakeAt(linkedAt - 1_000);
+        const after = snowflakeAt(linkedAt + 1_000);
+        assert.ok(snowflakeTime(before) < linkedAt);
+        s.ports.add('10', before);
+        s.ports.add('10', after);
+        await s.links.link(LINK.id, '10', 'f10');
+        s.ports.linkTimes.set('10', new Date(linkedAt));
+        await s.drain();
+        assert.equal(s.ports.sent.length, 1);
+        assert.equal(await s.store.importedByDiscordId(after), null);
+        assert.equal(s.store.job('10').status, 'done');
+    });
+
+    it('never runs a gap pass and a thread of the same parent at once', async () => {
+        const s = setup();
+        s.state.snapshot = discordGuild({
+            channels: [channel('10', { name: 'general' })],
+            threads: [
+                {
+                    id: '400',
+                    parentId: '10',
+                    name: 'T',
+                    archived: false,
+                    locked: false,
+                    tags: [],
+                },
+            ],
+        });
+        s.map('channel', '10', 'f10');
+        s.map('thread', '400', 'f400');
+        await s.drain();
+        s.ports.add('10', '15');
+        s.ports.add('400', '401');
+        await s.links.link(LINK.id, '10', 'f10');
+        let active = 0;
+        let most = 0;
+        const original = s.ports.sendCopy.bind(s.ports);
+        s.ports.sendCopy = async (target, payload) => {
+            active += 1;
+            most = Math.max(most, active);
+            await new Promise((resolve) => setImmediate(resolve));
+            active -= 1;
+            return original(target, payload);
+        };
+        await s.drain();
+        assert.equal(s.ports.sent.length, 2);
+        assert.equal(most, 1);
+    });
+
+    it('polls soon while a copied channel waits for its bridge', async () => {
+        const s = setup('apply', ['20', '30']);
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        assert.equal(s.store.job('10').status, 'ready');
+        assert.equal(await s.importer.waiting(LINK.id), true);
     });
 
     it('keeps closing a long gap in later passes', async () => {

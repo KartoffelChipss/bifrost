@@ -318,6 +318,13 @@ export class FakeHistoryPorts implements HistoryPorts {
         return this.threadStates.get(id) ?? { archived: false, locked: false };
     }
 
+    /** When each channel was bridged; unset means far in the future. */
+    readonly linkTimes = new Map<string, Date>();
+
+    async linkCreatedAt(id: string) {
+        return this.linkTimes.get(id) ?? new Date(8.64e15);
+    }
+
     async relayedLive(id: string) {
         return this.relayed.has(id);
     }
