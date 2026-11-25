@@ -43,6 +43,8 @@ export interface WriteContext {
     readonly direction: SyncDirection;
     /** Linked accounts, source user ID to destination user ID. */
     readonly members?: ReadonlyMap<string, string>;
+    /** The source @everyone lacks View Channel (see ProjectionContext). */
+    readonly hiddenFromEveryone?: boolean;
 }
 
 /**

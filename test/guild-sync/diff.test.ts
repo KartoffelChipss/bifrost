@@ -189,14 +189,18 @@ describe('diff', () => {
             allow: bits(a),
             deny: '0',
         });
+        // @everyone can view, so no private-by-default deny is added.
+        const everyone = role(D_GUILD, {
+            permissions: bits(PermissionFlagsBits.ViewChannel),
+        });
         const prev = discordGuild({
-            roles: [role(D_GUILD), role('r1')],
+            roles: [everyone, role('r1')],
             channels: [channel('c1')],
         });
         const result = diff(
             input({
                 source: discordGuild({
-                    roles: [role(D_GUILD), role('r1')],
+                    roles: [everyone, role('r1')],
                     channels: [
                         channel('c1', { overwrites: [ow('r1', allow)] }),
                     ],

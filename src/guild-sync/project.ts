@@ -1,12 +1,18 @@
 import type { SyncDirection } from '../addons/db/schema';
 import type { IdMap } from './idmap';
 import type { JsonValue } from './ops';
-import { MANAGED_BITS, translatePermissions } from './permissions';
+import {
+    MANAGED_BITS,
+    NO_BITS,
+    bitOf,
+    translatePermissions,
+} from './permissions';
 import type {
     ChannelSnap,
     EmojiRef,
     EmojiSnap,
     GuildSettingsSnap,
+    GuildSnapshot,
     OverwriteSnap,
     RoleSnap,
     StickerSnap,
@@ -32,6 +38,26 @@ export interface ProjectionContext {
      * add-on). A member overwrite is synced only for a linked member.
      */
     readonly members?: ReadonlyMap<string, string>;
+    /**
+     * True when the source @everyone lacks View Channel. A channel without
+     * its own @everyone overwrite is then private on the source, and its
+     * copy gets an explicit deny so it is private from birth, whatever
+     * the destination @everyone holds at that moment.
+     */
+    readonly hiddenFromEveryone?: boolean;
+}
+
+const VIEW_CHANNEL = bitOf(10);
+
+/** True when the source @everyone role cannot view channels. */
+export function everyoneHidden(
+    source: Pick<GuildSnapshot, 'roles' | 'everyoneRoleId'>,
+    direction: SyncDirection
+): boolean {
+    const everyone = source.roles.find((r) => r.id === source.everyoneRoleId);
+    if (!everyone) return false;
+    const bits = translatePermissions(BigInt(everyone.permissions), direction);
+    return (bits.bits & VIEW_CHANNEL) === NO_BITS;
 }
 
 /** Destination user IDs whose member overwrites the sync manages. */
@@ -106,6 +132,16 @@ function sourceOverwrites(
             ...(overwrite.type === 1 ? { type: MEMBER_TYPE } : {}),
             allow: translated(overwrite.allow, ctx.direction),
             deny: translated(overwrite.deny, ctx.direction),
+        });
+    }
+    const ownEveryone = overwrites.some(
+        (o) => o.type === 0 && o.id === ctx.map.sourceEveryone
+    );
+    if (ctx.hiddenFromEveryone && !ownEveryone) {
+        list.push({
+            id: ctx.map.destEveryone,
+            allow: '0',
+            deny: VIEW_CHANNEL.toString(),
         });
     }
     return sortOverwrites(list);

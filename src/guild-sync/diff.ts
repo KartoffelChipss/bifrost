@@ -10,6 +10,7 @@ import {
 } from './permissions';
 import type { Fields, ProjectionContext } from './project';
 import {
+    everyoneHidden,
     projectDestChannel,
     projectDestRole,
     projectDestSettings,
@@ -578,6 +579,7 @@ export function diff(input: DiffInput): DiffResult {
         map,
         direction: input.direction,
         members: input.members,
+        hiddenFromEveryone: everyoneHidden(input.source, input.direction),
     };
     const out: Out = { ops: [], findings: [] };
     diffStructure(input, ctx, out);

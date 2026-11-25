@@ -9,6 +9,7 @@ import { destIdOf, isRemoval } from './ops';
 import type { Plan } from './plan';
 import { ORDER_PENDING } from './order';
 import {
+    everyoneHidden,
     projectSourceRole,
     projectSourceSettings,
     type Fields,
@@ -123,6 +124,11 @@ interface RunState {
     readonly created: Set<'role' | 'channel'>;
     /** The archive category, once found or created in this run. */
     archiveCategoryId: string | null;
+    /**
+     * True while an @everyone update in the plan has not been written.
+     * Channel creates wait for it (see everyoneGate).
+     */
+    everyonePending: boolean;
 }
 
 function buildMap(state: RunState): IdMap {
@@ -537,8 +543,26 @@ function opKey(plan: Plan, op: PlanOp): string {
     return `${plan.guildLinkId}:${op.op}:${op.kind}:${target}`;
 }
 
+/** True for an update of the destination @everyone role. */
+function isEveryoneUpdate(op: PlanOp, everyoneId: string): boolean {
+    return op.op === 'update' && op.kind === 'role' && op.destId === everyoneId;
+}
+
+/**
+ * Channels are created only once @everyone's permissions are synced. A
+ * Discord channel kept private by @everyone's own permissions, with no
+ * overwrite of its own, would otherwise appear open on Fluxer.
+ */
+function everyoneGate(state: RunState, op: PlanOp): string | null {
+    if (!state.everyonePending || op.op !== 'create') return null;
+    if (op.kind !== 'category' && op.kind !== 'channel') return null;
+    return 'waits for the @everyone permission sync to succeed';
+}
+
 /** Why an op waits for a later cycle, or null. */
 function holdReason(state: RunState, op: PlanOp): string | null {
+    const gate = everyoneGate(state, op);
+    if (gate) return gate;
     const { failures, now } = state.deps;
     if (failures?.blocked(opKey(state.input.plan, op), now())) {
         return 'failed repeatedly; retried after a backoff';
@@ -647,6 +671,9 @@ async function recordWrite(
         await record(state, op, action.applied, result.newId);
     }
     noteMoves(state, op);
+    if (isEveryoneUpdate(op, state.input.destination.everyoneRoleId)) {
+        state.everyonePending = false;
+    }
     await recordRemoval(state, op, result.gone || action.type === 'gone');
     await settleOrder(state, op, action);
     const next = 'followUp' in action ? action.followUp : null;
@@ -669,6 +696,7 @@ async function applyOp(
         map: state.map,
         direction: plan.direction,
         members: state.input.members,
+        hiddenFromEveryone: everyoneHidden(source, plan.direction),
     };
     const action = writeFor(op, ctx);
     const held = action.type === 'skip' ? action.reason : holdReason(state, op);
@@ -780,6 +808,10 @@ function newState(input: ApplyInput, deps: ApplyDeps): RunState {
         postponed: 0,
         created: new Set(),
         archiveCategoryId: null,
+        everyonePending: [
+            ...input.plan.body.ops,
+            ...input.plan.body.deferred,
+        ].some((op) => isEveryoneUpdate(op, input.destination.everyoneRoleId)),
     };
 }
 
