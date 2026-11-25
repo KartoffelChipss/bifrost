@@ -95,8 +95,46 @@ describe('thread relay events', () => {
         client.emit(Events.MessageCreate, discordThreadMessage('1', '!b link'));
         client.emit(Events.MessageCreate, discordThreadMessage('2', 'hi !b'));
         await flush();
-        assert.deepEqual(calls.slice(-1), ['created discord 2']);
-        assert.ok(!calls.includes('created discord 1'));
+        assert.deepEqual(calls, ['start', 'created discord 2']);
+    });
+
+    it('relays Discord edits but not pin or preview updates', async () => {
+        const { calls, relay, wrap, flush } = fakeRelay();
+        const client = discordClient();
+        const stop = listenToDiscordThreads(
+            client as unknown as Client,
+            relay,
+            wrap,
+            '!b '
+        );
+        const old = discordThreadMessage('1', 'hi');
+        // Pinning changes neither the text nor the edited time.
+        client.emit(Events.MessageUpdate, old, { ...old, pinned: true });
+        const edited = { ...old, content: 'hey', editedTimestamp: Date.now() };
+        client.emit(Events.MessageUpdate, old, edited);
+        await flush();
+        stop();
+        assert.deepEqual(calls, ['start', 'edited discord 1', 'stop']);
+    });
+
+    it('relays Fluxer edits but not pin updates', async () => {
+        const { calls, relay, wrap, flush } = fakeRelay();
+        const client = discordClient();
+        listenToFluxerThreads(
+            client as unknown as FluxerClient,
+            relay,
+            wrap,
+            '!b '
+        );
+        const old = fluxerThreadMessage('1', 'hi');
+        client.emit(FluxerEvents.MessageUpdate, old, { ...old, pinned: true });
+        client.emit(FluxerEvents.MessageUpdate, old, {
+            ...old,
+            content: 'hey',
+            editedAt: new Date(),
+        });
+        await flush();
+        assert.deepEqual(calls, ['edited fluxer 1']);
     });
 
     it('does not relay Fluxer thread commands', async () => {

@@ -35,6 +35,8 @@ import StatsDiscordCommandHandler from './commands/discord/handlers/StatsDiscord
 import { DbStatsService } from './services/DbStatsService';
 // Fork: the relay's channel check (src/relay-extras/channels.ts).
 import { isRelayedDiscordChannel } from './relay-extras/channels';
+// Fork: tells real edits from pin and preview updates.
+import { isContentEdit } from './relay-extras/edits';
 
 const startDiscordClient = async ({
     linkService,
@@ -218,6 +220,9 @@ const startDiscordClient = async ({
 
     client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
         if (newMessage.webhookId) return;
+        // Fork: a pin or link preview is not an edit; relaying it marks the
+        // copy "(edited)" (src/relay-extras/edits.ts).
+        if (!isContentEdit(_oldMessage, newMessage, Date.now())) return;
 
         const linkedMessage =
             await linkService.getMessageLinkByDiscordMessageId(newMessage.id);

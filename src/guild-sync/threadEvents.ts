@@ -14,6 +14,7 @@ import {
     isCommandMessage,
     upstreamCommandPrefix,
 } from '../relay-extras/commandPrefix';
+import { isContentEdit, type EditView } from '../relay-extras/edits';
 import type { ThreadMessageEvent, ThreadRelay } from './threadRelay';
 
 /**
@@ -71,11 +72,13 @@ export function listenToDiscordThreads(
     const onUpdate = wrap(
         'thread-edit',
         async (
-            _old: Message | PartialMessage,
+            old: Message | PartialMessage,
             next: Message | PartialMessage
         ) => {
             const event = discordEvent(next);
             if (!event || next.partial) return;
+            // A pin or link preview is not an edit (relay-extras/edits.ts).
+            if (!isContentEdit(old, next, Date.now())) return;
             await relay.edited('discord', event, next);
         }
     );
@@ -115,6 +118,7 @@ interface FluxerMessageLike {
     readonly partial?: boolean;
     readonly author?: { readonly id: string } | null;
     readonly content?: string | null;
+    readonly editedAt?: Date | null;
 }
 
 function fluxerEvent(message: FluxerMessageLike): ThreadMessageEvent | null {
@@ -149,9 +153,10 @@ export function listenToFluxerThreads(
     );
     const onUpdate = wrap(
         'thread-edit',
-        async (_old: unknown, next: FluxerMessageLike) => {
+        async (old: EditView | null, next: FluxerMessageLike) => {
             const event = fluxerEvent(next);
             if (!event || next.partial) return;
+            if (!isContentEdit(old, next, Date.now())) return;
             await relay.edited('fluxer', event, next);
         }
     );
