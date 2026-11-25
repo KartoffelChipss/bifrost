@@ -272,7 +272,11 @@ export class FakeHistoryPorts implements HistoryPorts {
             throw this.failure;
         }
         const files = payload.attachments?.length ?? 0;
-        if (files > 0 && this.refuseFiles) throw new Error('file too large');
+        if (files > 0 && this.refuseFiles)
+            throw Object.assign(new Error('File size too large'), {
+                statusCode: 413,
+                code: 'FILE_SIZE_TOO_LARGE',
+            });
         this.sent.push({
             webhook: target.webhook.id,
             threadId: target.threadId,

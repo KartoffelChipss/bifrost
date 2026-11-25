@@ -8,8 +8,13 @@ import {
     type GuildSnapshot,
 } from '../guild-sync/snapshot';
 import type { GuildWriter } from '../guild-sync/writers/writer';
-import { MessageError, describeError, isTransient } from './errors';
-import { CopyFormatter, contentHash } from './format';
+import {
+    MessageError,
+    describeError,
+    isTransient,
+    isUploadError,
+} from './errors';
+import { CopyFormatter, contentHash, withNote } from './format';
 import {
     MAX_PARALLEL,
     PAGE_SIZE,
@@ -673,33 +678,55 @@ export class HistoryImporter {
         return { ...job, ...patch };
     }
 
-    /** Sends a copy. A refused upload is retried once without its files. */
+    /**
+     * Sends a copy. Only an upload refusal is retried, once, without the
+     * files. After a temporary error the message stays recorded as
+     * unfinished: the send may have gone through, and recovery checks
+     * before anything is resent. Any other error definitely sent nothing.
+     */
     private async send(
         target: SendTarget,
         payload: RelayPayload,
         discordId: string
-    ) {
-        const { store, ports } = this.deps;
+    ): Promise<string> {
         try {
-            return await ports.sendCopy(target, payload);
+            return await this.deps.ports.sendCopy(target, payload);
         } catch (error) {
             const files = payload.attachments ?? [];
-            if (files.length === 0) {
-                await store.dropMessage(discordId);
+            if (files.length === 0 || !isUploadError(error)) {
+                await this.forget(discordId, error);
                 throw error;
             }
-            const names = files.map((f) => f.name).join(', ');
-            try {
-                return await ports.sendCopy(target, {
-                    ...payload,
-                    attachments: [],
-                    content: `${payload.content}\n*Attachments not copied: ${names}*`,
-                });
-            } catch (retry) {
-                await store.dropMessage(discordId);
-                throw retry;
-            }
+            return this.sendWithoutFiles(target, payload, discordId);
         }
+    }
+
+    private async sendWithoutFiles(
+        target: SendTarget,
+        payload: RelayPayload,
+        discordId: string
+    ): Promise<string> {
+        const names = (payload.attachments ?? []).map((f) => f.name);
+        const content = withNote(
+            payload.content,
+            `*Attachments not copied: ${names.join(', ')}*`
+        );
+        await this.deps.store.setContentHash(discordId, contentHash(content));
+        try {
+            return await this.deps.ports.sendCopy(target, {
+                ...payload,
+                attachments: [],
+                content,
+            });
+        } catch (retry) {
+            await this.forget(discordId, retry);
+            throw retry;
+        }
+    }
+
+    /** Drops the record of a send that surely failed. */
+    private async forget(discordId: string, error: unknown) {
+        if (!isTransient(error)) await this.deps.store.dropMessage(discordId);
     }
 
     /**

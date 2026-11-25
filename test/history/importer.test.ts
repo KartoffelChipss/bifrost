@@ -410,10 +410,51 @@ describe('failures and recovery', () => {
         s.map('channel', '10', 'f10');
         await s.drain();
         assert.equal(s.ports.sent[0].files, 0);
-        assert.match(
-            s.ports.sent[0].content,
-            /Attachments not copied: file0.png/
+        assert.deepEqual(s.ports.sent[0].content.split('\n').slice(1), [
+            '*Attachments not copied: file0.png*',
+            '*Originally posted 2024-03-01 18:22 UTC*',
+        ]);
+    });
+
+    it('keeps the files and the unfinished record after a temporary error', async () => {
+        const s = setup();
+        s.ports.add('10', '11', { raw: { id: '11', text: 'pic', files: 1 } });
+        s.map('channel', '10', 'f10');
+        s.ports.failNext = 1;
+        await s.importer.run(LINK);
+        assert.equal(s.store.messages.length, 1);
+        assert.equal(s.store.messages[0].fluxerMessageId, null);
+        s.state.clock += RETRY_MAX_MS;
+        await s.drain();
+        assert.deepEqual(
+            s.ports.sent.map((m) => m.files),
+            [1]
         );
+    });
+
+    it('does not resend a copy that went through before a timeout', async () => {
+        const s = setup();
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        const original = s.ports.sendCopy.bind(s.ports);
+        let calls = 0;
+        s.ports.sendCopy = async (target, payload) => {
+            calls += 1;
+            if (calls > 1) return original(target, payload);
+            s.ports.recentCopies = [
+                {
+                    id: 'posted',
+                    webhookId: target.webhook.id,
+                    content: payload.content,
+                },
+            ];
+            throw Object.assign(new Error('timeout'), { name: 'TimeoutError' });
+        };
+        await s.importer.run(LINK);
+        s.state.clock += RETRY_MAX_MS;
+        await s.drain();
+        assert.equal(calls, 1);
+        assert.equal(s.store.messages[0].fluxerMessageId, 'posted');
     });
 
     it('waits out a temporary error with backoff and never fails the job for it', async () => {
