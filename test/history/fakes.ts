@@ -6,6 +6,7 @@ import type {
     ImportedMessage,
     JobKind,
     JobPatch,
+    PayloadOptions,
     SendTarget,
     SourceMessage,
 } from '../../src/history/types';
@@ -15,6 +16,10 @@ export class FakeHistoryStore implements HistoryStore {
     jobs: HistoryJob[] = [];
     messages: ImportedMessage[] = [];
     optOuts = new Set<string>();
+    /** Discord message IDs the thread relay copied. */
+    relayedThread = new Set<string>();
+    /** Active thread pairs from guild-sync's map: Fluxer ID to Discord ID. */
+    threadPairs = new Map<string, string>();
     private seq = 0;
 
     async listJobs(guildLinkId: string) {
@@ -105,6 +110,16 @@ export class FakeHistoryStore implements HistoryStore {
         );
     }
 
+    async importedByDiscordId(discordId: string) {
+        return (
+            this.messages.find((m) => m.discordMessageId === discordId) ?? null
+        );
+    }
+
+    async relayedInThread(discordId: string) {
+        return this.relayedThread.has(discordId);
+    }
+
     async isOptedOut(id: string) {
         return this.optOuts.has(id);
     }
@@ -116,10 +131,12 @@ export class FakeHistoryStore implements HistoryStore {
     }
 
     async threadImporting(fluxerThreadId: string) {
+        const discordId = this.threadPairs.get(fluxerThreadId);
         return this.jobs.some(
             (j) =>
                 j.kind === 'thread' &&
-                j.fluxerId === fluxerThreadId &&
+                (j.fluxerId === fluxerThreadId ||
+                    (j.fluxerId === null && j.discordId === discordId)) &&
                 (j.status === 'pending' || j.status === 'importing')
         );
     }
@@ -156,6 +173,9 @@ export class FakeHistoryPorts implements HistoryPorts {
             createdAt: new Date('2024-03-01T18:22:00Z'),
             copyable: true,
             attachments: 0,
+            webhookId: null,
+            reply: null,
+            reactions: [],
             raw: { id, text: `message ${id}` },
             ...overrides,
         });
@@ -173,7 +193,15 @@ export class FakeHistoryPorts implements HistoryPorts {
         return list[list.length - 1]?.id ?? null;
     }
 
-    async payload(raw: unknown): Promise<RelayPayload> {
+    /** The options of every payload built, in order. */
+    readonly payloadOptions: PayloadOptions[] = [];
+
+    async payload(
+        raw: unknown,
+        _linkId: string,
+        options: PayloadOptions = {}
+    ): Promise<RelayPayload> {
+        this.payloadOptions.push(options);
         const message = raw as { text: string; files?: number };
         return {
             content: message.text,
@@ -230,5 +258,27 @@ export class FakeHistoryPorts implements HistoryPorts {
 
     async relayedLive(id: string) {
         return this.relayed.has(id);
+    }
+
+    /** Finds a stored message by the ID in `raw`, with `raw` as given. */
+    describe(raw: unknown): SourceMessage {
+        const { id } = raw as { id: string };
+        for (const list of this.discord.values()) {
+            const found = list.find((m) => m.id === id);
+            if (found) return { ...found, raw };
+        }
+        throw new Error(`no message ${id}`);
+    }
+
+    /** Pinned Discord message IDs by channel or thread, oldest pin first. */
+    readonly pinned = new Map<string, string[]>();
+    readonly pins: string[] = [];
+
+    async pinnedMessageIds(id: string) {
+        return this.pinned.get(id) ?? [];
+    }
+
+    async pinCopy(channelId: string, messageId: string) {
+        this.pins.push(`${channelId} ${messageId}`);
     }
 }

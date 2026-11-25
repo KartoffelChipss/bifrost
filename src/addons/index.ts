@@ -43,6 +43,7 @@ export function addonFactories(
             }),
         history: () =>
             createHistoryAddon({
+                discordClient: deps.discordClient,
                 sequelize: deps.sequelize,
                 listGuildLinks: deps.listGuildLinks,
                 links: deps.bridge,
@@ -50,6 +51,7 @@ export function addonFactories(
                 writer: new FluxerGuildWriter(deps.fluxerClientRef),
                 sendNotice,
                 excludedChannels: config.excludedChannels,
+                commandPrefix: deps.commandPrefix,
             }),
         identity: () =>
             createIdentityAddon({

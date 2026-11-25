@@ -1,4 +1,5 @@
 import { hostname } from 'node:os';
+import type { Client as DiscordClient } from 'discord.js';
 import type { Sequelize } from 'sequelize';
 import type { Addon, AddonContext } from '../addons/host';
 import { RepeatingTask } from '../addons/loop';
@@ -7,7 +8,12 @@ import type { ChannelLinker } from '../guild-sync/links';
 import { NoticeBoard, type SendNotice } from '../guild-sync/notices';
 import { HISTORY_LOCK_KEY, PostgresGuildSyncStore } from '../guild-sync/store';
 import type { GuildWriter } from '../guild-sync/writers/writer';
-import { HistoryImporter } from './importer';
+import { HistoryEditor } from './editor';
+import { listenToDiscordEdits } from './events';
+import { CopyFormatter } from './format';
+import { HistoryImporter, type HistoryMode } from './importer';
+import { PASS_BUDGET_MS } from './limits';
+import { HistoryMirror } from './mirror';
 import { PostgresHistoryStore } from './store';
 import type { HistoryPorts } from './types';
 
@@ -21,6 +27,7 @@ const IDLE_DELAY_MS = 5 * 60_000;
 const FIRST_DELAY_MS = 60_000;
 
 export interface HistoryDeps {
+    readonly discordClient: DiscordClient;
     readonly sequelize: Sequelize;
     readonly listGuildLinks: () => Promise<readonly LinkedGuild[]>;
     readonly links: ChannelLinker;
@@ -28,10 +35,44 @@ export interface HistoryDeps {
     readonly writer: Pick<GuildWriter, 'updateThread'>;
     readonly sendNotice: SendNotice;
     readonly excludedChannels: ReadonlySet<string>;
+    /** Upstream's command prefix, which copies must not start with. */
+    readonly commandPrefix: string;
 }
+
+type Sync = PostgresGuildSyncStore;
 
 const pause = (ms: number) =>
     new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** History is copied from Discord to Fluxer only, and written in apply. */
+function modeOf(sync: Sync, context: AddonContext) {
+    return async (linkId: string): Promise<HistoryMode> => {
+        const settings = await sync.loadSettings(linkId);
+        if (settings.direction !== 'discord-to-fluxer') return 'read-only';
+        return resolveMode(context.mode.mode, settings, context.allowApply)
+            .mode;
+    };
+}
+
+/** Keeps guild-sync's record of a thread in step with what history wrote. */
+function threadStateRecorder(sync: Sync) {
+    return async (
+        linkId: string,
+        discordThreadId: string,
+        state: { archived: boolean; locked: boolean }
+    ): Promise<void> => {
+        const rows = await sync.loadObjectMap(linkId);
+        const row = rows.find(
+            (r) =>
+                r.kind === 'thread' &&
+                r.state === 'active' &&
+                r.discordId === discordThreadId
+        );
+        if (!row) return;
+        const fields = { ...(row.appliedFields ?? {}), ...state };
+        await sync.saveApplied(row.id, fields, new Date());
+    };
+}
 
 function buildImporter(deps: HistoryDeps, context: AddonContext) {
     const sync = new PostgresGuildSyncStore(deps.sequelize);
@@ -45,14 +86,10 @@ function buildImporter(deps: HistoryDeps, context: AddonContext) {
         ports: deps.ports,
         links: deps.links,
         writer: deps.writer,
+        recordThreadState: threadStateRecorder(sync),
         excluded: deps.excludedChannels,
-        mode: async (id) => {
-            const settings = await sync.loadSettings(id);
-            // History is copied from Discord to Fluxer only.
-            if (settings.direction !== 'discord-to-fluxer') return 'read-only';
-            return resolveMode(context.mode.mode, settings, context.allowApply)
-                .mode;
-        },
+        commandPrefix: deps.commandPrefix,
+        mode: modeOf(sync, context),
         report: async (id, key, text) => {
             const settings = await sync.loadSettings(id);
             await notices.post(
@@ -69,16 +106,60 @@ function buildImporter(deps: HistoryDeps, context: AddonContext) {
     return { sync, importer };
 }
 
+/** Mirrors Discord edits and deletes of imported messages. */
+function startMirror(deps: HistoryDeps, context: AddonContext, sync: Sync) {
+    const store = new PostgresHistoryStore(deps.sequelize);
+    const mirror = new HistoryMirror({
+        store,
+        editor: new HistoryEditor(store, deps.links, deps.ports),
+        formatter: new CopyFormatter({
+            store,
+            ports: deps.ports,
+            commandPrefix: deps.commandPrefix,
+        }),
+        ports: deps.ports,
+        mode: modeOf(sync, context),
+        logger: context.logger,
+    });
+    const wrap = <A extends unknown[]>(
+        task: string,
+        fn: (...args: A) => Promise<void> | void
+    ) => context.boundary.handler(ADDON_NAME, task, fn);
+    return listenToDiscordEdits(deps.discordClient, mirror, wrap);
+}
+
+/**
+ * Runs the importer for each guild link until the pass budget is spent,
+ * which keeps the leader lock's transaction short. Returns true when work
+ * is left.
+ */
+async function importLinks(
+    deps: HistoryDeps,
+    importer: HistoryImporter
+): Promise<boolean> {
+    const deadline = Date.now() + PASS_BUDGET_MS;
+    const links = await deps.listGuildLinks();
+    let more = false;
+    for (const link of links.slice(0, MAX_LINKS_PER_PASS)) {
+        if (Date.now() >= deadline) return true;
+        if (await importer.run(link, deadline)) more = true;
+    }
+    return more;
+}
+
 /**
  * The history add-on: copies past Discord messages into the synced
- * channels, posts and threads. In dry-run it only counts them.
+ * channels, posts and threads, and carries later Discord edits and
+ * deletes over to those copies. In dry-run it only counts them.
  */
 export function createHistoryAddon(deps: HistoryDeps): Addon {
     let task: RepeatingTask | null = null;
+    let stopMirror: (() => void) | null = null;
     return {
         name: ADDON_NAME,
         async start(context: AddonContext) {
             const { sync, importer } = buildImporter(deps, context);
+            stopMirror = startMirror(deps, context, sync);
             const holder = `${hostname()}:${process.pid}:history`;
             const pass = async () => {
                 const result = await context.boundary.run(
@@ -87,17 +168,7 @@ export function createHistoryAddon(deps: HistoryDeps): Addon {
                     async () => {
                         const locked = await sync.withLeaderLock(
                             holder,
-                            async () => {
-                                let more = false;
-                                const links = await deps.listGuildLinks();
-                                for (const link of links.slice(
-                                    0,
-                                    MAX_LINKS_PER_PASS
-                                )) {
-                                    if (await importer.run(link)) more = true;
-                                }
-                                return more;
-                            },
+                            () => importLinks(deps, importer),
                             HISTORY_LOCK_KEY
                         );
                         return locked.ran && locked.value;
@@ -109,6 +180,8 @@ export function createHistoryAddon(deps: HistoryDeps): Addon {
             task.start(FIRST_DELAY_MS);
         },
         async stop() {
+            stopMirror?.();
+            stopMirror = null;
             await task?.stop();
             task = null;
         },

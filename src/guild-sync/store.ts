@@ -84,6 +84,14 @@ export interface ThreadRelayStore {
         messageId: string
     ): Promise<ThreadMessage | null>;
     deleteThreadMessage(side: SnapshotSide, messageId: string): Promise<void>;
+    /**
+     * True when history import copied this Discord reply, or covered it:
+     * it is at or before the cutoff of the thread's finished history job.
+     */
+    historyCovers?(
+        discordThreadId: string,
+        discordMessageId: string
+    ): Promise<boolean>;
 }
 
 /** The database access one cycle needs. The cycle depends only on this. */
@@ -708,5 +716,25 @@ export class PostgresGuildSyncStore
             `DELETE FROM ${TABLES.threadMessages} WHERE "${column}" = $1`,
             { bind: [messageId] }
         );
+    }
+
+    /** Snowflakes compare as numbers: left-padded to 20 digits, as text. */
+    async historyCovers(
+        discordThreadId: string,
+        discordMessageId: string
+    ): Promise<boolean> {
+        const rows = await this.db.query<Row>(
+            `SELECT 1 FROM ${TABLES.historyMessages} WHERE "discordMessageId" = $1
+             UNION ALL
+             SELECT 1 FROM ${TABLES.historyJobs}
+             WHERE kind = 'thread' AND "discordId" = $2 AND status = 'done'
+               AND lpad("cutoffId", 20, '0') >= lpad($3, 20, '0')
+             LIMIT 1`,
+            {
+                bind: [discordMessageId, discordThreadId, discordMessageId],
+                type: QueryTypes.SELECT,
+            }
+        );
+        return rows.length > 0;
     }
 }

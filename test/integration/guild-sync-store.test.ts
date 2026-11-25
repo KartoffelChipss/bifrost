@@ -303,6 +303,9 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         const [job] = await history.listJobs(linkId);
         assert.equal((await history.listJobs(linkId)).length, 1);
         assert.equal(job.status, 'pending');
+        // Not mapped yet, but the active pair f-post names its thread.
+        assert.equal(await history.threadImporting('f-post'), true);
+        assert.equal(await history.threadImporting('f-other'), false);
         await history.updateJob(
             job.id,
             {
@@ -343,6 +346,35 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         assert.equal(await history.isOptedOut('author'), false);
         await history.updateJob(job.id, { status: 'done' }, now);
         assert.equal(await history.threadImporting('f-post'), false);
+    });
+
+    it('tells history and the thread relay what the other copied', async () => {
+        const now = new Date();
+        const history = new PostgresHistoryStore(db);
+        const [job] = await history.listJobs(linkId);
+        assert.equal(
+            (await history.importedByDiscordId('dm1'))?.fluxerMessageId,
+            'fm1'
+        );
+        assert.equal(await history.importedByDiscordId('none'), null);
+        await store.saveThreadMessage(
+            {
+                guildLinkId: linkId,
+                discordThreadId: 'd-post',
+                fluxerThreadId: 'f-post',
+                discordMessageId: '120',
+                fluxerMessageId: 'f120',
+            },
+            now
+        );
+        assert.equal(await history.relayedInThread('120'), true);
+        assert.equal(await history.relayedInThread('121'), false);
+        // The finished job's cutoff is 99: replies up to it are covered.
+        assert.equal(await store.historyCovers('d-post', 'dm1'), true);
+        assert.equal(await store.historyCovers('d-post', '98'), true);
+        assert.equal(await store.historyCovers('d-post', '100'), false);
+        await history.updateJob(job.id, { status: 'failed' }, now);
+        assert.equal(await store.historyCovers('d-post', '98'), false);
     });
 
     it('keeps account links, codes, pending links and failures', async () => {
