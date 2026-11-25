@@ -660,15 +660,25 @@ describe('channel links, forum tags and threads', () => {
     it('waits with a forum post until its forum is bridged', async () => {
         const s = setup(forumGuild());
         await s.cycle();
-        const { applied } = await s.cycle();
+        const { plan, applied } = await s.cycle();
         assert.equal(applied?.failed, 0);
+        // The post is not planned, so it takes no write-cap slot.
+        const postCreates = [...plan.body.ops, ...plan.body.deferred].filter(
+            (op) => op.op === 'create' && op.sourceId === 'post1'
+        );
+        assert.deepEqual(postCreates, []);
         assert.ok(
-            applied?.skipped.some((x) => /not linked yet/.test(x.reason))
+            plan.body.findings.some(
+                (f) =>
+                    f.id === 'forum' &&
+                    /until this forum is bridged/.test(f.detail)
+            )
         );
         assert.equal(
             s.guild.posts.some((p) => p.name === 'Patch notes'),
             false
         );
+        assert.ok(!s.store.audits.some((a) => a.sourceId === 'post1'));
     });
 
     it('follows a renamed, retagged and archived post', async () => {

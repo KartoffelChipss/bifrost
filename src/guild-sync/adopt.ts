@@ -9,7 +9,11 @@ import type { GuildSnapshot } from './snapshot';
  * intent. An unowned destination object with the same name and type,
  * made after that intent, is that create's result and is adopted as
  * created by sync. An object that existed before any intent is someone
- * else's and stays untouched.
+ * else's and stays untouched. When the platform refused the create
+ * outright, apply.ts records a refusal after the intent: nothing was
+ * made, so a same-named object made later is a person's and is never
+ * adopted on that intent. Only an unclear outcome (a timeout, a network
+ * error, a server error) leaves the intent usable.
  */
 
 /** A create the bot was about to send. */
@@ -18,6 +22,8 @@ export interface CreateIntent {
     readonly sourceId: string;
     readonly name: string;
     readonly at: Date;
+    /** A refusal: the platform refused the create of an earlier intent. */
+    readonly refused?: boolean;
 }
 
 /** How far back intents count. A create resolves long before this. */
@@ -46,25 +52,42 @@ export function snowflakeTime(id: string): number | null {
 type CreateOp = Extract<PlanOp, { op: 'create' }>;
 
 /** True when the object was made after the intent, within the skew. */
-function madeAfter(destId: string, intent: CreateIntent): boolean {
+export function madeAfter(destId: string, intent: CreateIntent): boolean {
     const time = snowflakeTime(destId);
     return time !== null && time >= intent.at.getTime() - CLOCK_SKEW_MS;
 }
 
-/** The latest intent for one create, if any. */
-function intentFor(
+/** What one create is known by in the intents. */
+export interface IntentKey {
+    readonly kind: SyncKind;
+    readonly sourceId: string;
+    readonly name: string;
+}
+
+/** True when `entry` is newer than `latest`. A refusal wins a tie. */
+function newer(entry: CreateIntent, latest: CreateIntent | null): boolean {
+    if (!latest) return true;
+    const delta = entry.at.getTime() - latest.at.getTime();
+    return delta > 0 || (delta === 0 && entry.refused === true);
+}
+
+/**
+ * The latest usable intent for one create, or null. The latest entry
+ * decides: after a refusal, only a newer intent (a later attempt) counts.
+ */
+export function latestIntent(
     intents: readonly CreateIntent[],
-    op: CreateOp
+    key: IntentKey
 ): CreateIntent | null {
     let latest: CreateIntent | null = null;
-    for (const intent of intents) {
-        if (intent.kind !== op.kind || intent.sourceId !== op.sourceId) {
+    for (const entry of intents) {
+        if (entry.kind !== key.kind || entry.sourceId !== key.sourceId) {
             continue;
         }
-        if (intent.name !== op.name) continue;
-        if (!latest || intent.at > latest.at) latest = intent;
+        if (entry.name !== key.name) continue;
+        if (newer(entry, latest)) latest = entry;
     }
-    return latest;
+    return latest?.refused === true ? null : latest;
 }
 
 /** An unowned thread or post with the op's name in the mapped parent. */
@@ -102,7 +125,7 @@ export function markAdoptions(input: AdoptionInput): PlanOp[] {
     const taken = new Set<string>();
     return input.ops.map((op) => {
         if (op.op !== 'create') return op;
-        const intent = intentFor(input.intents, op);
+        const intent = latestIntent(input.intents, op);
         if (!intent) return op;
         const destId =
             op.kind === 'thread'

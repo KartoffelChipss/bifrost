@@ -59,8 +59,11 @@ export interface AuditEntry {
     readonly destId: string | null;
     readonly before: JsonValue | null;
     readonly after: JsonValue | null;
-    /** 'intent' marks a create about to be sent (adopt.ts). */
-    readonly result: 'ok' | 'failed' | 'intent';
+    /**
+     * 'intent' marks a create about to be sent, and 'refused' a create the
+     * platform then refused outright (adopt.ts).
+     */
+    readonly result: 'ok' | 'failed' | 'intent' | 'refused';
 }
 
 /** The two copies of one message relayed inside a thread. */
@@ -365,7 +368,7 @@ export class MapTooLargeError extends Error {
 
 /** A create-intent audit row, or nothing when it is malformed. */
 function parseIntent(row: Row): CreateIntent[] {
-    const after = row.after as { name?: unknown } | null;
+    const after = row.after as { name?: unknown; refused?: unknown } | null;
     const kind = OBJECT_KINDS.find((k) => k === row.kind);
     if (
         !kind ||
@@ -382,6 +385,7 @@ function parseIntent(row: Row): CreateIntent[] {
             sourceId: row.sourceId,
             name: after.name,
             at: row.at,
+            refused: after.refused === true,
         },
     ];
 }

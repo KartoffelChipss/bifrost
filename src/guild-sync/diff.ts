@@ -71,6 +71,14 @@ export interface DiffInput {
         readonly historyReady?: ReadonlySet<string>;
     };
     /**
+     * Discord channel IDs the relay bridges, in either direction. A forum
+     * post is created through its forum's bridge, so a post in a forum
+     * that is not bridged is held with a finding: planned, it would fail
+     * every cycle and take a write-cap slot each time. Undefined when not
+     * known; posts are then planned as usual.
+     */
+    readonly bridged?: ReadonlySet<string>;
+    /**
      * Revert destination edits to managed fields (`sync enforce on`): a
      * drifted field counts as a change. Unmanaged objects and bits stay
      * out of reach as always: the projections and ownership see to that.
@@ -624,6 +632,52 @@ function diffLinks(input: DiffInput, map: IdMap, out: Out) {
     }
 }
 
+/** Source forums whose Discord side is not bridged (see DiffInput.bridged). */
+function unbridgedForums(input: DiffInput, map: IdMap): Set<string> {
+    const forums = new Set<string>();
+    const { bridged } = input;
+    if (!bridged) return forums;
+    const toFluxer = input.direction === 'discord-to-fluxer';
+    for (const channel of input.source.channels) {
+        if (!THREAD_ONLY_TYPES.has(channel.type)) continue;
+        const discordId = toFluxer
+            ? channel.id
+            : map.dest('channel', channel.id);
+        if (discordId === null || !bridged.has(discordId)) {
+            forums.add(channel.id);
+        }
+    }
+    return forums;
+}
+
+/**
+ * Splits off unmapped posts in forums that are not bridged, with one
+ * finding per forum. Mapped posts stay, so their updates go on.
+ */
+function holdUnbridgedPosts(
+    input: DiffInput,
+    threads: readonly ThreadSnap[],
+    map: IdMap,
+    out: Out
+): ThreadSnap[] {
+    const forums = unbridgedForums(input, map);
+    const held = new Map<string, number>();
+    const kept = threads.filter((t) => {
+        if (!forums.has(t.parentId) || map.dest('thread', t.id)) return true;
+        held.set(t.parentId, (held.get(t.parentId) ?? 0) + 1);
+        return false;
+    });
+    for (const [forumId, count] of held) {
+        out.findings.push({
+            type: 'skipped',
+            kind: 'channel',
+            id: forumId,
+            detail: `${count} posts wait until this forum is bridged: a post's first message is sent through the bridge`,
+        });
+    }
+    return kept;
+}
+
 /** Threads and forum posts whose parent channel is already mapped. */
 function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
     const { source, destination, previousSource } = input;
@@ -641,12 +695,16 @@ function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
     const mapped = (t: ThreadSnap) => ctx.map.dest('channel', t.parentId);
     const present = new Set(destination.channels.map((c) => c.id));
     const included = (t: ThreadSnap) => !input.excluded?.has(t.id);
+    const sources = holdUnbridgedPosts(
+        input,
+        source.threads.filter((t) => included(t) && mapped(t) !== null),
+        ctx.map,
+        out
+    );
     diffObjects(
         {
             kind: 'thread',
-            sources: source.threads.filter(
-                (t) => included(t) && mapped(t) !== null
-            ),
+            sources,
             dests: destination.threads,
             previous: previousSource?.threads ?? null,
             projectSource: (t) => projectSourceThread(t, ctx),

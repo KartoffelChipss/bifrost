@@ -328,13 +328,14 @@ async function confirmedRemovals(
 async function linkState(
     link: LinkedGuild,
     settings: SyncSettings,
-    deps: CycleDeps
+    deps: CycleDeps,
+    bridged: ReadonlySet<string>
 ): Promise<DiffInput['links']> {
     if (!deps.links || settings.direction !== 'discord-to-fluxer') {
         return undefined;
     }
     return {
-        linked: await deps.links.linkedDiscordChannels(link.discordGuildId),
+        linked: bridged,
         never: new Set(
             settings.adminChannelId ? [settings.adminChannelId] : []
         ),
@@ -342,6 +343,15 @@ async function linkState(
             ? await deps.historyReady(link.id)
             : undefined,
     };
+}
+
+/** Discord channels the relay bridges; none without the relay wired in. */
+async function bridgedChannels(
+    link: LinkedGuild,
+    deps: CycleDeps
+): Promise<ReadonlySet<string>> {
+    if (!deps.links) return new Set();
+    return deps.links.linkedDiscordChannels(link.discordGuildId);
 }
 
 /** The map with missing counts updated (guard 4), and the diff. */
@@ -360,7 +370,8 @@ async function diffWithMap(
     await deps.store.saveMissing(missing, now);
     const rows = applyMissing(loaded, missing);
     const excluded = excludedIds(source, deps.excludedChannels ?? new Set());
-    const links = await linkState(link, settings, deps);
+    const bridged = await bridgedChannels(link, deps);
+    const links = await linkState(link, settings, deps, bridged);
     const found = diff({
         source,
         destination,
@@ -370,6 +381,7 @@ async function diffWithMap(
         excluded,
         members,
         links,
+        bridged,
         enforceDrift: settings.enforceDrift,
     });
     const historyLocked = historyLocks(source.channels, {
