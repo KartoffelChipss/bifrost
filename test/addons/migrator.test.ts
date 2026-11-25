@@ -17,6 +17,7 @@ const OFF: AddonConfig = {
     initialMode: 'dry-run',
     allowApply: false,
     excludedChannels: new Set(),
+    warnings: [],
 };
 
 describe('add-on migrations on SQLite', () => {
@@ -31,8 +32,27 @@ describe('add-on migrations on SQLite', () => {
     });
 
     it('does nothing while add-ons are off', async () => {
-        await initAddonDatabase(OFF, sqlite, createRecordingLogger());
+        const state = await initAddonDatabase(
+            OFF,
+            sqlite,
+            createRecordingLogger()
+        );
+        assert.equal(state, 'off');
         const tables = await sqlite.getQueryInterface().showAllTables();
         assert.deepEqual(tables, []);
+    });
+
+    it('reports a failed migration instead of throwing', async () => {
+        const logger = createRecordingLogger();
+        const state = await initAddonDatabase(
+            { ...OFF, enabled: true },
+            sqlite,
+            logger
+        );
+        assert.equal(state, 'failed');
+        const errors = logger.entries.filter((e) => e.level === 'error');
+        assert.equal(errors.length, 1);
+        assert.match(errors[0].message, /relay keeps running/);
+        assert.ok(errors[0].meta[0] instanceof AddonDatabaseError);
     });
 });

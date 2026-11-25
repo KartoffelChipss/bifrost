@@ -12,6 +12,7 @@ const OFF: AddonConfig = {
     initialMode: 'dry-run',
     allowApply: false,
     excludedChannels: new Set(),
+    warnings: [],
 };
 
 describe('addonDiscordIntents', () => {

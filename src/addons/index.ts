@@ -1,4 +1,9 @@
+import type { Sequelize } from 'sequelize';
 import type { AddonConfig } from './config';
+import {
+    initAddonDatabase as migrateAddonDatabase,
+    type AddonDatabaseState,
+} from './db/migrator';
 import { AddonHost, selectAddons, type AddonFactories } from './host';
 import { IsolationBoundary, type AddonLogger } from './isolation';
 import { AddonModeController } from './mode';
@@ -11,7 +16,23 @@ import { createIdentityAddon, type IdentityPorts } from '../identity';
 
 export { requireAddonConfig } from './config';
 export { addonDiscordIntents } from './intents';
-export { initAddonDatabase } from './db/migrator';
+
+/**
+ * The result of the last {@link initAddonDatabase} call. Upstream's
+ * src/index.ts ignores its return value, so {@link startAddons} reads it
+ * here: after a failed migration the add-ons stay off and the relay runs.
+ */
+let databaseState: AddonDatabaseState | null = null;
+
+/** Prepares the add-on tables and records whether they are ready. */
+export async function initAddonDatabase(
+    config: AddonConfig,
+    sequelize: Sequelize,
+    logger: AddonLogger
+): Promise<AddonDatabaseState> {
+    databaseState = await migrateAddonDatabase(config, sequelize, logger);
+    return databaseState;
+}
 
 export interface AddonsHandle {
     stop(): Promise<void>;
@@ -76,7 +97,15 @@ export async function startAddons(
     factories: AddonFactories
 ): Promise<AddonsHandle | null> {
     if (!config.enabled) {
+        for (const warning of config.warnings)
+            logger.warn(`[addons] ${warning}`);
         logger.info('[addons] Add-ons are disabled');
+        return null;
+    }
+    if (databaseState === 'failed') {
+        logger.error(
+            '[addons] Add-ons are off because their migrations failed. The relay keeps running.'
+        );
         return null;
     }
 
