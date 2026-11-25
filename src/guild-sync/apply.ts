@@ -81,6 +81,8 @@ export interface ApplyInput {
     readonly rows: readonly MapRow[];
     /** Linked accounts, source user ID to destination user ID. */
     readonly members?: ReadonlyMap<string, string>;
+    /** Source channels locked while their history imports. */
+    readonly historyLocked?: ReadonlySet<string>;
 }
 
 export interface ApplyDeps {
@@ -837,6 +839,7 @@ async function applyOp(
         members: state.input.members,
         hiddenFromEveryone: everyoneHidden(source, plan.direction),
         maxBitrate: maxBitrateOf(destination),
+        historyLocked: state.input.historyLocked,
     };
     const action = writeFor(op, ctx);
     const held = action.type === 'skip' ? action.reason : holdReason(state, op);

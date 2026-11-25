@@ -48,6 +48,8 @@ export interface WriteContext {
     readonly hiddenFromEveryone?: boolean;
     /** The destination's voice bitrate cap (see ProjectionContext). */
     readonly maxBitrate?: number;
+    /** Channels locked while their history imports (see ProjectionContext). */
+    readonly historyLocked?: ReadonlySet<string>;
 }
 
 /**

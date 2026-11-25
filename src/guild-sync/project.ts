@@ -13,7 +13,6 @@ import type {
     EmojiSnap,
     GuildSettingsSnap,
     GuildSnapshot,
-    OverwriteSnap,
     RoleSnap,
     StickerSnap,
     ThreadSnap,
@@ -47,6 +46,65 @@ export interface ProjectionContext {
     readonly hiddenFromEveryone?: boolean;
     /** The highest voice bitrate the destination accepts, if capped. */
     readonly maxBitrate?: number;
+    /**
+     * Source channels whose history import is not finished. Their copies
+     * deny @everyone posting and reacting until it is (historyLocks).
+     */
+    readonly historyLocked?: ReadonlySet<string>;
+}
+
+/**
+ * Denied to @everyone on a copy while its history imports: SendMessages,
+ * AddReactions and SendMessagesInThreads. The channel is not bridged yet,
+ * so posts there would never reach Discord and would land in the middle
+ * of the imported history.
+ */
+const HISTORY_LOCK_BITS = bitOf(11) | bitOf(6) | bitOf(38);
+
+/** Channel types whose history is imported: text, voice, announcement. */
+const HISTORY_TYPES: ReadonlySet<number> = new Set([0, 2, 5]);
+
+/**
+ * The source channels to lock while history import gates bridging: text,
+ * voice and announcement channels not ready yet. Forums (their posts are
+ * handled apart), excluded channels and the admin channel never lock.
+ */
+export function historyLocks(
+    channels: readonly ChannelSnap[],
+    gate: {
+        readonly ready?: ReadonlySet<string>;
+        readonly never: ReadonlySet<string>;
+        readonly excluded?: ReadonlySet<string>;
+    }
+): ReadonlySet<string> {
+    const { ready } = gate;
+    if (!ready) return new Set();
+    const locked = new Set<string>();
+    for (const c of channels) {
+        if (!HISTORY_TYPES.has(c.type) || ready.has(c.id)) continue;
+        if (gate.never.has(c.id) || gate.excluded?.has(c.id)) continue;
+        locked.add(c.id);
+    }
+    return locked;
+}
+
+/** Adds the history lock to the @everyone entry of a projected list. */
+function withHistoryLock(
+    list: Record<string, string>[],
+    ctx: ProjectionContext
+): void {
+    const lock = translatePermissions(HISTORY_LOCK_BITS, ctx.direction).bits;
+    const everyone = list.find((o) => o.id === ctx.map.destEveryone);
+    if (!everyone) {
+        list.push({
+            id: ctx.map.destEveryone,
+            allow: '0',
+            deny: lock.toString(),
+        });
+        return;
+    }
+    everyone.allow = (BigInt(everyone.allow) & ~lock).toString();
+    everyone.deny = (BigInt(everyone.deny) | lock).toString();
 }
 
 /**
@@ -174,9 +232,10 @@ function sortOverwrites(list: Record<string, string>[]): JsonValue {
 const MEMBER_TYPE = '1';
 
 function sourceOverwrites(
-    overwrites: readonly OverwriteSnap[],
+    channel: ChannelSnap,
     ctx: ProjectionContext
 ): JsonValue {
+    const { overwrites } = channel;
     const list: Record<string, string>[] = [];
     for (const overwrite of overwrites) {
         const destId =
@@ -201,6 +260,7 @@ function sourceOverwrites(
             deny: VIEW_CHANNEL.toString(),
         });
     }
+    if (ctx.historyLocked?.has(channel.id)) withHistoryLock(list, ctx);
     return sortOverwrites(list);
 }
 
@@ -305,7 +365,7 @@ export function projectSourceChannel(
     const fields: Record<string, JsonValue> = {
         name: channel.name,
         ...kindFields(channel, sourceEmoji(ctx), ctx.maxBitrate),
-        overwrites: sourceOverwrites(channel.overwrites, ctx),
+        overwrites: sourceOverwrites(channel, ctx),
     };
     if (channel.parentId === null) fields.parentId = null;
     else {

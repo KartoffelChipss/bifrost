@@ -17,6 +17,7 @@ import {
 } from './guards';
 import { checkShrink, checkSourceHealth } from './health';
 import { IdMap } from './idmap';
+import { historyLocks } from './project';
 import type { ChannelLinker, ThreadSource } from './links';
 import {
     applyNotice,
@@ -355,6 +356,7 @@ async function buildBody(
     body: PlanBody;
     rows: MapRow[];
     members: ReadonlyMap<string, string> | undefined;
+    historyLocked: ReadonlySet<string>;
 }> {
     const { direction } = settings;
     const { source, destination } = gated;
@@ -364,15 +366,22 @@ async function buildBody(
     await deps.store.saveMissing(missing, now);
     const rows = applyMissing(loaded, missing);
 
+    const excluded = excludedIds(source, deps.excludedChannels ?? new Set());
+    const links = await linkState(link, settings, deps);
     const found = diff({
         source,
         destination,
         previousSource: gated.lastHealthy,
         rows,
         direction,
-        excluded: excludedIds(source, deps.excludedChannels ?? new Set()),
+        excluded,
         members,
-        links: await linkState(link, settings, deps),
+        links,
+    });
+    const historyLocked = historyLocks(source.channels, {
+        ready: links?.historyReady,
+        never: links?.never ?? new Set(),
+        excluded,
     });
     const removals = await confirmedRemovals(
         link,
@@ -419,7 +428,7 @@ async function buildBody(
         approvalReason: budget.needsApproval ? budget.reason : null,
         removalRowIds: removals.rowIds,
     };
-    return { body, rows, members };
+    return { body, rows, members, historyLocked };
 }
 
 /**
@@ -500,6 +509,7 @@ async function applySaved(
     built: {
         rows: readonly MapRow[];
         members: ReadonlyMap<string, string> | undefined;
+        historyLocked?: ReadonlySet<string>;
     },
     deps: CycleDeps,
     removalsHeld = false
@@ -522,6 +532,7 @@ async function applySaved(
             destination: gated.destination,
             rows: built.rows,
             members: built.members,
+            historyLocked: built.historyLocked,
         },
         {
             store: deps.store,

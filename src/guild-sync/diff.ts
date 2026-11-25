@@ -11,6 +11,7 @@ import {
 import type { Fields, ProjectionContext } from './project';
 import {
     everyoneHidden,
+    historyLocks,
     maxBitrateOf,
     projectDestChannel,
     projectDestRole,
@@ -623,6 +624,11 @@ export function diff(input: DiffInput): DiffResult {
         members: input.members,
         hiddenFromEveryone: everyoneHidden(input.source, input.direction),
         maxBitrate: maxBitrateOf(input.destination),
+        historyLocked: historyLocks(input.source.channels, {
+            ready: input.links?.historyReady,
+            never: input.links?.never ?? new Set(),
+            excluded: input.excluded,
+        }),
     };
     const out: Out = { ops: [], findings: [] };
     diffStructure(input, ctx, out);
