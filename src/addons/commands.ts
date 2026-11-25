@@ -5,6 +5,7 @@ import DiscordCommandHandler, {
 } from '../commands/discord/DiscordCommandHandler';
 import { SyncDiscordCommandHandler } from '../guild-sync/commandHandler';
 import type { LinkedGuild } from '../guild-sync/cycle';
+import { PostgresHistoryStore } from '../history/store';
 import { PostgresGuildSyncStore } from '../guild-sync/store';
 import { EmbedColors } from '../utils/embeds';
 import type { AddonConfig } from './config';
@@ -57,6 +58,7 @@ export function addonDiscordCommands(
         return { sync: (client) => new AddonsOffCommandHandler(client) };
     }
     const store = new PostgresGuildSyncStore(deps.sequelize);
+    const history = new PostgresHistoryStore(deps.sequelize);
     return {
         sync: (client) =>
             new SyncDiscordCommandHandler(client, {
@@ -65,6 +67,9 @@ export function addonDiscordCommands(
                 allowApply: config.allowApply,
                 ownerId: deps.discordOwnerId,
                 isChannelLinked: deps.isChannelLinked,
+                retryHistory: config.history
+                    ? (linkId, now) => history.retryFailed(linkId, now)
+                    : undefined,
                 now: () => new Date(),
             }),
     };

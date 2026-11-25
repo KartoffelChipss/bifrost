@@ -14,6 +14,7 @@ export type SyncCommand =
     | { readonly type: 'mode'; readonly mode: SyncMode }
     | { readonly type: 'kill'; readonly on: boolean }
     | { readonly type: 'enforce'; readonly on: boolean }
+    | { readonly type: 'history-retry' }
     | { readonly type: 'channel'; readonly here: boolean }
     | { readonly type: 'approve'; readonly planId: string }
     | { readonly type: 'reject'; readonly planId: string }
@@ -25,6 +26,7 @@ export const SYNC_USAGE = [
     '`sync mode <dry-run|apply|read-only>`',
     '`sync kill <on|off>`',
     '`sync enforce <on|off>`',
+    '`sync history retry`',
     '`sync channel <here|off>`',
     '`sync approve <plan-id>`',
     '`sync reject <plan-id>`',
@@ -48,6 +50,9 @@ export function parseSyncCommand(args: readonly string[]): SyncCommand {
     if (verb === 'enforce' && args.length === 2) {
         if (value === 'on') return { type: 'enforce', on: true };
         if (value === 'off') return { type: 'enforce', on: false };
+    }
+    if (verb === 'history' && value === 'retry' && args.length === 2) {
+        return { type: 'history-retry' };
     }
     if (verb === 'channel' && args.length === 2) {
         if (value === 'here') return { type: 'channel', here: true };
@@ -102,6 +107,11 @@ export interface SyncCommandContext {
         | 'setPlanStatus'
         | 'getPlan'
     >;
+    /**
+     * Puts the link's failed history imports back to work, returning how
+     * many. Absent when history import is off.
+     */
+    readonly retryHistory?: (guildLinkId: string, now: Date) => Promise<number>;
     /** True for a channel the relay bridges. Notices must not go there. */
     readonly isChannelLinked: (channelId: string) => Promise<boolean>;
     readonly now: () => Date;
@@ -119,16 +129,36 @@ async function pendingPlan(
     return waiting ? plan : null;
 }
 
+/** A command that worked and has something to say besides the status. */
+export interface SyncCommandNote {
+    readonly note: string;
+}
+
+async function retryHistory(
+    link: LinkedGuild,
+    ctx: SyncCommandContext
+): Promise<string | SyncCommandNote> {
+    if (!ctx.retryHistory) return 'History import is not switched on.';
+    const count = await ctx.retryHistory(link.id, ctx.now());
+    return {
+        note:
+            count === 0
+                ? 'No history import had failed.'
+                : `Restarted ${count} failed history import${count === 1 ? '' : 's'}.`,
+    };
+}
+
 /**
- * Carries out one command. Returns an error text, or null when it worked.
- * Once an admin channel is set, every command must come from it.
+ * Carries out one command. Returns an error text, null when it worked, or
+ * a note to show with the status. Once an admin channel is set, every
+ * command must come from it.
  */
 export async function runSyncCommand(
     command: Exclude<SyncCommand, { type: 'error' }>,
     link: LinkedGuild,
     channelId: string,
     ctx: SyncCommandContext
-): Promise<string | null> {
+): Promise<string | SyncCommandNote | null> {
     const { store, now } = ctx;
     const settings = await store.loadSettings(link.id);
     const admin = settings.adminChannelId;
@@ -150,6 +180,8 @@ export async function runSyncCommand(
         case 'enforce':
             await store.setEnforceDrift(link.id, command.on, now());
             return null;
+        case 'history-retry':
+            return retryHistory(link, ctx);
         case 'channel':
             if (command.here && (await ctx.isChannelLinked(channelId))) {
                 return 'This channel is bridged. Notices here would be copied to the other server. Pick a channel that is not linked.';

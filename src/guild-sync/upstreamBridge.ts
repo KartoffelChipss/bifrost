@@ -1,5 +1,6 @@
 import {
     ForumChannel as FluxerForumChannel,
+    MediaChannel as FluxerMediaChannel,
     Routes,
     ThreadChannel as FluxerThreadChannel,
     type Client as FluxerClient,
@@ -461,7 +462,10 @@ export class UpstreamBridge
             return null;
         }
         const parent = await client.channels.fetch(thread.parentId);
-        const forum = parent instanceof FluxerForumChannel;
+        // Media channels hold posts like forums do.
+        const forum =
+            parent instanceof FluxerForumChannel ||
+            parent instanceof FluxerMediaChannel;
         const tagNames = forum
             ? thread.appliedTags.flatMap((id) => {
                   const tag = parent.availableTags.find((t) => t.id === id);
@@ -505,7 +509,10 @@ export class UpstreamBridge
         const forum = await this.up.discordClient.channels.fetch(
             link.discordChannelId
         );
-        if (forum?.type !== ChannelType.GuildForum) {
+        if (
+            forum?.type !== ChannelType.GuildForum &&
+            forum?.type !== ChannelType.GuildMedia
+        ) {
             throw new Error(`${link.discordChannelId} is not a forum`);
         }
         const appliedTags = info.tags.flatMap((name) => {

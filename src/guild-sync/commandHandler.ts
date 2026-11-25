@@ -92,7 +92,7 @@ export class SyncDiscordCommandHandler extends DiscordCommandHandler {
             message.channelId,
             this.deps
         );
-        if (error !== null) {
+        if (typeof error === 'string') {
             await this.reply(message, error, EmbedColors.Error);
             return;
         }
@@ -102,6 +102,7 @@ export class SyncDiscordCommandHandler extends DiscordCommandHandler {
             allowApply,
             await store.lastPlan(link.id)
         );
-        await this.reply(message, status, EmbedColors.Info);
+        const text = error ? `${error.note}\n\n${status}` : status;
+        await this.reply(message, text, EmbedColors.Info);
     }
 }
