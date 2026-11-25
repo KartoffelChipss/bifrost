@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { PermissionFlagsBits } from 'discord.js';
+import { historyLocks } from '../../src/guild-sync/project';
 import { D_GUILD, F_GUILD, channel, discordGuild, role } from './fixtures';
 import { opCount, setup } from './harness';
 
@@ -75,6 +76,16 @@ describe('posting lock while history imports', () => {
         await s.cycle();
         const settled = await s.cycle();
         assert.equal(opCount(settled.plan), 0);
+    });
+
+    it('never locks a channel the relay bridges already', () => {
+        const channels = guild().channels;
+        const gate = { ready: new Set<string>(), never: new Set(['admin']) };
+        assert.deepEqual([...historyLocks(channels, gate)], ['text']);
+        assert.deepEqual(
+            [...historyLocks(channels, { ...gate, linked: new Set(['text']) })],
+            []
+        );
     });
 
     it('never locks a channel without history gating', async () => {
