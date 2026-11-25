@@ -7,6 +7,7 @@ import {
     ChannelType,
     Events,
     type Client as DiscordClient,
+    type GuildBan,
     type GuildMember,
     type Message,
     type PartialGuildMember,
@@ -23,16 +24,24 @@ import { HistoryEditor } from '../history/editor';
 import { PostgresHistoryStore } from '../history/store';
 import type { HistoryPorts } from '../history/types';
 import type { ChannelLinker } from '../guild-sync/links';
-import { describeUser, handleDm, type DmInput, type FlowDeps } from './flow';
+import {
+    describeUser,
+    handleDm,
+    type DmInput,
+    type DmReply,
+    type FlowDeps,
+} from './flow';
 import { DmGate } from './gate';
 import type { IdentityPorts } from './ports';
 import {
     MAX_LINKS,
     MAX_ROLE_REMOVALS_PER_HOUR,
     RoleSync,
+    SWEEP_BUDGET_MS,
+    rotate,
     type Tally,
 } from './roleSync';
-import { PostgresIdentityStore } from './store';
+import { PostgresIdentityStore, type AccountPair } from './store';
 
 export type { IdentityPorts, MemberState, UserInfo } from './ports';
 
@@ -59,7 +68,8 @@ export interface IdentityDeps {
 function flowDeps(
     deps: IdentityDeps,
     roles: RoleSync,
-    store: PostgresIdentityStore
+    store: PostgresIdentityStore,
+    logger: AddonLogger
 ): FlowDeps {
     const historyStore = deps.historyEnabled
         ? new PostgresHistoryStore(deps.sequelize)
@@ -80,14 +90,35 @@ function flowDeps(
               }
             : null,
         onLinked: (pair) => roles.pair(pair),
+        onUnlinked: (pair) => roles.strip(pair),
         now: () => new Date(),
+        logger,
     };
 }
 
+export const FAILED_REPLY = 'Something went wrong. Try again later.';
+
+/** The replies to a DM. A failure is logged and answered with an apology. */
+async function repliesTo(
+    input: DmInput,
+    flow: FlowDeps,
+    logger: AddonLogger
+): Promise<DmReply[]> {
+    try {
+        return await handleDm(input, flow);
+    } catch (error) {
+        logger.warn(
+            `[identity] Could not handle a DM from ${input.side} user ${input.userId}:`,
+            error
+        );
+        return [{ side: input.side, userId: input.userId, text: FAILED_REPLY }];
+    }
+}
+
 /**
- * Answers a DM and sends the replies. A reply that cannot be sent, such as
- * to a member with DMs closed, is logged and skipped: it is expected, and
- * must not switch the add-ons to read-only.
+ * Answers a DM and sends the replies. A failure while handling it, or a
+ * reply that cannot be sent, such as to a member with DMs closed, is
+ * logged: it is expected, and must not switch the add-ons to read-only.
  */
 export async function answer(
     input: DmInput,
@@ -95,7 +126,7 @@ export async function answer(
     ports: Pick<IdentityPorts, 'sendDm'>,
     logger: AddonLogger
 ): Promise<void> {
-    for (const reply of await handleDm(input, flow)) {
+    for (const reply of await repliesTo(input, flow, logger)) {
         try {
             await ports.sendDm(reply.side, reply.userId, reply.text);
         } catch (error) {
@@ -122,6 +153,23 @@ interface Listeners {
     readonly wrap: Wrap;
 }
 
+/**
+ * Runs a member event's work, logging a failure such as a database error.
+ * An event that reached the add-on boundary would switch every add-on to
+ * read-only.
+ */
+export async function quietly(
+    logger: AddonLogger,
+    what: string,
+    work: () => Promise<void>
+): Promise<void> {
+    try {
+        await work();
+    } catch (error) {
+        logger.warn(`[identity] ${what}:`, error);
+    }
+}
+
 /** Answers one DM unless the gate drops it. */
 async function onDirectMessage(l: Listeners, input: DmInput): Promise<void> {
     if (!l.gate.admit(input.side, input.userId, input.text, Date.now())) return;
@@ -142,21 +190,62 @@ function listenToDiscord(l: Listeners): () => void {
     });
     const onMember = l.wrap(
         'member',
-        async (_old: GuildMember | PartialGuildMember, member: GuildMember) => {
-            const pair = await l.store.pairFor('discord', member.id);
-            if (pair)
-                await l.roles.pair(
-                    pair,
-                    (link) => link.discordGuildId === member.guild.id
-                );
-        }
+        (_old: GuildMember | PartialGuildMember, member: GuildMember) =>
+            syncDiscordMember(l, member.id, member.guild.id)
     );
+    // A member who left holds no roles, so their synced roles go too.
+    const onLeave = l.wrap(
+        'member-leave',
+        (member: GuildMember | PartialGuildMember) =>
+            syncDiscordMember(l, member.id, member.guild.id)
+    );
+    const stopBans = listenToDiscordBans(l);
     client.on(Events.MessageCreate, onDm);
     client.on(Events.GuildMemberUpdate, onMember);
+    client.on(Events.GuildMemberRemove, onLeave);
     return () => {
+        stopBans();
         client.off(Events.MessageCreate, onDm);
         client.off(Events.GuildMemberUpdate, onMember);
+        client.off(Events.GuildMemberRemove, onLeave);
     };
+}
+
+/**
+ * Discord bans and unbans of linked members (Guild Moderation intent). A
+ * ban is applied by the member sync, which finds it; an unban lifts only
+ * a Fluxer ban the sync made.
+ */
+function listenToDiscordBans(l: Listeners): () => void {
+    const client = l.deps.discordClient;
+    const onBan = l.wrap('ban', (ban: GuildBan) =>
+        syncDiscordMember(l, ban.user.id, ban.guild.id)
+    );
+    const onUnban = l.wrap('unban', (ban: GuildBan) =>
+        quietly(l.logger, `Unban of ${ban.user.id}`, async () => {
+            const pair = await l.store.pairFor('discord', ban.user.id);
+            if (pair) await l.roles.unban(pair, ban.guild.id);
+        })
+    );
+    client.on(Events.GuildBanAdd, onBan);
+    client.on(Events.GuildBanRemove, onUnban);
+    return () => {
+        client.off(Events.GuildBanAdd, onBan);
+        client.off(Events.GuildBanRemove, onUnban);
+    };
+}
+
+/** Syncs a linked Discord member on the links of one Discord server. */
+function syncDiscordMember(
+    l: Listeners,
+    userId: string,
+    guildId: string
+): Promise<void> {
+    return quietly(l.logger, `Member change of ${userId}`, async () => {
+        const pair = await l.store.pairFor('discord', userId);
+        if (pair)
+            await l.roles.pair(pair, (link) => link.discordGuildId === guildId);
+    });
 }
 
 interface FluxerDm {
@@ -181,15 +270,19 @@ function listenToFluxer(l: Listeners, client: FluxerClient): () => void {
             text: message.content ?? '',
         });
     });
-    const onJoin = l.wrap('join', async (member: FluxerJoin) => {
-        const userId = member.user?.id ?? member.id;
-        const pair = userId ? await l.store.pairFor('fluxer', userId) : null;
-        if (pair)
-            await l.roles.pair(
-                pair,
-                (link) => link.fluxerGuildId === member.guild?.id
-            );
-    });
+    const onJoin = l.wrap('join', (member: FluxerJoin) =>
+        quietly(l.logger, 'Fluxer member join', async () => {
+            const userId = member.user?.id ?? member.id;
+            const pair = userId
+                ? await l.store.pairFor('fluxer', userId)
+                : null;
+            if (pair)
+                await l.roles.pair(
+                    pair,
+                    (link) => link.fluxerGuildId === member.guild?.id
+                );
+        })
+    );
     client.on(FluxerEvents.MessageCreate, onDm);
     client.on(FluxerEvents.GuildMemberAdd, onJoin);
     return () => {
@@ -210,35 +303,72 @@ function listen(l: Listeners): () => void {
 }
 
 /** The admin notice for one link in dry-run. */
-export function dryRunNotice(pairs: number, tally: Tally): string {
-    return `Account linking (dry-run): ${pairs} linked members. Would add ${tally.add} roles, remove ${tally.remove} roles and set ${tally.nicks} nicknames. At most ${MAX_ROLE_REMOVALS_PER_HOUR} role removals per hour are applied.`;
+export function dryRunNotice(
+    pairs: number,
+    tally: Tally,
+    checked = pairs
+): string {
+    const partial =
+        checked < pairs
+            ? ` (${checked} checked this sweep; the rest next)`
+            : '';
+    return `Account linking (dry-run): ${pairs} linked members${partial}. Would add ${tally.add} roles, remove ${tally.remove} roles, set ${tally.nicks} nicknames, ban ${tally.bans} and set ${tally.timeouts} timeouts. At most ${MAX_ROLE_REMOVALS_PER_HOUR} role removals per hour are applied.`;
 }
 
-/** Housekeeping, then one pass over every linked member and guild link. */
-async function sweep(
-    deps: IdentityDeps,
-    roles: RoleSync,
-    store: PostgresIdentityStore,
-    notices: NoticeBoard
-) {
+/** Where each guild link's next sweep resumes, by pair index. */
+type Cursors = Map<string, number>;
+
+interface SweepParts {
+    readonly roles: RoleSync;
+    readonly store: PostgresIdentityStore;
+    readonly notices: NoticeBoard;
+    readonly logger: AddonLogger;
+}
+
+/**
+ * Housekeeping, then one pass over the guild links and their linked
+ * members, bounded by SWEEP_BUDGET_MS; each link resumes where its last
+ * sweep stopped. One link's failure is logged and skips only that link.
+ */
+async function sweep(deps: IdentityDeps, s: SweepParts, cursors: Cursors) {
     const now = new Date();
-    await store.purgeExpired(
+    const deadline = now.getTime() + SWEEP_BUDGET_MS;
+    await s.store.purgeExpired(
         now,
         new Date(now.getTime() - FAILURE_RETENTION_MS)
     );
-    const pairs = await store.listPairs();
+    const pairs = await s.store.listPairs();
     for (const link of (await deps.listGuildLinks()).slice(0, MAX_LINKS)) {
-        const result = await roles.sweepLink(link, pairs);
-        if (!result || result.plan.mode !== 'dry-run' || pairs.length === 0)
-            continue;
-        const text = dryRunNotice(pairs.length, result.tally);
-        await notices.post(
-            `identity:${link.id}`,
-            result.plan.adminChannelId,
-            text,
-            text
+        if (Date.now() >= deadline) break;
+        await quietly(s.logger, `Sweep of guild link ${link.id}`, () =>
+            sweepOne(link, pairs, deadline, s, cursors)
         );
     }
+}
+
+async function sweepOne(
+    link: LinkedGuild,
+    pairs: readonly AccountPair[],
+    deadline: number,
+    s: SweepParts,
+    cursors: Cursors
+): Promise<void> {
+    const start = cursors.get(link.id) ?? 0;
+    const result = await s.roles.sweepLink(
+        link,
+        rotate(pairs, start),
+        deadline
+    );
+    if (!result) return;
+    cursors.set(link.id, (start + result.checked) % Math.max(pairs.length, 1));
+    if (result.plan.mode !== 'dry-run' || pairs.length === 0) return;
+    const text = dryRunNotice(pairs.length, result.tally, result.checked);
+    await s.notices.post(
+        `identity:${link.id}`,
+        result.plan.adminChannelId,
+        text,
+        text
+    );
 }
 
 function createRoleSync(deps: IdentityDeps, context: AddonContext) {
@@ -261,14 +391,20 @@ function sweepTask(
     store: PostgresIdentityStore
 ): RepeatingTask {
     const lock = new PostgresGuildSyncStore(deps.sequelize);
-    const notices = new NoticeBoard(deps.sendNotice, context.logger);
+    const parts: SweepParts = {
+        roles,
+        store,
+        notices: new NoticeBoard(deps.sendNotice, context.logger),
+        logger: context.logger,
+    };
+    const cursors: Cursors = new Map();
     const holder = `${hostname()}:${process.pid}:identity`;
     return new RepeatingTask(
         async () => {
             await context.boundary.run(ADDON_NAME, 'sweep', () =>
                 lock.withLeaderLock(
                     holder,
-                    () => sweep(deps, roles, store, notices),
+                    () => sweep(deps, parts, cursors),
                     IDENTITY_LOCK_KEY
                 )
             );
@@ -294,7 +430,7 @@ export function createIdentityAddon(deps: IdentityDeps): Addon {
             const roles = createRoleSync(deps, context);
             stopListening = listen({
                 deps,
-                flow: flowDeps(deps, roles, store),
+                flow: flowDeps(deps, roles, store, context.logger),
                 roles,
                 store,
                 gate: new DmGate(deps.commandPrefix),

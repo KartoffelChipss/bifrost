@@ -2,7 +2,6 @@ import {
     ForumChannel as FluxerForumChannel,
     Routes,
     ThreadChannel as FluxerThreadChannel,
-    Webhook as FluxerWebhook,
     type Client as FluxerClient,
     type Message as FluxerMessage,
 } from '@fluxerjs/core';
@@ -14,11 +13,14 @@ import {
     type Client as DiscordClient,
 } from 'discord.js';
 import type {
+    FluxerCopy,
     HistoryPorts,
     PayloadOptions,
     SendTarget,
     SourceMessage,
 } from '../history/types';
+import { dateNote, defuseMentions, optOutPayload } from '../history/format';
+import { copyWebhook, NO_MENTIONS } from '../history/quietWebhook';
 import type { IdentityPorts, MemberState, UserInfo } from '../identity';
 import type { Side } from '../identity/store';
 import type { SnapshotSide } from '../addons/db/schema';
@@ -71,6 +73,9 @@ export interface UpstreamServices {
 type DiscordMessage = Parameters<
     DiscordMessageTransformer['transformMessage']
 >[0];
+
+/** Upstream names its Discord bridge webhooks with this prefix. */
+const BRIDGE_HOOK_NAME = 'Fluxer Bridge Webhook for channel';
 
 /** A first message older than this is marked with its original time. */
 const BACKFILL_AGE_MS = 10 * 60_000;
@@ -254,7 +259,7 @@ export class UpstreamBridge
     // ---- ThreadSource
 
     async starter(guildId: string, threadId: string): Promise<RelayPayload> {
-        const { discordClient, linkService } = this.up;
+        const { discordClient } = this.up;
         const thread = await discordClient.channels.fetch(threadId);
         if (!thread?.isThread()) throw new Error(`${threadId} is not a thread`);
         const message = await thread.fetchStarterMessage().catch(() => null);
@@ -266,25 +271,47 @@ export class UpstreamBridge
                 avatarURL: discordClient.user?.avatarURL() ?? '',
             };
         }
-        const guildLink =
-            await linkService.getGuildLinkForDiscordGuild(guildId);
-        const payload = await this.toFluxerPayload(
-            message as DiscordMessage,
-            guildLink?.id ?? ''
-        );
+        const payload = (await this.isOptedOut(message.author.id))
+            ? optOutPayload()
+            : await this.starterPayload(guildId, message as DiscordMessage);
         if (Date.now() - message.createdTimestamp < BACKFILL_AGE_MS)
             return payload;
         // Fluxer dates a message at the moment it is posted, so an older
         // post carries its original time in the text.
-        const when = message.createdAt
-            .toISOString()
-            .slice(0, 16)
-            .replace('T', ' ');
-        const note = `*Originally posted ${when} UTC*`;
+        const note = dateNote(message.createdAt);
         return {
             ...payload,
             content: payload.content ? `${payload.content}\n${note}` : note,
         };
+    }
+
+    /** A starter as the relay formats it, pinging no one. */
+    private async starterPayload(
+        guildId: string,
+        message: DiscordMessage
+    ): Promise<RelayPayload> {
+        const guildLink =
+            await this.up.linkService.getGuildLinkForDiscordGuild(guildId);
+        const relayed = await this.toFluxerPayload(
+            message,
+            guildLink?.id ?? ''
+        );
+        return { ...relayed, content: defuseMentions(relayed.content) };
+    }
+
+    private optOuts: ((discordUserId: string) => Promise<boolean>) | null =
+        null;
+
+    /**
+     * Sets history's opt-out check, so an opted-out member's first message
+     * of an old forum post shows a placeholder. Null removes it.
+     */
+    useOptOuts(check: ((discordUserId: string) => Promise<boolean>) | null) {
+        this.optOuts = check;
+    }
+
+    private async isOptedOut(discordUserId: string): Promise<boolean> {
+        return this.optOuts ? this.optOuts(discordUserId) : false;
     }
 
     /**
@@ -549,6 +576,7 @@ export class UpstreamBridge
             copyable: this.copyableTypes.has(m.type),
             attachments: m.attachments.size,
             webhookId: m.webhookId ?? null,
+            ownWebhook: this.fromOwnApp(m),
             // Discord sends the quoted message's author with a reply.
             reply:
                 m.type === MessageType.Reply
@@ -562,6 +590,36 @@ export class UpstreamBridge
             })),
             raw: m,
         };
+    }
+
+    /**
+     * Discord sets `application_id` on a message from an application-owned
+     * webhook; upstream's bridge webhooks are made by this bot.
+     */
+    private fromOwnApp(m: DiscordMessage): boolean {
+        const { discordClient } = this.up;
+        const own = discordClient.application?.id ?? discordClient.user?.id;
+        return Boolean(m.webhookId && own && m.applicationId === own);
+    }
+
+    async bridgeWebhookIds(discordChannelId: string): Promise<Set<string>> {
+        const { discordClient } = this.up;
+        const channel = await discordClient.channels
+            .fetch(discordChannelId)
+            .catch(() => null);
+        if (!channel || !('fetchWebhooks' in channel)) return new Set();
+        const hooks = await channel.fetchWebhooks().catch(() => null);
+        if (!hooks) return new Set();
+        const me = discordClient.user?.id;
+        return new Set(
+            [...hooks.values()]
+                .filter(
+                    (h) =>
+                        h.name.startsWith(BRIDGE_HOOK_NAME) ||
+                        (me !== undefined && h.owner?.id === me)
+                )
+                .map((h) => h.id)
+        );
     }
 
     async listMessages(
@@ -631,21 +689,9 @@ export class UpstreamBridge
         );
     }
 
-    private copyWebhook(target: SendTarget) {
-        return target.threadId
-            ? fluxerThreadWebhook(this.fluxer(), target.webhook, {
-                  threadId: target.threadId,
-              })
-            : FluxerWebhook.fromToken(
-                  this.fluxer(),
-                  target.webhook.id,
-                  target.webhook.token
-              );
-    }
-
     async sendCopy(target: SendTarget, payload: RelayPayload): Promise<string> {
         const sent = await this.up.webhookService.sendMessageViaFluxerWebhook(
-            this.copyWebhook(target),
+            copyWebhook(this.fluxer(), target),
             payload
         );
         return sent.messageId;
@@ -666,7 +712,7 @@ export class UpstreamBridge
     ): Promise<void> {
         // Only the text changes, so the copy keeps its attachments.
         await this.fluxer().rest.patch(this.copyRoute(target, messageId), {
-            body: { content },
+            body: { content, allowed_mentions: NO_MENTIONS },
             auth: false,
         });
     }
@@ -677,7 +723,10 @@ export class UpstreamBridge
         });
     }
 
-    async newestFluxerMessage(fluxerId: string) {
+    async recentFluxerMessages(
+        fluxerId: string,
+        limit: number
+    ): Promise<FluxerCopy[]> {
         const channel = await this.fluxer().channels.fetch(fluxerId, {
             force: true,
         });
@@ -690,11 +739,23 @@ export class UpstreamBridge
                 };
             }
         ).messages;
-        if (!manager) return null;
-        const newest = [...(await manager.fetch({ limit: 1 })).values()][0];
-        return newest
-            ? { id: newest.id, webhookId: newest.webhookId ?? null }
-            : null;
+        if (!manager) return [];
+        const page = await manager.fetch({ limit });
+        return [...page.values()]
+            .sort((a, b) => (BigInt(a.id) > BigInt(b.id) ? -1 : 1))
+            .map((m) => ({
+                id: m.id,
+                webhookId: m.webhookId ?? null,
+                content: m.content ?? '',
+            }));
+    }
+
+    async relayedLiveFluxer(fluxerMessageId: string): Promise<boolean> {
+        const link =
+            await this.up.linkService.getMessageLinkByFluxerMessageId(
+                fluxerMessageId
+            );
+        return link !== null && link !== undefined;
     }
 
     createImportWebhook(fluxerChannelId: string) {
@@ -716,6 +777,16 @@ export class UpstreamBridge
             archived: thread.archived ?? false,
             locked: thread.locked ?? false,
         };
+    }
+
+    async linkCreatedAt(discordChannelId: string): Promise<Date | null> {
+        const link =
+            await this.up.linkService.getChannelLinkByDiscordChannelId(
+                discordChannelId
+            );
+        if (!link) return null;
+        const at = new Date(link.createdAt);
+        return Number.isNaN(at.getTime()) ? null : at;
     }
 
     async relayedLive(discordMessageId: string): Promise<boolean> {
@@ -774,6 +845,8 @@ export class UpstreamBridge
                     (id) => id !== guildId
                 ),
                 nick: member.nickname,
+                timeoutUntil:
+                    member.communicationDisabledUntil?.toISOString() ?? null,
             };
         } catch (error) {
             const unknown =
@@ -792,7 +865,12 @@ export class UpstreamBridge
         const guild = await this.fluxer().guilds.fetch(guildId);
         try {
             const member = await guild.fetchMember(userId);
-            return { roleIds: [...member.roles.roleIds], nick: member.nick };
+            return {
+                roleIds: [...member.roles.roleIds],
+                nick: member.nick,
+                timeoutUntil:
+                    member.communicationDisabledUntil?.toISOString() ?? null,
+            };
         } catch (error) {
             if ((error as { statusCode?: unknown }).statusCode === 404) {
                 return null;
@@ -819,6 +897,58 @@ export class UpstreamBridge
         const guild = await this.fluxer().guilds.fetch(guildId);
         const member = await guild.fetchMember(userId);
         await member.edit({ nick });
+    }
+
+    async discordBanned(guildId: string, userId: string): Promise<boolean> {
+        const guild = await this.up.discordClient.guilds.fetch(guildId);
+        try {
+            await guild.bans.fetch({ user: userId, force: true });
+            return true;
+        } catch (error) {
+            const unknown =
+                error instanceof DiscordAPIError &&
+                error.code === RESTJSONErrorCodes.UnknownBan;
+            if (unknown) return false;
+            throw error;
+        }
+    }
+
+    async banFluxerMember(
+        guildId: string,
+        userId: string,
+        reason: string
+    ): Promise<void> {
+        const guild = await this.fluxer().guilds.fetch(guildId);
+        await guild.ban(userId, { reason });
+    }
+
+    async fluxerBanReason(
+        guildId: string,
+        userId: string
+    ): Promise<string | null> {
+        const guild = await this.fluxer().guilds.fetch(guildId);
+        const bans = await guild.fetchBans();
+        const ban = bans.find((b) => b.user.id === userId);
+        return ban ? (ban.reason ?? '') : null;
+    }
+
+    async unbanFluxerMember(guildId: string, userId: string): Promise<void> {
+        const guild = await this.fluxer().guilds.fetch(guildId);
+        await guild.unban(userId, 'Unbanned on Discord');
+    }
+
+    /** Fluxer takes the end as communication_disabled_until (ISO time). */
+    async setFluxerTimeout(
+        guildId: string,
+        userId: string,
+        until: string | null
+    ): Promise<void> {
+        const guild = await this.fluxer().guilds.fetch(guildId);
+        const member = await guild.fetchMember(userId);
+        await member.edit({
+            communicationDisabledUntil: until,
+            timeoutReason: until ? 'Timed out on Discord' : null,
+        });
     }
 
     // ---- ReactionPorts (src/relay-extras: live reactions and pins)

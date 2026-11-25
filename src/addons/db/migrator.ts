@@ -8,6 +8,7 @@ import * as adminApproval from './migrations/00003-settings-admin-approval';
 import * as threads from './migrations/00004-threads';
 import * as historyIdentity from './migrations/00005-history-identity';
 import * as parkedMessages from './migrations/00006-parked-messages';
+import * as historyResilience from './migrations/00007-history-resilience';
 import { MIGRATIONS_MODEL, MIGRATIONS_TABLE } from './schema';
 
 /**
@@ -37,6 +38,11 @@ const MIGRATIONS: RunnableMigration<QueryInterface>[] = [
         name: '00006-parked-messages',
         up: parkedMessages.up,
         down: parkedMessages.down,
+    },
+    {
+        name: '00007-history-resilience',
+        up: historyResilience.up,
+        down: historyResilience.down,
     },
 ];
 

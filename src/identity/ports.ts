@@ -14,6 +14,8 @@ export interface MemberState {
     readonly roleIds: readonly string[];
     /** The server nickname, or null when the member has none. */
     readonly nick: string | null;
+    /** When the member's timeout ends, as an ISO time; null for none. */
+    readonly timeoutUntil?: string | null;
 }
 
 /** The platform calls account linking needs. */
@@ -33,5 +35,21 @@ export interface IdentityPorts {
         guildId: string,
         userId: string,
         nick: string | null
+    ): Promise<void>;
+    /** True when the user is banned from the Discord server. */
+    discordBanned(guildId: string, userId: string): Promise<boolean>;
+    banFluxerMember(
+        guildId: string,
+        userId: string,
+        reason: string
+    ): Promise<void>;
+    /** The reason of the user's Fluxer ban, or null when not banned. */
+    fluxerBanReason(guildId: string, userId: string): Promise<string | null>;
+    unbanFluxerMember(guildId: string, userId: string): Promise<void>;
+    /** Sets the Fluxer timeout end (ISO time); null lifts it. */
+    setFluxerTimeout(
+        guildId: string,
+        userId: string,
+        until: string | null
     ): Promise<void>;
 }

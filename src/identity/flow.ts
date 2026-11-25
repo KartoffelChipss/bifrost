@@ -1,5 +1,7 @@
 import { createHash, randomInt } from 'node:crypto';
+import type { AddonLogger } from '../addons/isolation';
 import type { HistoryEditor } from '../history/editor';
+import type { ImportedMessage } from '../history/types';
 import type { UserInfo } from './ports';
 import type { AccountPair, IdentityStore, Side } from './store';
 
@@ -46,8 +48,12 @@ export interface FlowDeps {
     } | null;
     /** Called after a pair is saved, so roles can sync at once. */
     readonly onLinked: (pair: AccountPair) => Promise<void>;
+    /** Called after a pair is removed, so its synced roles go. */
+    readonly onUnlinked: (pair: AccountPair) => Promise<void>;
     readonly now: () => Date;
     readonly newCode?: () => string;
+    /** Failures the member is told about in a reply are logged here. */
+    readonly logger: Pick<AddonLogger, 'warn'>;
 }
 
 export function generateCode(): string {
@@ -168,7 +174,7 @@ async function redeem(
         confirmUserId: ownerId,
         expiresAt: new Date(now().getTime() + CODE_TTL_MS),
     });
-    const name = await deps.nameOf(input.side, input.userId);
+    const name = await nameFor(input, deps);
     return [
         ...reply(
             input,
@@ -180,6 +186,22 @@ async function redeem(
             text: `Link this account to ${label(input.side)} user **${name}**? Reply \`yes\` or \`no\`.`,
         },
     ];
+}
+
+/**
+ * The redeeming user as the confirmation question names them. When the
+ * lookup fails, the unique ID alone still tells the accounts apart.
+ */
+async function nameFor(input: DmInput, deps: FlowDeps): Promise<string> {
+    try {
+        return await deps.nameOf(input.side, input.userId);
+    } catch (error) {
+        deps.logger.warn(
+            `[identity] Could not look up ${input.side} user ${input.userId}:`,
+            error
+        );
+        return `user ID ${input.userId}`;
+    }
 }
 
 async function confirm(
@@ -221,8 +243,9 @@ async function confirm(
 async function unlink(input: DmInput, deps: FlowDeps): Promise<DmReply[]> {
     const pair = await deps.store.deletePair(input.side, input.userId);
     if (!pair) return reply(input, 'This account is not linked.');
+    await deps.onUnlinked(pair);
     const text =
-        'Your accounts are unlinked. Roles already given stay, but stop syncing.';
+        'Your accounts are unlinked. Synced roles stop following you and are removed from your Fluxer account.';
     return [
         { side: 'discord', userId: pair.discordUserId, text },
         { side: 'fluxer', userId: pair.fluxerUserId, text },
@@ -287,12 +310,36 @@ async function changeCopy(
             input,
             'That message was not imported from one of your messages.'
         );
-    if (verb === 'edit') await deps.history.editor.edit(copy, rest.join(' '));
-    else await deps.history.editor.remove(copy);
     return reply(
         input,
-        verb === 'edit' ? 'The message was edited.' : 'The message was deleted.'
+        await applyChange(deps.history.editor, verb, copy, rest.join(' '), deps)
     );
+}
+
+/**
+ * Edits or deletes one copy. A failure, such as a copy deleted on Fluxer,
+ * is logged and answered: it must not reach the add-on boundary.
+ */
+async function applyChange(
+    editor: HistoryEditor,
+    verb: string,
+    copy: ImportedMessage,
+    text: string,
+    deps: FlowDeps
+): Promise<string> {
+    try {
+        if (verb === 'edit') await editor.edit(copy, text);
+        else await editor.remove(copy);
+        return verb === 'edit'
+            ? 'The message was edited.'
+            : 'The message was deleted.';
+    } catch (error) {
+        deps.logger.warn(
+            `[identity] Could not ${verb} copy ${copy.fluxerMessageId ?? '?'}:`,
+            error
+        );
+        return 'That message could not be changed: it may have been deleted.';
+    }
 }
 
 /** Handles one DM to the bot. Returns the DMs to send back. */

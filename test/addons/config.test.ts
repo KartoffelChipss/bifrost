@@ -96,6 +96,22 @@ describe('parseAddonConfig', () => {
         );
     });
 
+    it('leaves archive-thread mode off unless a count is set', () => {
+        const unset = parseAddonConfig(ON);
+        assert.equal(unset.ok && unset.config.historyInlineMax, 0);
+        const zero = parseAddonConfig({ ...ON, BF_HISTORY_INLINE_MAX: '0' });
+        assert.equal(zero.ok && zero.config.historyInlineMax, 0);
+        const set = parseAddonConfig({ ...ON, BF_HISTORY_INLINE_MAX: '10000' });
+        assert.equal(set.ok && set.config.historyInlineMax, 10000);
+        for (const bad of ['-1', '1e4', 'lots', '99999999999']) {
+            assert.equal(
+                parseAddonConfig({ ...ON, BF_HISTORY_INLINE_MAX: bad }).ok,
+                false,
+                bad
+            );
+        }
+    });
+
     it('rejects an unknown mode', () => {
         const result = parseAddonConfig({ ...ON, BF_ADDONS_MODE: 'yolo' });
         assert.equal(result.ok, false);

@@ -136,15 +136,10 @@ const pause = (ms: number) =>
 
 /** Text channels whose history is copied, or that gave up, may be bridged. */
 function historyReady(store: PostgresHistoryStore) {
-    return async (linkId: string): Promise<ReadonlySet<string>> => {
-        const jobs = await store.listJobs(linkId);
-        return new Set(
-            jobs
-                .filter((j) => j.kind === 'channel')
-                .filter((j) => ['ready', 'done', 'failed'].includes(j.status))
-                .map((j) => j.discordId)
-        );
-    };
+    // Completed imports only: a failed one waits for `history retry`
+    // rather than being bridged with part of its history. Channels in
+    // archive-thread mode are ready at once (history/store.ts).
+    return (linkId: string) => store.channelsReadyToBridge(linkId);
 }
 
 /** What a cycle needs: the store, both platforms and the clock. */
@@ -225,6 +220,10 @@ function startThreadRelay(
         importing: deps.historyEnabled
             ? (id) =>
                   new PostgresHistoryStore(deps.sequelize).threadImporting(id)
+            : undefined,
+        isArchiveThread: deps.historyEnabled
+            ? (id) =>
+                  new PostgresHistoryStore(deps.sequelize).isArchiveThread(id)
             : undefined,
         mirror: (link, event, raw) => mirror.mirror(link, event, raw),
         // Held replies survive a restart (addon_parked_messages).

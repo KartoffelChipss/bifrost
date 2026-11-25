@@ -38,6 +38,7 @@ describe('addonDiscordIntents', () => {
         const intents = addonDiscordIntents({ ...OFF, identity: true });
         assert.ok(intents.includes(GatewayIntentBits.GuildMembers));
         assert.ok(intents.includes(GatewayIntentBits.DirectMessages));
+        assert.ok(intents.includes(GatewayIntentBits.GuildModeration));
     });
 });
 

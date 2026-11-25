@@ -81,6 +81,11 @@ export interface ThreadRelayDeps {
      */
     readonly importing?: (fluxerThreadId: string) => Promise<boolean>;
     /**
+     * True for a Fluxer thread that holds a channel's imported history
+     * (archive-thread mode). Its posts are the import's, never relayed.
+     */
+    readonly isArchiveThread?: (fluxerThreadId: string) => Promise<boolean>;
+    /**
      * Creates the Discord copy of a thread started on Fluxer (see
      * threadMirror.ts). Without it, such a thread's replies wait and expire.
      */
@@ -140,6 +145,12 @@ export class ThreadRelay {
     /** The link of a message the relay copies, or null for one it skips. */
     private async relayable(from: SnapshotSide, event: ThreadMessageEvent) {
         if (!event.parentId) return null;
+        if (
+            from === 'fluxer' &&
+            (await this.deps.isArchiveThread?.(event.channelId))
+        ) {
+            return null;
+        }
         const link = await this.linkFor(from, event.parentId);
         return !link || this.isOwn(from, event, link) ? null : link;
     }

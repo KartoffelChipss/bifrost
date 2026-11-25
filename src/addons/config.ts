@@ -23,6 +23,12 @@ export interface AddonConfig {
      */
     readonly excludedChannels: ReadonlySet<string>;
     /**
+     * BF_HISTORY_INLINE_MAX: channels with more messages than this get
+     * their history in a Fluxer thread and are bridged at once. Unset or
+     * 0 (the default) imports every channel inline.
+     */
+    readonly historyInlineMax?: number;
+    /**
      * Problems found in add-on settings while add-ons are off. They do not
      * stop startup; the host logs them as warnings.
      */
@@ -78,6 +84,26 @@ function parseMode(
 
 const SNOWFLAKE = /^\d{15,25}$/;
 
+/** Upper bound for BF_HISTORY_INLINE_MAX. */
+const MAX_INLINE_MAX = 10_000_000;
+
+/** Parses a message count: unset or empty is 0, meaning off. */
+function parseCount(
+    name: string,
+    value: string | undefined
+): { ok: true; value: number } | { ok: false; error: string } {
+    const text = (value ?? '').trim();
+    if (text === '') return { ok: true, value: 0 };
+    const count = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+    if (!Number.isSafeInteger(count) || count > MAX_INLINE_MAX) {
+        return {
+            ok: false,
+            error: `${name} must be a whole number from 0 to ${MAX_INLINE_MAX}`,
+        };
+    }
+    return { ok: true, value: count };
+}
+
 /** Parses a comma- or space-separated list of Discord IDs. */
 function parseIdList(
     name: string,
@@ -108,6 +134,7 @@ function parseSettings(env: Env): {
     flags: Flags;
     mode: AddonConfig['initialMode'];
     excluded: ReadonlySet<string>;
+    inlineMax: number;
     errors: string[];
 } {
     const errors: string[] = [];
@@ -129,10 +156,16 @@ function parseSettings(env: Env): {
         env.BF_ADDONS_EXCLUDE_CHANNELS
     );
     if (!excluded.ok) errors.push(excluded.error);
+    const inlineMax = parseCount(
+        'BF_HISTORY_INLINE_MAX',
+        env.BF_HISTORY_INLINE_MAX
+    );
+    if (!inlineMax.ok) errors.push(inlineMax.error);
     return {
         flags,
         mode: mode.ok ? mode.value : 'dry-run',
         excluded: excluded.ok ? excluded.value : new Set(),
+        inlineMax: inlineMax.ok ? inlineMax.value : 0,
         errors,
     };
 }
@@ -185,6 +218,7 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
             ...flags,
             initialMode: settings.mode,
             excludedChannels: settings.excluded,
+            historyInlineMax: settings.inlineMax,
             warnings: [],
         },
     };

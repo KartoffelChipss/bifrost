@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { PermissionFlagsBits } from 'discord.js';
 import {
     PRIVILEGED_BITS,
+    managedRoles,
     roleChanges,
     syncableRoles,
 } from '../../src/identity/roles';
@@ -62,6 +63,10 @@ describe('syncableRoles moderator rights', () => {
         'ManageChannels',
         'ManageGuild',
         'ManageRoles',
+        'PinMessages',
+        'BypassSlowmode',
+        'CreateGuildExpressions',
+        'CreateEvents',
     ] as const;
 
     it('treats every moderator flag as privileged', () => {
@@ -150,5 +155,39 @@ describe('roleChanges', () => {
             add: [],
             remove: [],
         });
+    });
+});
+
+describe('roles that became privileged', () => {
+    const source = discordGuild({
+        roles: [
+            role(D_GUILD),
+            role('gamer'),
+            role('helper', {
+                permissions: bits(PermissionFlagsBits.ManageMessages),
+            }),
+        ],
+    });
+    const rows = ['gamer', 'helper'].map((id) => mapRow('role', id, `f-${id}`));
+    const syncable = syncableRoles(source, rows);
+    const managed = managedRoles(source, rows);
+
+    it('removes a privileged role the member lost on Discord, but never adds one', () => {
+        assert.deepEqual([...managed.keys()], ['gamer', 'helper']);
+        assert.deepEqual(
+            roleChanges([], ['f-helper', 'f-gamer'], syncable, managed),
+            { add: [], remove: ['f-gamer', 'f-helper'] }
+        );
+        assert.deepEqual(
+            roleChanges(['helper', 'gamer'], [], syncable, managed),
+            { add: ['f-gamer'], remove: [] }
+        );
+    });
+
+    it('keeps a privileged role the member still holds on Discord', () => {
+        assert.deepEqual(
+            roleChanges(['helper'], ['f-helper'], syncable, managed),
+            { add: [], remove: [] }
+        );
     });
 });

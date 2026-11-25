@@ -60,7 +60,7 @@ const post = (overrides: Partial<FluxerThreadInfo> = {}): FluxerThreadInfo => ({
     ...overrides,
 });
 
-async function setup(info: FluxerThreadInfo | null = post()) {
+async function setup(info: FluxerThreadInfo | null = post(), archive = false) {
     const store = new MirrorStore();
     const links = new FakeLinker();
     await links.link('link-1', 'd-forum', 'f-forum');
@@ -100,6 +100,7 @@ async function setup(info: FluxerThreadInfo | null = post()) {
         },
         active: () => true,
         mirror: (link, event, raw) => mirror.mirror(link, event, raw),
+        isArchiveThread: async () => archive,
         now: () => new Date(0),
         logger: createRecordingLogger(),
     });
@@ -190,5 +191,12 @@ describe('a thread started on Fluxer', () => {
             s.relay.created('fluxer', inFluxerPost('r1'), 'reply'),
             UnrecordedWriteError
         );
+    });
+
+    it('never relays or copies a history archive thread', async () => {
+        const s = await setup(post(), true);
+        await s.relay.created('fluxer', inFluxerPost('r1'), 'imported');
+        assert.deepEqual(s.calls, []);
+        assert.equal(s.store.mappings.length, 0);
     });
 });
