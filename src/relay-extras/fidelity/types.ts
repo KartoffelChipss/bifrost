@@ -49,6 +49,14 @@ export interface SourcePings {
     readonly everyone: boolean;
 }
 
+/** How the author appears in the source server. */
+export interface SourceAuthor {
+    /** Server nickname, else global display name; null to keep upstream's. */
+    readonly displayName: string | null;
+    /** Server avatar; null to keep upstream's global avatar. */
+    readonly avatarUrl: string | null;
+}
+
 /** The parts of a source message fidelity reads, from either platform. */
 export interface SourceFacts {
     readonly side: Side;
@@ -56,6 +64,7 @@ export interface SourceFacts {
     readonly channelId: string;
     readonly content: string;
     readonly pinged: SourcePings;
+    readonly author: SourceAuthor;
 }
 
 /** One upstream guild link. */

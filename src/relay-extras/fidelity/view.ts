@@ -6,6 +6,7 @@ import {
     mapMentionToken,
     type MentionMaps,
 } from './mentions';
+import { webhookName } from './profile';
 import type { FidelityView, PingSpec, Side, SourceFacts } from './types';
 
 /** A copy that pings nobody. */
@@ -60,11 +61,24 @@ export function copyPings(resolution: Resolution): PingSpec {
     };
 }
 
+/**
+ * The copy goes out under the author's server name and avatar where the
+ * target accepts them, and with the pings it may make.
+ */
 function finishWith(
     payload: WebhookMessageData,
+    resolution: Resolution,
     pings: PingSpec
 ): WebhookMessageData {
-    return { ...payload, fidelity: { ...payload.fidelity, pings } };
+    const { author } = resolution.facts;
+    return {
+        ...payload,
+        username:
+            webhookName(author.displayName, resolution.target) ??
+            payload.username,
+        avatarURL: author.avatarUrl || payload.avatarURL,
+        fidelity: { ...payload.fidelity, pings },
+    };
 }
 
 /** The view a transformer reads while it builds one copy. */
@@ -75,6 +89,6 @@ export function createView(resolution: Resolution): FidelityView {
         emojis: (content, targetEmojis) =>
             mapEmojis(content, resolution.emojis, targetEmojis),
         breakMentions: (content) => breakUnpinged(content, pings.everyone),
-        finish: (payload) => finishWith(payload, pings),
+        finish: (payload) => finishWith(payload, resolution, pings),
     };
 }

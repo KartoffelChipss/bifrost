@@ -1,6 +1,6 @@
 import type { Message as FluxerMessage } from '@fluxerjs/core';
 import type { Message as DiscordMessage } from 'discord.js';
-import type { SourceFacts, SourcePings } from './types';
+import type { SourceAuthor, SourceFacts, SourcePings } from './types';
 
 /**
  * Reads the facts fidelity needs from a platform message. Pure, so tests
@@ -9,7 +9,7 @@ import type { SourceFacts, SourcePings } from './types';
 
 export type DiscordSource = Pick<
     DiscordMessage,
-    'guildId' | 'channelId' | 'content' | 'mentions'
+    'guildId' | 'channelId' | 'content' | 'mentions' | 'member' | 'author'
 >;
 
 export type FluxerSource = Pick<
@@ -20,6 +20,8 @@ export type FluxerSource = Pick<
     | 'mentions'
     | 'mentionRoles'
     | 'mentionEveryone'
+    | 'member'
+    | 'author'
 >;
 
 /** Both platforms take at most 100 IDs of each kind; more never ping. */
@@ -48,6 +50,32 @@ function fluxerPings(message: FluxerSource): SourcePings {
     };
 }
 
+/**
+ * discord.js GuildMember.displayName is the nickname, else the global
+ * display name, else the username; avatarURL is the server avatar or
+ * null. A webhook's message has no member.
+ */
+function discordAuthor(message: DiscordSource): SourceAuthor {
+    const member = message.member;
+    return {
+        displayName: member?.displayName ?? message.author?.globalName ?? null,
+        avatarUrl: member?.avatarURL() ?? null,
+    };
+}
+
+/**
+ * Fluxer GuildMember.displayName is `nick ?? globalName ?? username` and
+ * avatarURL the server avatar or null (dist/index.js). Message.member is
+ * the cached member, which MESSAGE_CREATE fills in.
+ */
+function fluxerAuthor(message: FluxerSource): SourceAuthor {
+    const member = message.member;
+    return {
+        displayName: member?.displayName ?? message.author?.globalName ?? null,
+        avatarUrl: member?.avatarURL() ?? null,
+    };
+}
+
 export function discordFacts(message: DiscordSource): SourceFacts {
     return {
         side: 'discord',
@@ -55,6 +83,7 @@ export function discordFacts(message: DiscordSource): SourceFacts {
         channelId: message.channelId,
         content: message.content ?? '',
         pinged: discordPings(message),
+        author: discordAuthor(message),
     };
 }
 
@@ -65,5 +94,6 @@ export function fluxerFacts(message: FluxerSource): SourceFacts {
         channelId: message.channelId,
         content: message.content ?? '',
         pinged: fluxerPings(message),
+        author: fluxerAuthor(message),
     };
 }
