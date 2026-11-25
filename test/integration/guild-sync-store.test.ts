@@ -468,4 +468,28 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
             value: { ran: true, value: 'nested' },
         });
     });
+
+    it('prunes tombstoned map rows and keeps the rest', async () => {
+        const now = new Date();
+        const mapping = (discordId: string) =>
+            store.insertMapping(
+                {
+                    guildLinkId: linkId,
+                    kind: 'role',
+                    discordId,
+                    fluxerId: `f-${discordId}`,
+                    createdBySync: true,
+                    appliedFields: {},
+                },
+                now
+            );
+        const gone = await mapping('gone-role');
+        const kept = await mapping('kept-role');
+        await store.setRowState(gone.id, 'tombstoned', now);
+        const later = new Date(now.getTime() + 1000);
+        assert.equal(await store.pruneTombstoned(later), 1);
+        const ids = (await store.loadObjectMap(linkId)).map((r) => r.id);
+        assert.ok(!ids.includes(gone.id));
+        assert.ok(ids.includes(kept.id));
+    });
 });

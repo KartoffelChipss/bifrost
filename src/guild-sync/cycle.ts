@@ -29,6 +29,7 @@ import { EMPTY_BODY, summarizePlan, type Plan, type PlanBody } from './plan';
 import type { GuildReader } from './readers/reader';
 import type { GuildSnapshot } from './snapshot';
 import { countObjects, excludedIds, stableJson } from './snapshot';
+import { MapTooLargeError } from './store';
 import type { GuildSyncStore, SyncSettings } from './store';
 import type { GuildWriter } from './writers/writer';
 
@@ -409,6 +410,28 @@ async function buildBody(
     return { body, rows, members };
 }
 
+/**
+ * buildBody, or an aborted plan when the object map is too large: that
+ * stops this link's cycle and is reported, but trips nothing.
+ */
+async function buildOrStop(
+    link: LinkedGuild,
+    settings: SyncSettings,
+    gated: Extract<GateOutcome, { ok: true }>,
+    deps: CycleDeps,
+    now: Date,
+    pinned: ReadonlySet<string>
+): Promise<Awaited<ReturnType<typeof buildBody>> | { stopped: Plan }> {
+    try {
+        return await buildBody(link, settings, gated, deps, now, pinned);
+    } catch (error) {
+        if (!(error instanceof MapTooLargeError)) throw error;
+        const reason = `${error.message}; this link is not synced until rows are pruned or the limit is raised`;
+        const gate = { ok: false as const, reason, needsApproval: false };
+        return { stopped: await abortedPlan(link, settings, gate, deps, now) };
+    }
+}
+
 function planStatus(body: PlanBody, abortReason: string | null) {
     if (body.needsApproval) return 'pending-approval' as const;
     return abortReason ? ('aborted' as const) : ('dry-run' as const);
@@ -617,7 +640,7 @@ async function planAndApply(
     await saveIfChanged(deps.store, link.id, gated.source, now);
     await saveIfChanged(deps.store, link.id, gated.destination, now);
     const pending = approved ?? (await waitingPlan(link, deps));
-    const built = await buildBody(
+    const built = await buildOrStop(
         link,
         settings,
         gated,
@@ -625,6 +648,9 @@ async function planAndApply(
         now,
         new Set(pending?.body.removalRowIds ?? [])
     );
+    if ('stopped' in built) {
+        return { status: 'planned', plan: built.stopped, more: false };
+    }
     const { body } = built;
     const plan = newPlan(deps, link, settings.direction, body, null);
     await publish(plan, settings, deps, now);

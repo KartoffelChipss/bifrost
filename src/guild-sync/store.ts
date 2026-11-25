@@ -123,6 +123,12 @@ export interface GuildSyncStore {
     savePlan(plan: Plan, now: Date): Promise<void>;
     removalsSince(guildLinkId: string, since: Date): Promise<number>;
     pruneSnapshots(before: Date): Promise<void>;
+    /**
+     * Deletes tombstoned map rows. A row is tombstoned only once its
+     * destination object is confirmed deleted, so nothing reads it again;
+     * the audit log keeps the record.
+     */
+    pruneTombstoned(before: Date): Promise<number>;
     /** Records ownership of a destination object (guard 1). */
     insertMapping(mapping: NewMapping, now: Date): Promise<MapRow>;
     /** Records the fields a successful update wrote. */
@@ -319,8 +325,28 @@ export function parseSnapshot(payload: unknown): GuildSnapshot {
     } as unknown as GuildSnapshot;
 }
 
-/** Upper bound on map rows per guild link: roles + channels + expressions. */
-export const MAX_MAP_ROWS = 5_000;
+/**
+ * Upper bound on map rows per guild link: roles, channels, expressions and
+ * every synced thread and forum post, which is where most rows come from.
+ */
+export const MAX_MAP_ROWS = 100_000;
+
+/**
+ * The object map is over MAX_MAP_ROWS. Only that link's cycle stops: it is
+ * a size limit, not corrupt data, so the add-ons stay in their mode.
+ */
+export class MapTooLargeError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'MapTooLargeError';
+    }
+}
+
+/** Rows a DELETE removed, from the pg result Sequelize passes back. */
+function rowCount(meta: unknown): number {
+    const count = (meta as { rowCount?: unknown } | null)?.rowCount;
+    return typeof count === 'number' ? count : 0;
+}
 
 /** {@link GuildSyncStore} on the fork's Postgres database. */
 export class PostgresGuildSyncStore
@@ -392,7 +418,7 @@ export class PostgresGuildSyncStore
             { bind: [guildLinkId, MAX_MAP_ROWS + 1], type: QueryTypes.SELECT }
         );
         if (rows.length > MAX_MAP_ROWS) {
-            throw new StoreDataError(
+            throw new MapTooLargeError(
                 `object map has over ${MAX_MAP_ROWS} rows`
             );
         }
@@ -498,6 +524,14 @@ export class PostgresGuildSyncStore
                 WHERE healthy ORDER BY "guildLinkId", side, "takenAt" DESC)`,
             { bind: [before] }
         );
+    }
+
+    async pruneTombstoned(before: Date): Promise<number> {
+        const [, meta] = await this.db.query(
+            `DELETE FROM ${TABLES.objectMap} WHERE state = 'tombstoned' AND "updatedAt" < $1`,
+            { bind: [before] }
+        );
+        return rowCount(meta);
     }
 
     async insertMapping(mapping: NewMapping, now: Date): Promise<MapRow> {

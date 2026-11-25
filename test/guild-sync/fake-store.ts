@@ -118,6 +118,12 @@ export class FakeStore implements GuildSyncStore {
 
     async pruneSnapshots() {}
 
+    async pruneTombstoned() {
+        const before = this.rows.length;
+        this.rows = this.rows.filter((row) => row.state !== 'tombstoned');
+        return before - this.rows.length;
+    }
+
     async insertMapping(mapping: NewMapping): Promise<MapRow> {
         const row: MapRow = {
             id: `map-${++this.mapSeq}`,

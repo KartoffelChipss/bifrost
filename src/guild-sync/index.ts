@@ -122,6 +122,7 @@ async function runAll(
         await store.pruneSnapshots(
             new Date(cycleDeps.now().getTime() - SNAPSHOT_RETENTION_MS)
         );
+        await store.pruneTombstoned(cycleDeps.now());
     });
     if (!result.ran) {
         cycleDeps.logger.info(
