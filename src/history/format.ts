@@ -1,4 +1,5 @@
 import type { RelayPayload } from '../guild-sync/links';
+import { MAX_CONTENT_LENGTH } from './limits';
 import type { HistoryStore } from './store';
 import type { HistoryPorts, Reaction, SourceMessage } from './types';
 
@@ -68,6 +69,17 @@ export function defuseMentions(content: string): string {
     return content.replace(/@(everyone|here)/g, `@${ZERO_WIDTH_SPACE}$1`);
 }
 
+/**
+ * Shortens the message text so it, the lines below it and the leading
+ * character defuseCommand may add stay within Fluxer's limit.
+ */
+export function fitBody(body: string, tail: readonly string[]): string {
+    const below = tail.reduce((total, line) => total + line.length + 1, 0);
+    const room = MAX_CONTENT_LENGTH - ZERO_WIDTH_SPACE.length - below;
+    if (body.length <= room) return body;
+    return `${cut(body, room - ELLIPSIS.length)}${ELLIPSIS}`;
+}
+
 function optOutBody(): RelayPayload {
     return {
         content: '*A message from a member who opted out of history import.*',
@@ -94,14 +106,17 @@ export class CopyFormatter {
                   withoutReply: await this.hideReply(message),
               });
         // The copy carries its original time, which Fluxer cannot set.
-        const lines = [
-            defuseMentions(base.content),
+        const tail = [
             reactionLine(message.reactions),
             dateNote(message.createdAt),
         ].filter((line): line is string => Boolean(line));
+        const lines = [fitBody(defuseMentions(base.content), tail), ...tail];
         return {
             ...base,
-            content: defuseCommand(lines.join('\n'), this.deps.commandPrefix),
+            content: defuseCommand(
+                lines.filter(Boolean).join('\n'),
+                this.deps.commandPrefix
+            ),
         };
     }
 

@@ -9,7 +9,10 @@ import {
     MAX_PARALLEL,
     PAGE_SIZE,
     PASS_BUDGET_MS,
+    RETRY_BASE_MS,
+    RETRY_MAX_MS,
     SEND_INTERVAL_MS,
+    backoffMs,
     type HistoryMode,
 } from '../../src/history/importer';
 import { SURVEY_MAX_PAGES, estimateMinutes } from '../../src/history/survey';
@@ -412,24 +415,111 @@ describe('failures and recovery', () => {
         );
     });
 
-    it('retries a failed send on the next pass, and gives up after repeated failures', async () => {
+    it('waits out a temporary error with backoff and never fails the job for it', async () => {
         const s = setup();
         s.ports.add('10', '11');
         s.map('channel', '10', 'f10');
-        s.ports.failNext = 1;
-        await s.importer.run(LINK);
-        assert.equal(s.store.job('10').failures, 1);
-        assert.deepEqual(s.store.messages, []);
+        s.ports.failNext = MAX_FAILURES * 2;
+        for (let i = 0; i < MAX_FAILURES * 2; i++) {
+            await s.importer.run(LINK);
+            const job = s.store.job('10');
+            assert.equal(job.status, 'importing');
+            assert.equal(job.failures, 0);
+            assert.equal(job.retries, i + 1);
+            // Before the backoff ends, a pass leaves the job alone.
+            assert.equal(await s.importer.waiting(LINK.id), true);
+            await s.importer.run(LINK);
+            assert.equal(s.store.job('10').retries, i + 1);
+            s.state.clock += backoffMs(i + 1);
+        }
         await s.drain();
         assert.equal(s.ports.sent.length, 1);
+        assert.equal(s.store.job('10').retries, 0);
+        assert.equal(s.store.job('10').retryAt, null);
+    });
 
-        const t = setup();
-        t.ports.add('10', '11');
-        t.map('channel', '10', 'f10');
-        t.ports.failNext = MAX_FAILURES;
-        // A failed pass waits for the next one, as the loop does.
-        for (let i = 0; i < MAX_FAILURES; i++) await t.importer.run(LINK);
-        assert.equal(t.store.job('10').status, 'failed');
+    it('doubles the wait per error in a row, up to a cap', () => {
+        assert.equal(backoffMs(1), RETRY_BASE_MS);
+        assert.equal(backoffMs(2), RETRY_BASE_MS * 2);
+        assert.equal(backoffMs(1000), RETRY_MAX_MS);
+    });
+
+    it('skips and records a message that keeps failing, then copies on', async () => {
+        const s = setup();
+        s.ports.add('10', '11');
+        s.ports.add('10', '12');
+        s.map('channel', '10', 'f10');
+        s.ports.failure = Object.assign(new Error('Invalid Form Body'), {
+            statusCode: 400,
+        });
+        s.ports.failNext = MAX_FAILURES;
+        for (let i = 0; i < MAX_FAILURES; i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+        }
+        assert.equal(s.store.job('10').skipped, 1);
+        assert.match(s.store.job('10').lastError ?? '', /skipped message 11/);
+        await s.drain();
+        assert.deepEqual(
+            s.ports.sent.map((m) => m.content.split('\n')[0]),
+            ['message 12']
+        );
+        assert.equal(s.store.job('10').status, 'ready');
+        assert.deepEqual(
+            s.store.messages.map((m) => m.discordMessageId),
+            ['12']
+        );
+    });
+
+    it('fails a job whose channel keeps refusing reads, and an admin can retry it', async () => {
+        const s = setup();
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        const original = s.ports.listMessages.bind(s.ports);
+        let refuse = true;
+        s.ports.listMessages = async (id, after, limit) => {
+            if (refuse && id === '10')
+                throw Object.assign(new Error('Missing Access'), {
+                    status: 403,
+                });
+            return original(id, after, limit);
+        };
+        for (let i = 0; i < MAX_FAILURES; i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+        }
+        assert.equal(s.store.job('10').status, 'failed');
+        assert.deepEqual(
+            await s.store.channelsReadyToBridge(LINK.id),
+            new Set()
+        );
+        refuse = false;
+        assert.equal(await s.store.retryFailed(LINK.id), 1);
+        assert.equal(s.store.job('10').status, 'importing');
+        await s.drain();
+        assert.equal(s.ports.sent.length, 1);
+        assert.deepEqual(
+            await s.store.channelsReadyToBridge(LINK.id),
+            new Set(['10'])
+        );
+    });
+
+    it('reports skipped messages in the summary', async () => {
+        const s = setup('apply', ['20', '30']);
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        s.ports.failure = Object.assign(new Error('bad'), { statusCode: 400 });
+        s.ports.failNext = MAX_FAILURES;
+        for (let i = 0; i < MAX_FAILURES; i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+        }
+        await s.links.link(LINK.id, '10', 'f10');
+        await s.drain();
+        assert.match(
+            s.reports.join('\n'),
+            /0 messages copied, 1 messages skipped, 0 jobs failed/
+        );
     });
 
     it('records a copy that was sent before a crash instead of sending it twice', async () => {
@@ -642,6 +732,23 @@ describe('copy content', () => {
             s.ports.sent[0].content.split('\n')[0],
             '@\u200beveryone and @\u200bhere look'
         );
+    });
+
+    it('cuts a long message to the Fluxer limit and keeps the date note', async () => {
+        const s = setup();
+        s.ports.add('10', '11', {
+            raw: { id: '11', text: 'y'.repeat(4500) },
+            reactions: [{ name: '👍', count: 2 }],
+        });
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        const lines = s.ports.sent[0].content.split('\n');
+        assert.ok(s.ports.sent[0].content.length <= 4000);
+        assert.ok(lines[0].endsWith('…'));
+        assert.deepEqual(lines.slice(1), [
+            'Reactions: 👍 2',
+            '*Originally posted 2024-03-01 18:22 UTC*',
+        ]);
     });
 
     it('lists reactions above the date', async () => {

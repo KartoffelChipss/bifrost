@@ -12,7 +12,8 @@ export type JobKind = 'channel' | 'thread';
  * - importing: copying past messages up to the cutoff
  * - ready: a channel copied up to now and waiting to be bridged
  * - done: finished; new messages come through the relay
- * - failed: stopped after repeated errors, see lastError
+ * - failed: stopped after repeated errors outside any one message, see
+ *   lastError. An admin can retry it (HistoryStore.retryFailed).
  */
 export type JobStatus = 'pending' | 'importing' | 'ready' | 'done' | 'failed';
 
@@ -33,7 +34,14 @@ export interface HistoryJob {
     readonly checkpointId: string;
     readonly catchUps: number;
     readonly imported: number;
+    /** Failed runs in a row with a lasting error, such as a 4xx. */
     readonly failures: number;
+    /** Temporary errors in a row (5xx, 429, timeouts); never fail a job. */
+    readonly retries: number;
+    /** No run starts before this time, after an error. */
+    readonly retryAt: Date | null;
+    /** Messages given up on after repeated lasting errors. */
+    readonly skipped: number;
     readonly messageCount: number | null;
     readonly attachmentCount: number | null;
     readonly surveyedAt: Date | null;
@@ -52,6 +60,9 @@ export type JobPatch = Partial<
         | 'catchUps'
         | 'imported'
         | 'failures'
+        | 'retries'
+        | 'retryAt'
+        | 'skipped'
         | 'messageCount'
         | 'attachmentCount'
         | 'surveyedAt'

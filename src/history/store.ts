@@ -39,6 +39,17 @@ export interface HistoryStore {
     ): Promise<ImportedMessage | null>;
     /** True when the thread relay copied this Discord message, either way. */
     relayedInThread(discordMessageId: string): Promise<boolean>;
+    /**
+     * Discord channels whose history is copied, so guild-sync may bridge
+     * them: jobs that are ready or done. A failed job never counts; its
+     * channel stays unbridged until an admin retries it.
+     */
+    channelsReadyToBridge(guildLinkId: string): Promise<Set<string>>;
+    /**
+     * Restarts a link's failed jobs where they stopped. Returns how many.
+     * A job that never started goes back to pending.
+     */
+    retryFailed(guildLinkId: string, now: Date): Promise<number>;
     isOptedOut(discordUserId: string): Promise<boolean>;
     setOptOut(discordUserId: string, out: boolean, now: Date): Promise<void>;
     /**
@@ -105,6 +116,9 @@ export function parseJob(row: Row): HistoryJob {
         catchUps: int(row, 'catchUps'),
         imported: int(row, 'imported'),
         failures: int(row, 'failures'),
+        retries: int(row, 'retries'),
+        retryAt: row.retryAt instanceof Date ? row.retryAt : null,
+        skipped: int(row, 'skipped'),
         messageCount:
             row.messageCount === null ? null : int(row, 'messageCount'),
         attachmentCount:
@@ -140,6 +154,9 @@ const PATCH_COLUMNS: readonly (keyof JobPatch)[] = [
     'catchUps',
     'imported',
     'failures',
+    'retries',
+    'retryAt',
+    'skipped',
     'messageCount',
     'attachmentCount',
     'surveyedAt',
@@ -282,6 +299,28 @@ export class PostgresHistoryStore implements HistoryStore {
             { bind: [discordMessageId], type: QueryTypes.SELECT }
         );
         return rows.length > 0;
+    }
+
+    async channelsReadyToBridge(guildLinkId: string): Promise<Set<string>> {
+        const rows = await this.db.query<Row>(
+            `SELECT "discordId" FROM ${TABLES.historyJobs}
+             WHERE "guildLinkId" = $1 AND kind = 'channel' AND status IN ('ready', 'done')
+             LIMIT $2`,
+            { bind: [guildLinkId, MAX_JOBS], type: QueryTypes.SELECT }
+        );
+        return new Set(rows.map((row) => str(row, 'discordId')));
+    }
+
+    async retryFailed(guildLinkId: string, now: Date): Promise<number> {
+        const rows = await this.db.query<Row>(
+            `UPDATE ${TABLES.historyJobs}
+             SET status = CASE WHEN "cutoffId" IS NULL THEN 'pending' ELSE 'importing' END,
+                 failures = 0, retries = 0, "retryAt" = NULL, "lastError" = NULL, "updatedAt" = $2
+             WHERE "guildLinkId" = $1 AND status = 'failed'
+             RETURNING id`,
+            { bind: [guildLinkId, now], type: QueryTypes.SELECT }
+        );
+        return rows.length;
     }
 
     async isOptedOut(discordUserId: string): Promise<boolean> {

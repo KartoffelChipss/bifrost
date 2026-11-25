@@ -8,6 +8,7 @@ import {
     type GuildSnapshot,
 } from '../guild-sync/snapshot';
 import type { GuildWriter } from '../guild-sync/writers/writer';
+import { MessageError, describeError, isTransient } from './errors';
 import { CopyFormatter } from './format';
 import {
     MAX_PARALLEL,
@@ -35,8 +36,23 @@ import type {
 export { MAX_PARALLEL, PAGE_SIZE, PASS_BUDGET_MS, SEND_INTERVAL_MS };
 /** Extra passes for messages posted while a channel was being copied. */
 export const MAX_CATCH_UPS = 2;
-/** A job stops after this many failed runs in a row. */
+/**
+ * Runs in a row with a lasting error (such as a 4xx) before the message
+ * at fault is skipped, or the job fails when no message is at fault.
+ * Temporary errors never count.
+ */
 export const MAX_FAILURES = 5;
+/** First wait after an error; it doubles per error in a row, up to the max. */
+export const RETRY_BASE_MS = 5_000;
+export const RETRY_MAX_MS = 10 * 60_000;
+/** Doublings before the wait reaches its cap; bounds the exponent. */
+const MAX_DOUBLINGS = 20;
+
+/** The wait before the next run after `count` errors in a row. */
+export function backoffMs(count: number): number {
+    const doublings = Math.min(Math.max(count - 1, 0), MAX_DOUBLINGS);
+    return Math.min(RETRY_BASE_MS * Math.pow(2, doublings), RETRY_MAX_MS);
+}
 /** Pages read per pass after a channel is bridged, to close the gap. */
 export const MAX_GAP_PAGES = 5;
 /** Pinned messages read per channel or thread. */
@@ -216,6 +232,22 @@ export class HistoryImporter {
         return this.importAll({ link, deadline, unbridged }, jobs);
     }
 
+    /**
+     * True while a job of this link waits for a time rather than for work:
+     * a backoff after an error. The add-on polls sooner than when idle.
+     */
+    async waiting(linkId: string): Promise<boolean> {
+        const now = this.deps.now().getTime();
+        const jobs = await this.deps.store.listJobs(linkId);
+        return jobs.some(
+            (j) =>
+                j.status !== 'done' &&
+                j.status !== 'failed' &&
+                j.retryAt !== null &&
+                j.retryAt.getTime() > now
+        );
+    }
+
     private overdue(pass: Pass): boolean {
         return this.deps.now().getTime() >= pass.deadline;
     }
@@ -231,8 +263,10 @@ export class HistoryImporter {
     /** Jobs that can run now. Bridged channels finish with a gap pass. */
     private async runnable(link: LinkedGuild, jobs: HistoryJob[]) {
         const ready: HistoryJob[] = [];
+        const now = this.deps.now().getTime();
         for (const job of jobs) {
             if (!job.fluxerId) continue;
+            if (job.retryAt && job.retryAt.getTime() > now) continue;
             if (job.kind === 'channel') {
                 const next = await this.channelRunnable(link, job);
                 if (next) ready.push(next);
@@ -310,9 +344,14 @@ export class HistoryImporter {
         );
         if (jobs.length === 0 || waiting.length > 0) return;
         const copied = jobs.reduce((sum, j) => sum + j.imported, 0);
+        const skipped = jobs.reduce((sum, j) => sum + j.skipped, 0);
         const failed = jobs.filter((j) => j.status === 'failed').length;
-        const text = `History import finished: ${copied} messages copied, ${failed} jobs failed.`;
-        await this.deps.report(link.id, `done:${copied}:${failed}`, text);
+        const text = `History import finished: ${copied} messages copied, ${skipped} messages skipped, ${failed} jobs failed.`;
+        await this.deps.report(
+            link.id,
+            `done:${copied}:${skipped}:${failed}`,
+            text
+        );
     }
 
     /** Runs one job for one page. Returns true when it has more to do. */
@@ -322,22 +361,64 @@ export class HistoryImporter {
             return await this.importPage(pass, job);
         } catch (error) {
             if (error instanceof StoppedError) return false;
-            const detail =
-                error instanceof Error ? error.message : String(error);
-            const failures = job.failures + 1;
-            if (failures >= MAX_FAILURES)
-                await this.fail(pass.link, job, detail);
-            else
-                await this.deps.store.updateJob(
-                    job.id,
-                    { failures, lastError: detail },
-                    this.deps.now()
-                );
-            this.deps.logger.warn(
-                `[history] ${job.kind} ${job.discordId}: ${detail}`
-            );
+            const fresh = (await this.deps.store.getJob(job.id)) ?? job;
+            await this.onError(pass.link, fresh, error);
             return false;
         }
+    }
+
+    /**
+     * A temporary error waits and retries without counting. A lasting one
+     * counts; at MAX_FAILURES the message at fault is skipped, or the job
+     * fails when no single message is at fault.
+     */
+    private async onError(link: LinkedGuild, job: HistoryJob, error: unknown) {
+        const { store, now, logger } = this.deps;
+        const detail = describeError(error);
+        logger.warn(`[history] ${job.kind} ${job.discordId}: ${detail}`);
+        if (isTransient(error)) {
+            const retries = job.retries + 1;
+            const retryAt = new Date(now().getTime() + backoffMs(retries));
+            await store.updateJob(
+                job.id,
+                { retries, retryAt, lastError: detail },
+                now()
+            );
+            return;
+        }
+        const failures = job.failures + 1;
+        if (failures < MAX_FAILURES) {
+            const retryAt = new Date(now().getTime() + backoffMs(failures));
+            await store.updateJob(
+                job.id,
+                { failures, retryAt, lastError: detail },
+                now()
+            );
+            return;
+        }
+        if (error instanceof MessageError)
+            await this.skip(job, error.messageId, detail);
+        else await this.fail(link, job, detail);
+    }
+
+    /** Gives up on one message that keeps failing, and records it. */
+    private async skip(job: HistoryJob, messageId: string, detail: string) {
+        const { store, now, logger } = this.deps;
+        await store.dropMessage(messageId);
+        await store.updateJob(
+            job.id,
+            {
+                checkpointId: messageId,
+                skipped: job.skipped + 1,
+                failures: 0,
+                retryAt: null,
+                lastError: `skipped message ${messageId}: ${detail}`,
+            },
+            now()
+        );
+        logger.warn(
+            `[history] Skipped message ${messageId} in ${job.kind} ${job.discordId}: ${detail}`
+        );
     }
 
     private async fail(link: LinkedGuild, job: HistoryJob, reason: string) {
@@ -511,7 +592,6 @@ export class HistoryImporter {
         message: SourceMessage,
         route: Route
     ): Promise<HistoryJob> {
-        const { store, now } = this.deps;
         if ((await this.deps.mode(link.id)) !== 'apply')
             throw new StoppedError();
         if (
@@ -520,6 +600,21 @@ export class HistoryImporter {
         ) {
             return this.advance(job, message.id);
         }
+        try {
+            return await this.sendOne(link, job, message, route);
+        } catch (error) {
+            throw new MessageError(message.id, error);
+        }
+    }
+
+    /** Records, sends and checkpoints one copy. */
+    private async sendOne(
+        link: LinkedGuild,
+        job: HistoryJob,
+        message: SourceMessage,
+        route: Route
+    ): Promise<HistoryJob> {
+        const { store, now } = this.deps;
         const payload = await this.formatter.build(message, link.id);
         const { target } = route;
         await store.startMessage(
@@ -536,23 +631,16 @@ export class HistoryImporter {
         );
         const fluxerId = await this.send(target, payload, message.id);
         await store.finishMessage(message.id, fluxerId);
-        const next = {
-            ...job,
+        const patch = {
             checkpointId: message.id,
             imported: job.imported + 1,
             failures: 0,
+            retries: 0,
+            retryAt: null,
         };
-        await store.updateJob(
-            job.id,
-            {
-                checkpointId: next.checkpointId,
-                imported: next.imported,
-                failures: 0,
-            },
-            now()
-        );
+        await store.updateJob(job.id, patch, now());
         await this.deps.pause(SEND_INTERVAL_MS);
-        return next;
+        return { ...job, ...patch };
     }
 
     /** Sends a copy. A refused upload is retried once without its files. */

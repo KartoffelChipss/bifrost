@@ -1,0 +1,48 @@
+import { DataTypes, type QueryInterface } from 'sequelize';
+import { TABLES } from '../schema';
+
+/**
+ * History jobs survive brief trouble.
+ * - `retries` counts temporary errors in a row (5xx, 429, timeouts); they
+ *   never fail a job.
+ * - `retryAt` is the earliest time the job runs again, for backoff.
+ * - `skipped` counts messages given up on after repeated lasting errors.
+ */
+
+const counter = {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+} as const;
+
+const JOB_COLUMNS = {
+    retries: counter,
+    retryAt: { type: DataTypes.DATE, allowNull: true },
+    skipped: counter,
+} as const;
+
+export async function up({
+    context: qi,
+}: {
+    context: QueryInterface;
+}): Promise<void> {
+    await qi.sequelize.transaction(async (transaction) => {
+        for (const [name, spec] of Object.entries(JOB_COLUMNS)) {
+            await qi.addColumn(TABLES.historyJobs, name, spec, {
+                transaction,
+            });
+        }
+    });
+}
+
+export async function down({
+    context: qi,
+}: {
+    context: QueryInterface;
+}): Promise<void> {
+    await qi.sequelize.transaction(async (transaction) => {
+        for (const name of Object.keys(JOB_COLUMNS)) {
+            await qi.removeColumn(TABLES.historyJobs, name, { transaction });
+        }
+    });
+}

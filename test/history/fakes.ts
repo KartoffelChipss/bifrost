@@ -51,6 +51,9 @@ export class FakeHistoryStore implements HistoryStore {
             catchUps: 0,
             imported: 0,
             failures: 0,
+            retries: 0,
+            retryAt: null,
+            skipped: 0,
             messageCount: null,
             attachmentCount: null,
             surveyedAt: null,
@@ -120,6 +123,37 @@ export class FakeHistoryStore implements HistoryStore {
         return this.relayedThread.has(discordId);
     }
 
+    async channelsReadyToBridge(guildLinkId: string) {
+        return new Set(
+            this.jobs
+                .filter(
+                    (j) =>
+                        j.guildLinkId === guildLinkId &&
+                        j.kind === 'channel' &&
+                        (j.status === 'ready' || j.status === 'done')
+                )
+                .map((j) => j.discordId)
+        );
+    }
+
+    async retryFailed(guildLinkId: string) {
+        let count = 0;
+        this.jobs = this.jobs.map((j) => {
+            if (j.guildLinkId !== guildLinkId || j.status !== 'failed')
+                return j;
+            count += 1;
+            return {
+                ...j,
+                status: j.cutoffId === null ? 'pending' : 'importing',
+                failures: 0,
+                retries: 0,
+                retryAt: null,
+                lastError: null,
+            };
+        });
+        return count;
+    }
+
     async isOptedOut(id: string) {
         return this.optOuts.has(id);
     }
@@ -159,8 +193,12 @@ export class FakeHistoryPorts implements HistoryPorts {
         { archived: boolean; locked: boolean }
     >();
     readonly relayed = new Set<string>();
-    /** Sends that fail while this is above zero. */
+    /** Sends that fail while this is above zero, with `failure`. */
     failNext = 0;
+    /** What a failing send throws: by default a temporary 503. */
+    failure: unknown = Object.assign(new Error('Service Unavailable'), {
+        statusCode: 503,
+    });
     refuseFiles = false;
     webhooks = 0;
     private seq = 0;
@@ -217,7 +255,7 @@ export class FakeHistoryPorts implements HistoryPorts {
     async sendCopy(target: SendTarget, payload: RelayPayload) {
         if (this.failNext > 0) {
             this.failNext -= 1;
-            throw new Error('503');
+            throw this.failure;
         }
         const files = payload.attachments?.length ?? 0;
         if (files > 0 && this.refuseFiles) throw new Error('file too large');

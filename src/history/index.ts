@@ -2,6 +2,7 @@ import { hostname } from 'node:os';
 import type { Client as DiscordClient } from 'discord.js';
 import type { Sequelize } from 'sequelize';
 import type { Addon, AddonContext } from '../addons/host';
+import type { AddonLogger } from '../addons/isolation';
 import { RepeatingTask } from '../addons/loop';
 import { resolveMode, type LinkedGuild } from '../guild-sync/cycle';
 import type { ChannelLinker } from '../guild-sync/links';
@@ -23,6 +24,8 @@ export const ADDON_NAME = 'history';
 const MAX_LINKS_PER_PASS = 50;
 const BUSY_DELAY_MS = 1_000;
 const IDLE_DELAY_MS = 5 * 60_000;
+/** Polling while a job waits out a backoff or for its channel's bridge. */
+export const WAIT_POLL_MS = 10_000;
 /** Lets guild-sync take its first snapshot before the first pass. */
 const FIRST_DELAY_MS = 60_000;
 
@@ -40,6 +43,8 @@ export interface HistoryDeps {
 }
 
 type Sync = PostgresGuildSyncStore;
+
+const IDLE: PassResult = { more: false, waiting: false };
 
 const pause = (ms: number) =>
     new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -128,23 +133,76 @@ function startMirror(deps: HistoryDeps, context: AddonContext, sync: Sync) {
     return listenToDiscordEdits(deps.discordClient, mirror, wrap);
 }
 
+/** What one pass found: work left now, or a job waiting for a time. */
+export interface PassResult {
+    readonly more: boolean;
+    readonly waiting: boolean;
+}
+
+/**
+ * Runs the importer for one link. An error outside any job, such as a
+ * database or snapshot read, is logged and retried soon: at the add-on
+ * boundary it would switch every add-on to read-only.
+ */
+async function importLink(
+    importer: HistoryImporter,
+    link: LinkedGuild,
+    deadline: number,
+    logger: AddonLogger
+): Promise<PassResult> {
+    try {
+        if (await importer.run(link, deadline))
+            return { more: true, waiting: false };
+        return { more: false, waiting: await importer.waiting(link.id) };
+    } catch (error) {
+        logger.warn(`[history] Pass over guild link ${link.id}:`, error);
+        return { more: false, waiting: true };
+    }
+}
+
 /**
  * Runs the importer for each guild link until the pass budget is spent,
- * which keeps the leader lock's transaction short. Returns true when work
- * is left.
+ * which keeps the leader lock's transaction short.
  */
-async function importLinks(
-    deps: HistoryDeps,
-    importer: HistoryImporter
-): Promise<boolean> {
+export async function importLinks(
+    deps: Pick<HistoryDeps, 'listGuildLinks'>,
+    importer: HistoryImporter,
+    logger: AddonLogger
+): Promise<PassResult> {
     const deadline = Date.now() + PASS_BUDGET_MS;
     const links = await deps.listGuildLinks();
     let more = false;
+    let waiting = false;
     for (const link of links.slice(0, MAX_LINKS_PER_PASS)) {
-        if (Date.now() >= deadline) return true;
-        if (await importer.run(link, deadline)) more = true;
+        if (Date.now() >= deadline) return { more: true, waiting };
+        const result = await importLink(importer, link, deadline, logger);
+        more = more || result.more;
+        waiting = waiting || result.waiting;
     }
-    return more;
+    return { more, waiting };
+}
+
+/**
+ * Turns pass results into the loop's busy or idle answer. While a job
+ * waits, the loop ticks busy but runs a real pass only every WAIT_POLL_MS.
+ */
+export class WaitThrottle {
+    private quietUntil = 0;
+
+    constructor(private readonly now: () => number) {}
+
+    /** True when this tick should skip the real pass. */
+    resting(): boolean {
+        return this.now() < this.quietUntil;
+    }
+
+    /** The loop's answer after a real pass. */
+    after(result: PassResult): boolean {
+        if (result.more) return true;
+        if (!result.waiting) return false;
+        this.quietUntil = this.now() + WAIT_POLL_MS;
+        return true;
+    }
 }
 
 /**
@@ -161,20 +219,22 @@ export function createHistoryAddon(deps: HistoryDeps): Addon {
             const { sync, importer } = buildImporter(deps, context);
             stopMirror = startMirror(deps, context, sync);
             const holder = `${hostname()}:${process.pid}:history`;
+            const throttle = new WaitThrottle(() => Date.now());
             const pass = async () => {
+                if (throttle.resting()) return true;
                 const result = await context.boundary.run(
                     ADDON_NAME,
                     'import',
                     async () => {
                         const locked = await sync.withLeaderLock(
                             holder,
-                            () => importLinks(deps, importer),
+                            () => importLinks(deps, importer, context.logger),
                             HISTORY_LOCK_KEY
                         );
-                        return locked.ran && locked.value;
+                        return locked.ran ? locked.value : IDLE;
                     }
                 );
-                return result.ok && result.value;
+                return throttle.after(result.ok ? result.value : IDLE);
             };
             task = new RepeatingTask(pass, BUSY_DELAY_MS, IDLE_DELAY_MS);
             task.start(FIRST_DELAY_MS);
