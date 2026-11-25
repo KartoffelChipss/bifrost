@@ -166,8 +166,11 @@ function removalFor(
     const sourceId = sourceIdOf(row, direction) ?? '';
     const destId = destIdOf(row, direction) ?? '';
     const kind = row.kind as SyncKind;
-    if (row.state === 'active')
-        return { op: 'archive', kind, sourceId, destId };
+    const adopted = !row.createdBySync;
+    if (row.state === 'active') {
+        const archive = { op: 'archive' as const, kind, sourceId, destId };
+        return adopted ? { ...archive, adopted } : archive;
+    }
     // The grace period runs from when the object first went missing, which
     // is at least confirmMinutes before it could be archived.
     const elapsed =
@@ -185,7 +188,7 @@ function removalFor(
         kind,
         sourceId,
         destId,
-        adopted: !row.createdBySync,
+        adopted,
     };
 }
 
@@ -264,9 +267,45 @@ export type BudgetResult =
     | { readonly needsApproval: false }
     | { readonly needsApproval: true; readonly reason: string };
 
+/** True for an archive or hard delete of an object sync did not create. */
+function removesUncreated(op: PlanOp): boolean {
+    return (op.op === 'archive' || op.op === 'hard-delete') && !!op.adopted;
+}
+
+/** Every reason the plan's removals need approval, in a fixed order. */
+function budgetReasons(
+    ops: readonly PlanOp[],
+    settings: GuardSettings,
+    removalsToday: number
+): string[] {
+    const reasons: string[] = [];
+    const uncreated = ops.filter(removesUncreated).length;
+    if (uncreated > 0) {
+        reasons.push(
+            `${uncreated} removals of objects the sync did not create`
+        );
+    }
+    const removals = ops.filter(isRemoval).length;
+    if (removals > settings.deleteBudgetPerCycle) {
+        reasons.push(
+            `${removals} removals, over the cycle budget of ${settings.deleteBudgetPerCycle}`
+        );
+    }
+    if (removalsToday + removals > settings.deleteBudgetPerDay) {
+        reasons.push(
+            `${removalsToday + removals} removals today, over the daily budget of ${settings.deleteBudgetPerDay}`
+        );
+    }
+    return reasons;
+}
+
 /**
- * Delete budget (guard 7). Over the cap, or with any hard delete of an
- * adopted object, the whole plan waits for approval.
+ * Delete budget (guard 7). Over the cap, or with any archive or hard
+ * delete of an object sync did not create, the plan's removals wait for
+ * approval. The reason names every cause, so an admin who approves a
+ * plan over budget also sees that it touches objects sync did not
+ * create, and an approval for the budget alone never covers those
+ * (cycle.ts isApproved compares the reasons).
  */
 export function checkDeleteBudget(
     ops: readonly PlanOp[],
@@ -279,26 +318,9 @@ export function checkDeleteBudget(
             reason: 'removal count for today is invalid',
         };
     }
-    const removals = ops.filter(isRemoval).length;
-    if (removals > settings.deleteBudgetPerCycle) {
-        return {
-            needsApproval: true,
-            reason: `${removals} removals, over the cycle budget of ${settings.deleteBudgetPerCycle}`,
-        };
-    }
-    if (removalsToday + removals > settings.deleteBudgetPerDay) {
-        return {
-            needsApproval: true,
-            reason: `${removalsToday + removals} removals today, over the daily budget of ${settings.deleteBudgetPerDay}`,
-        };
-    }
-    if (ops.some((op) => op.op === 'hard-delete' && op.adopted)) {
-        return {
-            needsApproval: true,
-            reason: 'hard delete of an adopted object',
-        };
-    }
-    return { needsApproval: false };
+    const reasons = budgetReasons(ops, settings, removalsToday);
+    if (reasons.length === 0) return { needsApproval: false };
+    return { needsApproval: true, reason: reasons.join('; ') };
 }
 
 const KIND_RANK: Readonly<Record<SyncKind, number>> = {

@@ -56,7 +56,7 @@ function describeOp(op: PlanOp): string {
         case 'link':
             return `link channel ${op.sourceId} to ${op.destId}`;
         case 'archive':
-            return `archive ${op.kind} ${op.destId}`;
+            return `archive ${op.kind} ${op.destId}${op.adopted ? ' (not created by sync)' : ''}`;
         case 'hard-delete':
             return `hard-delete ${op.kind} ${op.destId}${op.adopted ? ' (adopted)' : ''}`;
     }
