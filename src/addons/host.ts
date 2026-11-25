@@ -23,7 +23,12 @@ export type AddonFactories = Partial<Record<AddonKey, () => Addon>>;
 
 const ADDON_KEYS: readonly AddonKey[] = ['guildSync', 'history', 'identity'];
 const MAX_ADDONS = ADDON_KEYS.length;
-export const DEFAULT_STOP_TIMEOUT_MS = 10_000;
+/**
+ * One deadline for stopping every add-on together. Docker sends SIGKILL
+ * 10 s after SIGTERM, so the add-ons get 8 s and the process has the rest
+ * to exit on its own.
+ */
+export const DEFAULT_STOP_TIMEOUT_MS = 8_000;
 
 /**
  * Picks the add-ons to run from the config. An add-on that is switched on
@@ -105,12 +110,29 @@ export class AddonHost {
         return { started: this.started.map((addon) => addon.name), failed };
     }
 
-    /** Stops started add-ons in reverse order, each with a time limit. */
-    async stopAll(): Promise<void> {
+    /**
+     * Stops started add-ons in reverse order, all within one shared
+     * deadline of `stopTimeoutMs`. An add-on still stopping at the deadline
+     * is left behind; the ones after it are asked to stop but not waited
+     * for.
+     */
+    async stopAll(now: () => number = Date.now): Promise<void> {
         const toStop = this.started.splice(0).reverse();
+        const deadline = now() + this.stopTimeoutMs;
         for (const addon of toStop) {
+            const left = deadline - now();
+            if (left <= 0) {
+                this.context.logger.warn(
+                    `[addons] Shutdown deadline passed; not waiting for ${addon.name}`
+                );
+                // Still asked to stop, so its timers and listeners go.
+                void this.context.boundary.run(addon.name, 'stop', () =>
+                    addon.stop()
+                );
+                continue;
+            }
             await this.context.boundary.run(addon.name, 'stop', () =>
-                withTimeout(addon.stop(), this.stopTimeoutMs, addon.name)
+                withTimeout(addon.stop(), left, addon.name)
             );
         }
     }

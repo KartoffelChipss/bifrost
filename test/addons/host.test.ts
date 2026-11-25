@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
 import type { AddonConfig } from '../../src/addons/config';
-import { AddonHost, selectAddons, type Addon } from '../../src/addons/host';
+import {
+    AddonHost,
+    DEFAULT_STOP_TIMEOUT_MS,
+    selectAddons,
+    type Addon,
+} from '../../src/addons/host';
 import { Sequelize } from 'sequelize';
 import { initAddonDatabase, startAddons } from '../../src/addons/index';
 import { IsolationBoundary } from '../../src/addons/isolation';
@@ -107,6 +112,31 @@ describe('AddonHost', () => {
         await host.startAll();
         await host.stopAll();
         assert.equal(ctx.mode.mode, 'read-only');
+    });
+
+    it('stops every add-on within one shared deadline', async () => {
+        const ctx = context();
+        const hang = () => new Promise<void>(() => {});
+        const asked: string[] = [];
+        const make = (name: string) =>
+            fakeAddon(name, {
+                stop: () => {
+                    asked.push(name);
+                    return hang();
+                },
+            });
+        const host = new AddonHost([make('a'), make('b'), make('c')], ctx, 40);
+        await host.startAll();
+        const started = Date.now();
+        await host.stopAll();
+        const took = Date.now() - started;
+        // Three hung add-ons share 40 ms instead of taking 40 ms each.
+        assert.ok(took < 100, `took ${took} ms`);
+        assert.deepEqual(asked, ['c', 'b', 'a']);
+    });
+
+    it('fits the default deadline inside Docker grace', () => {
+        assert.ok(DEFAULT_STOP_TIMEOUT_MS < 10_000);
     });
 });
 
