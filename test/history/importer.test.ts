@@ -15,6 +15,7 @@ import {
     backoffMs,
     type HistoryMode,
 } from '../../src/history/importer';
+import { contentHash } from '../../src/history/format';
 import { SURVEY_MAX_PAGES, estimateMinutes } from '../../src/history/survey';
 import type { HistoryJob } from '../../src/history/types';
 import { createRecordingLogger } from '../addons/fakes';
@@ -542,7 +543,9 @@ describe('failures and recovery', () => {
             inThread: false,
             webhookId: 'import-f10',
         });
-        s.ports.newestCopy = { id: 'already-sent', webhookId: 'import-f10' };
+        s.ports.recentCopies = [
+            { id: 'already-sent', webhookId: 'import-f10', content: '' },
+        ];
         await s.store.updateJob(job.id, { checkpointId: '11' });
         await s.drain();
         assert.deepEqual(s.ports.sent, []);
@@ -605,16 +608,73 @@ describe('restarts', () => {
 
     it('resolves a copy cut off mid-send before copying on', async () => {
         const s = await crashedAfterSend(false);
-        s.ports.newestCopy = { id: 'already-sent', webhookId: 'import-f10' };
+        s.ports.recentCopies = [
+            { id: 'already-sent', webhookId: 'import-f10', content: '' },
+        ];
         await s.drain();
         assert.equal(s.ports.sent.length, 1);
         assert.equal(s.store.messages[0]?.fluxerMessageId, 'already-sent');
 
         const t = await crashedAfterSend(false);
-        t.ports.newestCopy = { id: 'live', webhookId: 'someone-else' };
+        t.ports.recentCopies = [
+            { id: 'live', webhookId: 'someone-else', content: '' },
+        ];
         await t.drain();
         assert.equal(t.ports.sent.length, 2);
         assert.equal(t.store.job('10').failures, 0);
+    });
+});
+
+describe('crash recovery', () => {
+    /** A gap-pass copy of message 15 cut off mid-send, with its hash. */
+    async function cutOff(content: string) {
+        const s = setup();
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        s.ports.add('10', '15');
+        await s.links.link(LINK.id, '10', 'f10');
+        const job = s.store.job('10');
+        await s.store.startMessage({
+            discordMessageId: '15',
+            jobId: job.id,
+            discordAuthorId: 'author',
+            fluxerMessageId: null,
+            fluxerTargetId: 'f10',
+            inThread: false,
+            webhookId: 'fw-f10',
+            contentHash: contentHash(content),
+        });
+        return s;
+    }
+
+    it('skips newer live relay posts by the same webhook and finds the copy by its text', async () => {
+        const s = await cutOff('the copy');
+        s.ports.relayedFluxer.add('live-2');
+        s.ports.recentCopies = [
+            { id: 'live-2', webhookId: 'fw-f10', content: 'the copy' },
+            { id: 'live-1', webhookId: 'fw-f10', content: 'chat' },
+            { id: 'ours', webhookId: 'fw-f10', content: 'the copy\n' },
+        ];
+        await s.drain();
+        assert.equal(
+            (await s.store.importedByDiscordId('15'))?.fluxerMessageId,
+            'ours'
+        );
+        assert.equal(s.ports.sent.length, 1);
+    });
+
+    it('treats the copy as not sent when no recent text matches', async () => {
+        const s = await cutOff('the copy');
+        s.ports.recentCopies = [
+            { id: 'live-1', webhookId: 'fw-f10', content: 'chat' },
+        ];
+        await s.drain();
+        assert.equal(
+            (await s.store.importedByDiscordId('15'))?.fluxerMessageId,
+            'copy-2'
+        );
+        assert.equal(s.ports.sent.length, 2);
     });
 });
 

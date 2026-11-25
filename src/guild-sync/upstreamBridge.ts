@@ -13,6 +13,7 @@ import {
     type Client as DiscordClient,
 } from 'discord.js';
 import type {
+    FluxerCopy,
     HistoryPorts,
     PayloadOptions,
     SendTarget,
@@ -624,7 +625,10 @@ export class UpstreamBridge
         });
     }
 
-    async newestFluxerMessage(fluxerId: string) {
+    async recentFluxerMessages(
+        fluxerId: string,
+        limit: number
+    ): Promise<FluxerCopy[]> {
         const channel = await this.fluxer().channels.fetch(fluxerId, {
             force: true,
         });
@@ -637,11 +641,23 @@ export class UpstreamBridge
                 };
             }
         ).messages;
-        if (!manager) return null;
-        const newest = [...(await manager.fetch({ limit: 1 })).values()][0];
-        return newest
-            ? { id: newest.id, webhookId: newest.webhookId ?? null }
-            : null;
+        if (!manager) return [];
+        const page = await manager.fetch({ limit });
+        return [...page.values()]
+            .sort((a, b) => (BigInt(a.id) > BigInt(b.id) ? -1 : 1))
+            .map((m) => ({
+                id: m.id,
+                webhookId: m.webhookId ?? null,
+                content: m.content ?? '',
+            }));
+    }
+
+    async relayedLiveFluxer(fluxerMessageId: string): Promise<boolean> {
+        const link =
+            await this.up.linkService.getMessageLinkByFluxerMessageId(
+                fluxerMessageId
+            );
+        return link !== null && link !== undefined;
     }
 
     createImportWebhook(fluxerChannelId: string) {

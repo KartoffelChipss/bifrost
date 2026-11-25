@@ -117,6 +117,19 @@ export interface ImportedMessage {
     readonly fluxerTargetId: string;
     readonly inThread: boolean;
     readonly webhookId: string;
+    /**
+     * A hash of the content sent (see contentHash), so crash recovery can
+     * tell this copy from other posts by the same webhook. Null for rows
+     * written before it was recorded.
+     */
+    readonly contentHash?: string | null;
+}
+
+/** A recent Fluxer message, for crash recovery. */
+export interface FluxerCopy {
+    readonly id: string;
+    readonly webhookId: string | null;
+    readonly content: string;
 }
 
 /** Reads Discord history and writes copies to Fluxer. */
@@ -146,10 +159,13 @@ export interface HistoryPorts {
         content: string
     ): Promise<void>;
     deleteCopy(target: SendTarget, messageId: string): Promise<void>;
-    /** The newest message in a Fluxer channel or thread, for crash recovery. */
-    newestFluxerMessage(
-        fluxerId: string
-    ): Promise<{ id: string; webhookId: string | null } | null>;
+    /** Up to `limit` newest messages in a Fluxer channel or thread. */
+    recentFluxerMessages(
+        fluxerId: string,
+        limit: number
+    ): Promise<FluxerCopy[]>;
+    /** True when the live relay sent this Fluxer message (message_links). */
+    relayedLiveFluxer(fluxerMessageId: string): Promise<boolean>;
     createImportWebhook(fluxerChannelId: string): Promise<WebhookRef>;
     /** Whether a Discord thread is archived and locked right now. */
     threadState(

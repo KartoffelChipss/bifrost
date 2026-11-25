@@ -1,6 +1,7 @@
 import type { RelayPayload, WebhookRef } from '../../src/guild-sync/links';
 import type { HistoryStore } from '../../src/history/store';
 import type {
+    FluxerCopy,
     HistoryJob,
     HistoryPorts,
     ImportedMessage,
@@ -97,6 +98,19 @@ export class FakeHistoryStore implements HistoryStore {
         this.messages = this.messages.filter(
             (m) => m.discordMessageId !== discordId
         );
+    }
+
+    async setContentHash(discordId: string, hash: string) {
+        this.messages = this.messages.map((m) =>
+            m.discordMessageId === discordId ? { ...m, contentHash: hash } : m
+        );
+    }
+
+    /** Fluxer message IDs the thread relay sent. */
+    relayedThreadFluxer = new Set<string>();
+
+    async relayedInThreadByFluxerId(id: string) {
+        return this.relayedThreadFluxer.has(id);
     }
 
     async unfinishedMessage(jobId: string) {
@@ -278,11 +292,17 @@ export class FakeHistoryPorts implements HistoryPorts {
         this.edits.push(`delete ${target.webhook.id} ${messageId}`);
     }
 
-    /** What the newest Fluxer message is, for crash recovery. */
-    newestCopy: { id: string; webhookId: string | null } | null = null;
+    /** Recent Fluxer messages, newest first, for crash recovery. */
+    recentCopies: FluxerCopy[] = [];
+    /** Fluxer message IDs the live relay sent (message_links). */
+    readonly relayedFluxer = new Set<string>();
 
-    async newestFluxerMessage() {
-        return this.newestCopy;
+    async recentFluxerMessages(_id: string, limit: number) {
+        return this.recentCopies.slice(0, limit);
+    }
+
+    async relayedLiveFluxer(id: string) {
+        return this.relayedFluxer.has(id);
     }
 
     async createImportWebhook(fluxerChannelId: string): Promise<WebhookRef> {

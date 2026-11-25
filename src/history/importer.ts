@@ -9,7 +9,7 @@ import {
 } from '../guild-sync/snapshot';
 import type { GuildWriter } from '../guild-sync/writers/writer';
 import { MessageError, describeError, isTransient } from './errors';
-import { CopyFormatter } from './format';
+import { CopyFormatter, contentHash } from './format';
 import {
     MAX_PARALLEL,
     PAGE_SIZE,
@@ -21,6 +21,7 @@ import { HistorySurvey } from './survey';
 import type {
     HistoryJob,
     HistoryPorts,
+    ImportedMessage,
     SendTarget,
     SourceMessage,
 } from './types';
@@ -55,6 +56,8 @@ export function backoffMs(count: number): number {
 }
 /** Pages read per pass after a channel is bridged, to close the gap. */
 export const MAX_GAP_PAGES = 5;
+/** Recent Fluxer messages searched for a copy cut off by a crash. */
+export const RECOVERY_SCAN = 20;
 /** Pinned messages read per channel or thread. */
 const MAX_PINS = 250;
 
@@ -489,23 +492,49 @@ export class HistoryImporter {
 
     /**
      * A message that was sent but not recorded when the process stopped is
-     * found as the newest message from the webhook that sent it. Otherwise
+     * looked for among the last RECOVERY_SCAN Fluxer messages; otherwise
      * it is resent.
      */
     private async recover(job: HistoryJob) {
-        const { store, ports } = this.deps;
+        const { store } = this.deps;
         const unfinished = await store.unfinishedMessage(job.id);
         if (!unfinished) return;
-        const newest = await ports.newestFluxerMessage(
-            unfinished.fluxerTargetId
-        );
-        const ours =
-            newest &&
-            newest.webhookId === unfinished.webhookId &&
-            !(await store.importedByFluxerId(newest.id));
-        if (ours && newest)
-            await store.finishMessage(unfinished.discordMessageId, newest.id);
+        const sent = await this.findSentCopy(unfinished);
+        if (sent) await store.finishMessage(unfinished.discordMessageId, sent);
         else await store.dropMessage(unfinished.discordMessageId);
+    }
+
+    /**
+     * The copy's Fluxer ID: a recent message from the same webhook that no
+     * other record claims and whose text matches what was sent. The same
+     * webhook also posts live relay messages, so neither alone is enough.
+     */
+    private async findSentCopy(
+        unfinished: ImportedMessage
+    ): Promise<string | null> {
+        const recent = await this.deps.ports.recentFluxerMessages(
+            unfinished.fluxerTargetId,
+            RECOVERY_SCAN
+        );
+        const hash = unfinished.contentHash ?? null;
+        for (const message of recent.slice(0, RECOVERY_SCAN)) {
+            if (message.webhookId !== unfinished.webhookId) continue;
+            if (hash !== null && contentHash(message.content) !== hash)
+                continue;
+            if (await this.claimed(message.id)) continue;
+            return message.id;
+        }
+        return null;
+    }
+
+    /** True when an import or a relay already owns this Fluxer message. */
+    private async claimed(fluxerMessageId: string): Promise<boolean> {
+        const { store, ports } = this.deps;
+        return (
+            (await store.importedByFluxerId(fluxerMessageId)) !== null ||
+            (await store.relayedInThreadByFluxerId(fluxerMessageId)) ||
+            (await ports.relayedLiveFluxer(fluxerMessageId))
+        );
     }
 
     private async importPage(pass: Pass, start: HistoryJob): Promise<boolean> {
@@ -626,6 +655,7 @@ export class HistoryImporter {
                 fluxerTargetId: target.threadId ?? job.fluxerId ?? '',
                 inThread: target.threadId !== null,
                 webhookId: target.webhook.id,
+                contentHash: contentHash(payload.content),
             },
             now()
         );

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { RelayPayload } from '../guild-sync/links';
 import { MAX_CONTENT_LENGTH } from './limits';
 import type { HistoryStore } from './store';
@@ -59,6 +60,28 @@ export function clipContent(content: string, max: number): string {
     }
     const head = cut(content, max - tail.length - ELLIPSIS.length);
     return `${head}${ELLIPSIS}${tail}`;
+}
+
+/**
+ * A hash of a copy's text, to recognise it on Fluxer. Line endings and
+ * surrounding whitespace are normalised, as a server may trim them.
+ */
+export function contentHash(content: string): string {
+    const normal = content.replace(/\r\n/g, '\n').trim();
+    return createHash('sha256').update(normal).digest('hex');
+}
+
+/**
+ * Adds a note line just above the last line (the date note), fitted to
+ * Fluxer's limit.
+ */
+export function withNote(content: string, note: string): string {
+    const split = content.lastIndexOf('\n');
+    const joined =
+        split < 0
+            ? `${content}\n${note}`
+            : `${content.slice(0, split)}\n${note}${content.slice(split)}`;
+    return clipContent(joined, MAX_CONTENT_LENGTH);
 }
 
 /**

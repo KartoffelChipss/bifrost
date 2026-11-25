@@ -7,6 +7,8 @@ import { TABLES } from '../schema';
  *   never fail a job.
  * - `retryAt` is the earliest time the job runs again, for backoff.
  * - `skipped` counts messages given up on after repeated lasting errors.
+ * - A message's `contentHash` lets crash recovery tell its copy from other
+ *   posts by the same webhook, such as live relay messages.
  */
 
 const counter = {
@@ -32,6 +34,12 @@ export async function up({
                 transaction,
             });
         }
+        await qi.addColumn(
+            TABLES.historyMessages,
+            'contentHash',
+            { type: DataTypes.STRING, allowNull: true },
+            { transaction }
+        );
     });
 }
 
@@ -41,6 +49,9 @@ export async function down({
     context: QueryInterface;
 }): Promise<void> {
     await qi.sequelize.transaction(async (transaction) => {
+        await qi.removeColumn(TABLES.historyMessages, 'contentHash', {
+            transaction,
+        });
         for (const name of Object.keys(JOB_COLUMNS)) {
             await qi.removeColumn(TABLES.historyJobs, name, { transaction });
         }

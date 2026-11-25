@@ -29,6 +29,8 @@ export interface HistoryStore {
         fluxerMessageId: string
     ): Promise<void>;
     dropMessage(discordMessageId: string): Promise<void>;
+    /** Replaces the content hash, when a copy is resent with other text. */
+    setContentHash(discordMessageId: string, hash: string): Promise<void>;
     /** A message that was being sent when the process stopped. */
     unfinishedMessage(jobId: string): Promise<ImportedMessage | null>;
     importedByFluxerId(
@@ -39,6 +41,8 @@ export interface HistoryStore {
     ): Promise<ImportedMessage | null>;
     /** True when the thread relay copied this Discord message, either way. */
     relayedInThread(discordMessageId: string): Promise<boolean>;
+    /** True when this Fluxer message is one side of a thread relay pair. */
+    relayedInThreadByFluxerId(fluxerMessageId: string): Promise<boolean>;
     /**
      * Discord channels whose history is copied, so guild-sync may bridge
      * them: jobs that are ready or done. A failed job never counts; its
@@ -142,6 +146,7 @@ function parseImported(row: Row): ImportedMessage {
         fluxerTargetId: str(row, 'fluxerTargetId'),
         inThread: row.inThread,
         webhookId: str(row, 'webhookId'),
+        contentHash: optStr(row, 'contentHash'),
     };
 }
 
@@ -240,8 +245,8 @@ export class PostgresHistoryStore implements HistoryStore {
 
     async startMessage(message: ImportedMessage, now: Date): Promise<void> {
         await this.db.query(
-            `INSERT INTO ${TABLES.historyMessages} ("discordMessageId", "jobId", "discordAuthorId", "fluxerMessageId", "fluxerTargetId", "inThread", "webhookId", "createdAt")
-             VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)`,
+            `INSERT INTO ${TABLES.historyMessages} ("discordMessageId", "jobId", "discordAuthorId", "fluxerMessageId", "fluxerTargetId", "inThread", "webhookId", "createdAt", "contentHash")
+             VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8)`,
             {
                 bind: [
                     message.discordMessageId,
@@ -251,6 +256,7 @@ export class PostgresHistoryStore implements HistoryStore {
                     message.inThread,
                     message.webhookId,
                     now,
+                    message.contentHash ?? null,
                 ],
             }
         );
@@ -267,6 +273,13 @@ export class PostgresHistoryStore implements HistoryStore {
         await this.db.query(
             `DELETE FROM ${TABLES.historyMessages} WHERE "discordMessageId" = $1`,
             { bind: [discordMessageId] }
+        );
+    }
+
+    async setContentHash(discordMessageId: string, hash: string) {
+        await this.db.query(
+            `UPDATE ${TABLES.historyMessages} SET "contentHash" = $2 WHERE "discordMessageId" = $1`,
+            { bind: [discordMessageId, hash] }
         );
     }
 
@@ -321,6 +334,14 @@ export class PostgresHistoryStore implements HistoryStore {
             { bind: [guildLinkId, now], type: QueryTypes.SELECT }
         );
         return rows.length;
+    }
+
+    async relayedInThreadByFluxerId(fluxerMessageId: string) {
+        const rows = await this.db.query<Row>(
+            `SELECT 1 FROM ${TABLES.threadMessages} WHERE "fluxerMessageId" = $1 LIMIT 1`,
+            { bind: [fluxerMessageId], type: QueryTypes.SELECT }
+        );
+        return rows.length > 0;
     }
 
     async isOptedOut(discordUserId: string): Promise<boolean> {
