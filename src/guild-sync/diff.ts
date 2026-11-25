@@ -127,6 +127,34 @@ interface ObjectSpec<T extends { readonly id: string; readonly name: string }> {
     readonly implicit?: (item: T) => boolean;
     /** Fields compared only with the last write (see projectOpaqueRole). */
     readonly projectOpaque?: (item: T) => Fields;
+    /**
+     * The destination ID of the item's mapped parent when that parent is
+     * gone from the destination, else null. Such an item is not created:
+     * the create would fail every cycle.
+     */
+    readonly missingParent?: (item: T) => string | null;
+}
+
+/** One finding per missing parent, however many children wait on it. */
+function reportMissingParent(out: Out, kind: SyncKind, parentId: string) {
+    const detail = `parent ${parentId} is missing on Fluxer; its children wait`;
+    if (out.findings.some((f) => f.id === parentId && f.detail === detail)) {
+        return;
+    }
+    out.findings.push({
+        type: 'missing-on-destination',
+        kind,
+        id: parentId,
+        detail,
+    });
+}
+
+/** The mapped destination parent when it is gone from the destination. */
+function goneParent(
+    destId: string | null,
+    present: ReadonlySet<string>
+): string | null {
+    return destId !== null && !present.has(destId) ? destId : null;
 }
 
 /** Source changes in fields the destination cannot be compared on. */
@@ -217,7 +245,13 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
         }
         const destId = map.dest(spec.kind, item.id);
         if (!destId) {
-            out.ops.push(createOp(spec, map, item));
+            const parent = spec.missingParent?.(item) ?? null;
+            if (parent === null) out.ops.push(createOp(spec, map, item));
+            else {
+                const parentKind =
+                    spec.kind === 'thread' ? 'channel' : 'category';
+                reportMissingParent(out, parentKind, parent);
+            }
             continue;
         }
         const dest = destById.get(destId);
@@ -274,6 +308,7 @@ const notCategory = (c: ChannelSnap) => !isCategory(c);
 
 function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
     const { source, destination, previousSource } = input;
+    const present = new Set(destination.channels.map((c) => c.id));
     // Creates run in source order, so new channels land in that order.
     const channelSpec = (
         filter: (c: ChannelSnap) => boolean,
@@ -292,6 +327,10 @@ function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
             input.excluded?.has(c.id)
                 ? 'excluded by BF_ADDONS_EXCLUDE_CHANNELS'
                 : channelSkip(c),
+        missingParent: (c: ChannelSnap) =>
+            c.parentId === null
+                ? null
+                : goneParent(ctx.map.dest('category', c.parentId), present),
     });
     diffObjects(
         {
@@ -544,6 +583,7 @@ function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
     // cannot duplicate anything. Removals wait instead: trackMissing counts
     // no thread in a channel with a gap as missing.
     const mapped = (t: ThreadSnap) => ctx.map.dest('channel', t.parentId);
+    const present = new Set(destination.channels.map((c) => c.id));
     const included = (t: ThreadSnap) => !input.excluded?.has(t.id);
     diffObjects(
         {
@@ -557,6 +597,7 @@ function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
             projectDest: projectDestThread,
             sameType: (a, b) => mapped(a) === b.parentId,
             skipReason: () => null,
+            missingParent: (t) => goneParent(mapped(t), present),
         },
         ctx.map,
         out
