@@ -1,6 +1,12 @@
 import type { ObjectState, SyncDirection } from '../addons/db/schema';
 import type { FailureLedger } from './failures';
-import type { AddonLogger } from '../addons/isolation';
+import { UnrecordedWriteError, type AddonLogger } from '../addons/isolation';
+import {
+    INTENT_WINDOW_MS,
+    latestIntent,
+    madeAfter,
+    type IntentKey,
+} from './adopt';
 import type { AssetSource } from './assets';
 import { IdMap } from './idmap';
 import { OwnershipLostError } from './cycleGuard';
@@ -11,6 +17,7 @@ import type { Plan } from './plan';
 import { MAX_CHANNELS_PER_CATEGORY } from './diff';
 import { ORDER_PENDING } from './order';
 import {
+    botHeldBits,
     everyoneHidden,
     maxBitrateOf,
     projectSourceRole,
@@ -27,7 +34,12 @@ import {
     type WriteAction,
     type WriteContext,
 } from './writes';
-import type { GuildWriter, RolePatch } from './writers/writer';
+import type {
+    ChannelSpec,
+    GuildWriter,
+    RolePatch,
+    ThreadSpec,
+} from './writers/writer';
 
 /**
  * Pauses after a write, sized to Fluxer's per-guild route limits
@@ -98,6 +110,12 @@ export interface ApplyDeps {
     readonly canWrite: () => boolean;
     /** Checked before every write: false once the leader lock is lost. */
     readonly stillLeader?: () => Promise<boolean>;
+    /**
+     * Checked before every write: why the link's own settings, read again,
+     * no longer allow writes (its kill switch or mode changed during the
+     * run), or null. A failed read stops the run too.
+     */
+    readonly writesStopped?: () => Promise<string | null>;
     /** Ops that keep failing wait out a backoff instead of every cycle. */
     readonly failures?: FailureLedger;
     readonly pause: (ms: number) => Promise<void>;
@@ -188,18 +206,26 @@ async function archiveCategory(state: RunState): Promise<string> {
         }
     }
     const number = slots.reduce((max, s) => Math.max(max, s.number), 0) + 1;
-    return createArchiveCategory(state, number);
+    return newArchiveCategory(state, number);
 }
 
-/** Creates archive category `number`, locked for @everyone, and owns it. */
-async function createArchiveCategory(
-    state: RunState,
-    number: number
-): Promise<string> {
-    const { destination, plan } = state.input;
-    const name =
-        number === 1 ? ARCHIVE_CATEGORY : `${ARCHIVE_CATEGORY}-${number}`;
-    const id = await state.deps.writer.createChannel(destination.guildId, {
+/** The name of archive category `number`. */
+function archiveName(number: number): string {
+    return number === 1 ? ARCHIVE_CATEGORY : `${ARCHIVE_CATEGORY}-${number}`;
+}
+
+/** The intent key of archive category `number`; no source object has one. */
+function archiveIntentKey(number: number): IntentKey {
+    return {
+        kind: 'category',
+        sourceId: `${ARCHIVE_KEY}:${number}`,
+        name: archiveName(number),
+    };
+}
+
+/** A category locked for @everyone. */
+function archiveSpec(name: string, everyoneRoleId: string): ChannelSpec {
+    return {
         type: CATEGORY_TYPE,
         name,
         parentId: null,
@@ -211,35 +237,96 @@ async function createArchiveCategory(
         tags: [],
         overwrites: [
             {
-                id: destination.everyoneRoleId,
+                id: everyoneRoleId,
                 type: 0,
                 allow: '0',
                 deny: LOCK_BITS.toString(),
             },
         ],
-    });
+    };
+}
+
+/** Records the bot's ownership of archive category `number`. */
+async function ownArchive(
+    state: RunState,
+    id: string,
+    number: number
+): Promise<string> {
+    const { plan } = state.input;
     const toFluxer = plan.direction === 'discord-to-fluxer';
-    try {
-        const row = await state.deps.store.insertMapping(
-            {
-                guildLinkId: plan.guildLinkId,
-                kind: 'category',
-                discordId: toFluxer ? null : id,
-                fluxerId: toFluxer ? id : null,
-                createdBySync: true,
-                appliedFields: { [ARCHIVE_KEY]: number, name },
-            },
-            state.deps.now()
+    const row = await state.deps.store.insertMapping(
+        {
+            guildLinkId: plan.guildLinkId,
+            kind: 'category',
+            discordId: toFluxer ? null : id,
+            fluxerId: toFluxer ? id : null,
+            createdBySync: true,
+            appliedFields: { [ARCHIVE_KEY]: number, name: archiveName(number) },
+        },
+        state.deps.now()
+    );
+    state.rows = [...state.rows, row];
+    state.archiveMoves.set(id, 0);
+    return id;
+}
+
+/**
+ * Archive category `number` made by an earlier create that timed out or
+ * was never recorded: an unmapped category of its name, made after its
+ * intent (adopt.ts). Null when there is none.
+ */
+async function orphanArchive(
+    state: RunState,
+    number: number
+): Promise<string | null> {
+    const { plan, destination } = state.input;
+    const { store, now } = state.deps;
+    const since = new Date(now().getTime() - INTENT_WINDOW_MS);
+    const key = archiveIntentKey(number);
+    const intents = await store.createIntents(plan.guildLinkId, since);
+    const intent = latestIntent(intents, key);
+    if (!intent) return null;
+    const mapped = new Set(state.rows.map((r) => destIdOf(r, plan.direction)));
+    const match = destination.channels.find(
+        (c) =>
+            c.type === CATEGORY_TYPE &&
+            c.name === key.name &&
+            !mapped.has(c.id) &&
+            madeAfter(c.id, intent)
+    );
+    return match?.id ?? null;
+}
+
+/**
+ * Archive category `number`: an earlier create's orphan when there is
+ * one, else a new category, locked for @everyone and owned. A new one
+ * that cannot be recorded stops the add-ons (guard 15).
+ */
+async function newArchiveCategory(
+    state: RunState,
+    number: number
+): Promise<string> {
+    const orphan = await orphanArchive(state, number);
+    if (orphan) {
+        state.deps.logger.info(
+            `[guild-sync] Adopting archive category ${orphan}, made by an earlier create`
         );
-        state.rows = [...state.rows, row];
+        return ownArchive(state, orphan, number);
+    }
+    const { destination } = state.input;
+    const key = archiveIntentKey(number);
+    const spec = archiveSpec(key.name, destination.everyoneRoleId);
+    const id = await sendCreate(state, key, () =>
+        state.deps.writer.createChannel(destination.guildId, spec)
+    );
+    try {
+        return await ownArchive(state, id, number);
     } catch (error) {
         throw new OwnershipLostError(
             `archive category ${id} was created but not recorded`,
             error
         );
     }
-    state.archiveMoves.set(id, 0);
-    return id;
 }
 
 const CATEGORY_TYPE = 4;
@@ -258,40 +345,59 @@ async function linkChannels(state: RunState, op: PlanOp): Promise<null> {
     return null;
 }
 
+type CreateThread = Extract<Write, { type: 'create-thread' }>;
+
+/**
+ * A forum post's first message and the webhook that posts it, or nulls
+ * for a thread. Throws NotReadyError while the forum is not bridged.
+ */
+async function postStarter(
+    state: RunState,
+    action: CreateThread,
+    sourceId: string
+): Promise<Pick<ThreadSpec, 'starter' | 'webhook'>> {
+    if (!THREAD_ONLY_TYPES.has(action.parentType)) {
+        return { starter: null, webhook: null };
+    }
+    const { plan, source } = state.input;
+    const { links, threads } = state.deps;
+    const toFluxer = plan.direction === 'discord-to-fluxer';
+    const link = toFluxer
+        ? await links?.byDiscordChannel(action.parentSourceId)
+        : await links?.byFluxerChannel(action.parentSourceId);
+    if (!link || !threads) {
+        throw new NotReadyError('the forum is not linked yet');
+    }
+    return {
+        webhook: toFluxer ? link.fluxerWebhook : link.discordWebhook,
+        starter: await threads.starter(source.guildId, sourceId),
+    };
+}
+
 /** Creates a thread, or a forum post with its first message. */
 async function createThread(
     state: RunState,
-    action: Extract<Write, { type: 'create-thread' }>,
-    sourceId: string
+    action: CreateThread,
+    op: PlanOp
 ): Promise<string> {
-    const { plan, source, destination } = state.input;
-    const { writer, links, threads } = state.deps;
-    let starter = null;
-    let webhook = null;
-    if (THREAD_ONLY_TYPES.has(action.parentType)) {
-        const toFluxer = plan.direction === 'discord-to-fluxer';
-        const link = toFluxer
-            ? await links?.byDiscordChannel(action.parentSourceId)
-            : await links?.byFluxerChannel(action.parentSourceId);
-        if (!link || !threads) {
-            throw new NotReadyError('the forum is not linked yet');
-        }
-        webhook = toFluxer ? link.fluxerWebhook : link.discordWebhook;
-        starter = await threads.starter(source.guildId, sourceId);
-    }
-    return writer.createThread(destination.guildId, {
+    const sourceId = 'sourceId' in op ? op.sourceId : '';
+    const post = await postStarter(state, action, sourceId);
+    const spec: ThreadSpec = {
         parentId: action.parentId,
         parentType: action.parentType,
         name: action.name,
         tags: action.tags,
-        starter,
-        webhook,
+        ...post,
         private: action.private,
         invitable: action.invitable,
         members: action.private
             ? await privateMembers(state, sourceId)
             : undefined,
-    });
+    };
+    const guildId = state.input.destination.guildId;
+    return sendCreate(state, intentKey(op, action.name), () =>
+        state.deps.writer.createThread(guildId, spec)
+    );
 }
 
 /** Destination accounts of the linked members of a private source thread. */
@@ -331,6 +437,25 @@ async function deleteObject(
     return writer.deleteChannel(guildId, destId);
 }
 
+/** Creates an emoji or sticker from the source image. */
+async function createExpression(
+    state: RunState,
+    action: Extract<Write, { type: 'create-emoji' | 'create-sticker' }>,
+    op: PlanOp
+): Promise<string> {
+    const { writer, assets } = state.deps;
+    const sourceGuild = state.input.source.guildId;
+    const guildId = state.input.destination.guildId;
+    const kind = action.type === 'create-emoji' ? 'emoji' : 'sticker';
+    const sourceId = 'sourceId' in op ? op.sourceId : '';
+    const image = await assets.image(sourceGuild, kind, sourceId);
+    return sendCreate(state, intentKey(op, action.name), () =>
+        action.type === 'create-emoji'
+            ? writer.createEmoji(guildId, { name: action.name, image })
+            : writer.createSticker(guildId, { ...action, image })
+    );
+}
+
 /** Creates and removals. Returns the new ID for a create, else null. */
 async function performLifecycle(
     state: RunState,
@@ -338,29 +463,22 @@ async function performLifecycle(
     op: PlanOp,
     destId: string
 ): Promise<string | null> {
-    const { source, destination } = state.input;
-    const { writer, assets } = state.deps;
-    const guildId = destination.guildId;
+    const { writer } = state.deps;
+    const guildId = state.input.destination.guildId;
     switch (action.type) {
         case 'create-role':
-            return writer.createRole(guildId, action.spec);
-        case 'create-channel':
-            return writer.createChannel(guildId, action.spec);
-        case 'create-emoji':
-        case 'create-sticker': {
-            const kind = action.type === 'create-emoji' ? 'emoji' : 'sticker';
-            const sourceId = 'sourceId' in op ? op.sourceId : '';
-            const image = await assets.image(source.guildId, kind, sourceId);
-            return action.type === 'create-emoji'
-                ? writer.createEmoji(guildId, { name: action.name, image })
-                : writer.createSticker(guildId, { ...action, image });
-        }
-        case 'create-thread':
-            return createThread(
-                state,
-                action,
-                'sourceId' in op ? op.sourceId : ''
+            return sendCreate(state, intentKey(op, action.spec.name), () =>
+                writer.createRole(guildId, action.spec)
             );
+        case 'create-channel':
+            return sendCreate(state, intentKey(op, action.spec.name), () =>
+                writer.createChannel(guildId, action.spec)
+            );
+        case 'create-emoji':
+        case 'create-sticker':
+            return createExpression(state, action, op);
+        case 'create-thread':
+            return createThread(state, action, op);
         case 'link':
             return linkChannels(state, op);
         case 'adopt':
@@ -624,6 +742,32 @@ export function isNotFound(error: unknown): boolean {
     return status === 404 || statusCode === 404;
 }
 
+/** The HTTP status an error carries, or null. */
+function httpStatus(error: unknown): number | null {
+    if (typeof error !== 'object' || error === null) return null;
+    const { status, statusCode } = error as {
+        status?: unknown;
+        statusCode?: unknown;
+    };
+    if (typeof status === 'number') return status;
+    return typeof statusCode === 'number' ? statusCode : null;
+}
+
+/**
+ * True when the platform answered with a refusal (4xx), so it made
+ * nothing. A timeout, a network error or a server error leaves the
+ * outcome unclear: the object may exist.
+ */
+export function isRefused(error: unknown): boolean {
+    const status = httpStatus(error);
+    if (status === null || status === 408) return false;
+    return status >= 400 && status < 500;
+}
+
+function messageOf(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
 /** The ledger key for one op: the same op on the same object. */
 function opKey(plan: Plan, op: PlanOp): string {
     const target = 'sourceId' in op ? op.sourceId : op.scope;
@@ -680,6 +824,14 @@ async function attempt(
             gone: false,
         };
     } catch (error) {
+        // A write that went through but could not be recorded must reach
+        // the isolation boundary, which trips read-only (guard 15).
+        if (
+            error instanceof OwnershipLostError ||
+            error instanceof UnrecordedWriteError
+        ) {
+            throw error;
+        }
         if (isRemoval(op) && isNotFound(error)) {
             return { ok: true, newId: null, gone: true };
         }
@@ -733,44 +885,74 @@ async function followUp(
     return true;
 }
 
-/** The name a create gives its object, for its intent; null for others. */
-function createdName(action: Write): string | null {
-    switch (action.type) {
-        case 'create-role':
-        case 'create-channel':
-            return action.spec.name;
-        case 'create-emoji':
-        case 'create-sticker':
-        case 'create-thread':
-            return action.name;
-        default:
-            return null;
+/** The intent key of a create op. */
+function intentKey(op: PlanOp, name: string): IntentKey {
+    return {
+        kind: op.kind,
+        sourceId: 'sourceId' in op ? op.sourceId : '',
+        name,
+    };
+}
+
+/** Writes a create-intent audit row: an intent, or a refusal after one. */
+async function auditIntent(
+    state: RunState,
+    key: IntentKey,
+    result: 'intent' | 'refused'
+): Promise<void> {
+    const { plan } = state.input;
+    await state.deps.store.audit(
+        {
+            planId: plan.id,
+            guildLinkId: plan.guildLinkId,
+            op: 'create-intent',
+            kind: key.kind,
+            sourceId: key.sourceId,
+            destId: null,
+            before: null,
+            after:
+                result === 'refused'
+                    ? { name: key.name, refused: true }
+                    : { name: key.name },
+            result,
+        },
+        state.deps.now()
+    );
+}
+
+/** Records a refusal. Without it, the intent stays usable as after a timeout. */
+async function recordRefusal(state: RunState, key: IntentKey): Promise<void> {
+    try {
+        await auditIntent(state, key, 'refused');
+    } catch (error) {
+        state.deps.logger.warn(
+            `[guild-sync] create ${key.kind} refusal not recorded: ${messageOf(error)}`
+        );
     }
 }
 
 /**
- * Records that a create is about to be sent, before it is sent. If the
- * create then times out after the platform made the object, or the
- * process stops before the map row is saved, a later cycle adopts the
- * object instead of skipping it forever or making a duplicate (adopt.ts).
+ * Sends one create. Its intent is recorded right before the platform
+ * call, after every check that could stop it, so an intent always stands
+ * for a create that was sent. If the create then times out after the
+ * platform made the object, or the process stops before the map row is
+ * saved, a later cycle adopts the object instead of skipping it forever
+ * or making a duplicate (adopt.ts). A create the platform refused gets a
+ * refusal after its intent, so a person's later object of the same name
+ * is never adopted on it.
  */
-async function recordIntent(
+async function sendCreate(
     state: RunState,
-    op: PlanOp,
-    action: Write
-): Promise<void> {
-    const name = createdName(action);
-    if (name === null) return;
-    await state.deps.store.audit(
-        {
-            ...auditBase(state.input.plan, op),
-            op: 'create-intent',
-            destId: null,
-            after: { name },
-            result: 'intent',
-        },
-        state.deps.now()
-    );
+    key: IntentKey,
+    send: () => Promise<string>
+): Promise<string> {
+    await auditIntent(state, key, 'intent');
+    try {
+        return await send();
+    } catch (error) {
+        if (isRefused(error)) await recordRefusal(state, key);
+        throw error;
+    }
 }
 
 /** Audit, ownership and removal state for a write that went through. */
@@ -860,7 +1042,6 @@ async function applyOp(
             gone: true,
         });
     }
-    await recordIntent(state, op, action);
     const result = await attempt(state, action, op);
     if (!result.ok) {
         if (result.notReady) {
@@ -885,7 +1066,11 @@ async function recordBaselines(state: RunState): Promise<void> {
         (op) => op.op === 'update' && op.baseline
     );
     const everyone = source.roles.find((r) => r.id === source.everyoneRoleId);
-    const ctx = { map: state.map, direction: plan.direction };
+    const ctx = {
+        map: state.map,
+        direction: plan.direction,
+        everyoneMask: botHeldBits(destination) ?? undefined,
+    };
     const baselines: { kind: 'role' | 'guild'; applied: Fields }[] = [
         {
             kind: 'guild',
@@ -927,9 +1112,22 @@ export function bucketOf(op: PlanOp): string {
     return op.op === 'reorder' ? `reorder:${op.kind}` : op.kind;
 }
 
+/** Why the link's settings, read again, stop the run, or null. */
+async function settingsStop(state: RunState): Promise<string | null> {
+    const { writesStopped } = state.deps;
+    if (!writesStopped) return null;
+    try {
+        return await writesStopped();
+    } catch (error) {
+        return `link settings could not be read again: ${messageOf(error)}`;
+    }
+}
+
 /** Why the run must stop before the next op, or null. */
 async function stopReason(state: RunState): Promise<string | null> {
     if (!state.deps.canWrite()) return 'writes were switched off';
+    const stopped = await settingsStop(state);
+    if (stopped !== null) return stopped;
     if (state.failed >= MAX_FAILURES_PER_CYCLE) {
         return `${state.failed} writes failed`;
     }
