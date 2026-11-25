@@ -37,6 +37,8 @@ import { DbStatsService } from './services/DbStatsService';
 import { isRelayedDiscordChannel } from './relay-extras/channels';
 // Fork: tells real edits from pin and preview updates.
 import { isContentEdit } from './relay-extras/edits';
+// Fork: keeps upstream commands out of DMs (src/addons/intents.ts).
+import { upstreamCommandAllowed } from './addons/intents';
 
 const startDiscordClient = async ({
     linkService,
@@ -287,7 +289,9 @@ const startDiscordClient = async ({
 
         if (
             isCommandString(message.content, COMMAND_PREFIX) &&
-            !message.author.bot
+            !message.author.bot &&
+            // Fork: add-on DM intents never open upstream commands to DMs.
+            upstreamCommandAllowed(message.inGuild(), extraIntents)
         ) {
             const { command, args } = parseCommandString(
                 message.content,

@@ -32,3 +32,17 @@ export function addonDiscordIntents(config: AddonConfig): GatewayIntentBits[] {
 export function addonDiscordPartials(config: AddonConfig): Partials[] {
     return config.guildSync ? [Partials.Reaction, Partials.User] : [];
 }
+
+/**
+ * Whether upstream's `!b` commands may run for a message. Without the
+ * Direct Messages intent the bot never sees a DM, so upstream's commands
+ * only ever ran in servers. Identity asks for that intent to read link
+ * codes in DMs; upstream's commands must still stay in servers, where
+ * their permission checks have a member to look at.
+ */
+export function upstreamCommandAllowed(
+    inGuild: boolean,
+    extraIntents: readonly GatewayIntentBits[]
+): boolean {
+    return inGuild || !extraIntents.includes(GatewayIntentBits.DirectMessages);
+}

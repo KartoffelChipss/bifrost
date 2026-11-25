@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { GatewayIntentBits } from 'discord.js';
 import type { AddonConfig } from '../../src/addons/config';
-import { addonDiscordIntents } from '../../src/addons/intents';
+import {
+    addonDiscordIntents,
+    upstreamCommandAllowed,
+} from '../../src/addons/intents';
 
 const OFF: AddonConfig = {
     enabled: true,
@@ -34,5 +37,18 @@ describe('addonDiscordIntents', () => {
         const intents = addonDiscordIntents({ ...OFF, identity: true });
         assert.ok(intents.includes(GatewayIntentBits.GuildMembers));
         assert.ok(intents.includes(GatewayIntentBits.DirectMessages));
+    });
+});
+
+describe('upstreamCommandAllowed', () => {
+    it('keeps upstream commands out of DMs once add-ons ask for DMs', () => {
+        const identity = addonDiscordIntents({ ...OFF, identity: true });
+        assert.equal(upstreamCommandAllowed(false, identity), false);
+        assert.equal(upstreamCommandAllowed(true, identity), true);
+    });
+
+    it('leaves upstream unchanged when add-ons ask for no DMs', () => {
+        assert.equal(upstreamCommandAllowed(false, []), true);
+        assert.equal(upstreamCommandAllowed(true, []), true);
     });
 });
