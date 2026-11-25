@@ -38,3 +38,27 @@ export function pairFinder(sources: PairSources): FindPair {
         return thread ? threadPair(thread) : null;
     };
 }
+
+/**
+ * A Discord channel and its ancestors: for a thread, its parent channel
+ * and that channel's category; for a channel, its category.
+ */
+export type DiscordLineage = (channelId: string) => Promise<readonly string[]>;
+
+/**
+ * Leaves out pairs in channels excluded by BF_ADDONS_EXCLUDE_CHANNELS:
+ * the Discord channel, its parent or its category is in `excluded`.
+ */
+export function excludingChannels(
+    findPair: FindPair,
+    excluded: ReadonlySet<string>,
+    lineage: DiscordLineage
+): FindPair {
+    if (excluded.size === 0) return findPair;
+    return async (side, messageId) => {
+        const pair = await findPair(side, messageId);
+        if (!pair) return null;
+        const ids = await lineage(pair.discord.channelId);
+        return ids.some((id) => excluded.has(id)) ? null : pair;
+    };
+}

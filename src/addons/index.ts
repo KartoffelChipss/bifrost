@@ -75,6 +75,7 @@ export function addonFactories(
                     fluxerClientRef: deps.fluxerClientRef,
                     sequelize: deps.sequelize,
                     lookups: deps.bridge,
+                    excludedChannels: config.excludedChannels,
                 })
             ),
         history: () =>

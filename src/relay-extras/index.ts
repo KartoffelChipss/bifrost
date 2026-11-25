@@ -6,7 +6,7 @@ import { PostgresGuildSyncStore } from '../guild-sync/store';
 import { followFluxerClient } from '../guild-sync/threadEvents';
 import { EmojiTranslator } from './emojiMap';
 import { listenToDiscord, listenToFluxer, type Wrap } from './events';
-import { pairFinder } from './pairs';
+import { excludingChannels, pairFinder } from './pairs';
 import { PinRelay } from './pinRelay';
 import { ClientPlatform } from './platform';
 import { ReactionRelay } from './reactionRelay';
@@ -34,6 +34,8 @@ export interface RelayExtrasDeps {
     readonly sequelize: Sequelize;
     /** Upstream lookups (ReactionPorts section of upstreamBridge.ts). */
     readonly lookups: RelayLookupPorts;
+    /** BF_ADDONS_EXCLUDE_CHANNELS: Discord channels and categories left out. */
+    readonly excludedChannels?: ReadonlySet<string>;
 }
 
 export interface RelayExtras {
@@ -44,11 +46,15 @@ export interface RelayExtras {
 function buildRelays(deps: RelayExtrasDeps, context: AddonContext) {
     const store = new PostgresGuildSyncStore(deps.sequelize);
     const { lookups, discordClient, fluxerClientRef } = deps;
-    const findPair = pairFinder({
-        bridgedMessage: (side, id) => lookups.bridgedMessage(side, id),
-        threadMessage: (side, id) => store.findThreadMessage(side, id),
-    });
     const platform = new ClientPlatform(discordClient, fluxerClientRef);
+    const findPair = excludingChannels(
+        pairFinder({
+            bridgedMessage: (side, id) => lookups.bridgedMessage(side, id),
+            threadMessage: (side, id) => store.findThreadMessage(side, id),
+        }),
+        deps.excludedChannels ?? new Set(),
+        (id) => platform.discordLineage(id)
+    );
     const active = () => context.mode.mode !== 'read-only';
     const botId = (side: Side) =>
         (side === 'discord'

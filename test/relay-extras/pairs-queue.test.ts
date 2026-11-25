@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ThreadMessage } from '../../src/guild-sync/store';
-import { pairFinder } from '../../src/relay-extras/pairs';
+import { excludingChannels, pairFinder } from '../../src/relay-extras/pairs';
 import { KeyedQueue } from '../../src/relay-extras/queue';
 import { PAIR } from './fakes';
 
@@ -44,6 +44,32 @@ describe('pairFinder', () => {
 
     it('returns null for a message that was not relayed', async () => {
         assert.equal(await find('discord', 'nope'), null);
+    });
+});
+
+describe('excludingChannels', () => {
+    const lineage = async (id: string) =>
+        id === 'd-chan' ? ['d-chan', 'd-category'] : [id];
+    const always = async () => PAIR;
+
+    it('leaves out a pair whose channel or category is excluded', async () => {
+        for (const excluded of ['d-chan', 'd-category']) {
+            const find = excludingChannels(
+                always,
+                new Set([excluded]),
+                lineage
+            );
+            assert.equal(await find('fluxer', 'f-msg'), null);
+        }
+    });
+
+    it('keeps other pairs, and skips the lookup when nothing is excluded', async () => {
+        const find = excludingChannels(always, new Set(['other']), lineage);
+        assert.equal(await find('discord', 'd-msg'), PAIR);
+        const none = excludingChannels(always, new Set(), async () => {
+            throw new Error('not called');
+        });
+        assert.equal(await none('discord', 'd-msg'), PAIR);
     });
 });
 
