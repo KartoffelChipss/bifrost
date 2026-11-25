@@ -88,10 +88,14 @@ export interface ThreadRelayStore {
 
 /** The database access one cycle needs. The cycle depends only on this. */
 export interface GuildSyncStore {
-    /** Runs `fn` while holding the leader lock (guard 12), or not at all. */
+    /**
+     * Runs `fn` while holding a leader lock (guard 12), or not at all. Each
+     * add-on loop uses its own key, so they never wait on one another.
+     */
     withLeaderLock<T>(
         holder: string,
-        fn: () => Promise<T>
+        fn: () => Promise<T>,
+        key?: number
     ): Promise<{ ran: true; value: T } | { ran: false }>;
     loadSettings(guildLinkId: string): Promise<SyncSettings>;
     loadObjectMap(guildLinkId: string): Promise<MapRow[]>;
@@ -142,6 +146,10 @@ export interface GuildSyncStore {
 
 /** Arbitrary constant: 'bfsg' in ASCII. Shared by every fork instance. */
 export const LEADER_LOCK_KEY = 0x62667367;
+/** 'bfhi': the history import loop. */
+export const HISTORY_LOCK_KEY = 0x62666869;
+/** 'bfid': the account-linking role sweep. */
+export const IDENTITY_LOCK_KEY = 0x62666964;
 
 export class StoreDataError extends Error {
     constructor(message: string) {
@@ -317,7 +325,8 @@ export class PostgresGuildSyncStore
 
     async withLeaderLock<T>(
         holder: string,
-        fn: () => Promise<T>
+        fn: () => Promise<T>,
+        key = LEADER_LOCK_KEY
     ): Promise<{ ran: true; value: T } | { ran: false }> {
         // A transaction-scoped advisory lock is released on commit, on
         // rollback and when the connection dies, so it never goes stale.
@@ -325,12 +334,15 @@ export class PostgresGuildSyncStore
             const [row] = await this.db.query<{ locked: boolean }>(
                 'SELECT pg_try_advisory_xact_lock($1) AS locked',
                 {
-                    bind: [LEADER_LOCK_KEY],
+                    bind: [key],
                     type: QueryTypes.SELECT,
                     transaction,
                 }
             );
             if (!row?.locked) return { ran: false as const };
+            if (key !== LEADER_LOCK_KEY) {
+                return { ran: true as const, value: await fn() };
+            }
             await this.db.query(
                 `INSERT INTO ${TABLES.leaderLock} (id, holder, "acquiredAt", "heartbeatAt") VALUES (1, $1, now(), now())
                  ON CONFLICT (id) DO UPDATE SET holder = $1, "acquiredAt" = now(), "heartbeatAt" = now()`,

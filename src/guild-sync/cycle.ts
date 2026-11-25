@@ -56,6 +56,11 @@ export interface CycleDeps {
     };
     /** Bifröst's channel links, or null when the relay is not wired in. */
     readonly links: ChannelLinker | null;
+    /**
+     * With history import on: Discord channels whose history is copied and
+     * may be bridged. Undefined when history import is off.
+     */
+    readonly historyReady?: (linkId: string) => Promise<ReadonlySet<string>>;
     /** First messages of threads and posts, by the side they are read from. */
     readonly threadSources: {
         readonly discord?: ThreadSource;
@@ -258,6 +263,9 @@ async function linkState(
         never: new Set(
             settings.adminChannelId ? [settings.adminChannelId] : []
         ),
+        historyReady: deps.historyReady
+            ? await deps.historyReady(link.id)
+            : undefined,
     };
 }
 

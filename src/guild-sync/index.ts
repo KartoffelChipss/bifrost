@@ -12,6 +12,7 @@ import { discordNoticeSender } from './notifier';
 import { DiscordGuildReader } from './readers/discord';
 import { FluxerGuildReader } from './readers/fluxer';
 import { DEFAULT_SCHEDULE, SyncScheduler } from './scheduler';
+import { PostgresHistoryStore } from '../history/store';
 import { PostgresGuildSyncStore, type GuildSyncStore } from './store';
 import {
     followFluxerClient,
@@ -59,6 +60,8 @@ export interface GuildSyncDeps {
     readonly sequelize: Sequelize;
     /** Upstream's links, webhooks and message formatting (upstreamBridge.ts). */
     readonly bridge: GuildSyncBridge;
+    /** History import is on: text channels wait for it, replies are held. */
+    readonly historyEnabled: boolean;
 }
 
 export type GuildSyncBridge = ChannelLinker &
@@ -102,6 +105,19 @@ async function runAll(
 const pause = (ms: number) =>
     new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** Text channels whose history is copied, or that gave up, may be bridged. */
+function historyReady(store: PostgresHistoryStore) {
+    return async (linkId: string): Promise<ReadonlySet<string>> => {
+        const jobs = await store.listJobs(linkId);
+        return new Set(
+            jobs
+                .filter((j) => j.kind === 'channel')
+                .filter((j) => ['ready', 'done', 'failed'].includes(j.status))
+                .map((j) => j.discordId)
+        );
+    };
+}
+
 /** What a cycle needs: the store, both platforms and the clock. */
 function buildCycleDeps(
     deps: GuildSyncDeps,
@@ -124,6 +140,9 @@ function buildCycleDeps(
             discord: new DiscordAssetSource(deps.discordClient),
         },
         links: deps.bridge,
+        historyReady: deps.historyEnabled
+            ? historyReady(new PostgresHistoryStore(deps.sequelize))
+            : undefined,
         threadSources: { discord: deps.bridge },
         notices: new NoticeBoard(
             discordNoticeSender(deps.discordClient, deps.isChannelLinked),
@@ -150,6 +169,10 @@ function startThreadRelay(
         links: deps.bridge,
         ports: deps.bridge,
         active: () => context.mode.mode !== 'read-only',
+        importing: deps.historyEnabled
+            ? (id) =>
+                  new PostgresHistoryStore(deps.sequelize).threadImporting(id)
+            : undefined,
         now: () => new Date(),
         logger: context.logger,
     });

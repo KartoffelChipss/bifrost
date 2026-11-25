@@ -1,0 +1,124 @@
+import type { RelayPayload, WebhookRef } from '../guild-sync/links';
+
+/**
+ * Shapes shared by the history importer, its store and the platform ports.
+ * IDs are platform snowflakes as strings.
+ */
+
+export type JobKind = 'channel' | 'thread';
+
+/**
+ * - pending: known, nothing copied yet
+ * - importing: copying past messages up to the cutoff
+ * - ready: a channel copied up to now and waiting to be bridged
+ * - done: finished; new messages come through the relay
+ * - failed: stopped after repeated errors, see lastError
+ */
+export type JobStatus = 'pending' | 'importing' | 'ready' | 'done' | 'failed';
+
+export interface HistoryJob {
+    readonly id: string;
+    readonly guildLinkId: string;
+    readonly kind: JobKind;
+    /** The Discord channel or thread whose messages are copied. */
+    readonly discordId: string;
+    /** For a thread: its Discord parent channel. */
+    readonly parentDiscordId: string | null;
+    /** The Fluxer channel or thread the copies go to, once it exists. */
+    readonly fluxerId: string | null;
+    readonly status: JobStatus;
+    /** The newest Discord message the import copies up to. */
+    readonly cutoffId: string | null;
+    /** The last Discord message handled. Starts at '0'. */
+    readonly checkpointId: string;
+    readonly catchUps: number;
+    readonly imported: number;
+    readonly failures: number;
+    readonly messageCount: number | null;
+    readonly attachmentCount: number | null;
+    readonly surveyedAt: Date | null;
+    /** A channel's own import webhook, used before the channel is bridged. */
+    readonly importWebhook: WebhookRef | null;
+    readonly lastError: string | null;
+}
+
+export type JobPatch = Partial<
+    Pick<
+        HistoryJob,
+        | 'fluxerId'
+        | 'status'
+        | 'cutoffId'
+        | 'checkpointId'
+        | 'catchUps'
+        | 'imported'
+        | 'failures'
+        | 'messageCount'
+        | 'attachmentCount'
+        | 'surveyedAt'
+        | 'importWebhook'
+        | 'lastError'
+    >
+>;
+
+/** One Discord message, as the importer reads it. */
+export interface SourceMessage {
+    readonly id: string;
+    readonly authorId: string;
+    readonly createdAt: Date;
+    /** Default or reply. System messages are never copied. */
+    readonly copyable: boolean;
+    readonly attachments: number;
+    /** The platform message, for the payload builder. */
+    readonly raw: unknown;
+}
+
+/** Where a copy is sent: a channel, or a thread inside the webhook's channel. */
+export interface SendTarget {
+    readonly webhook: WebhookRef;
+    readonly threadId: string | null;
+}
+
+/** One imported message, as stored. */
+export interface ImportedMessage {
+    readonly discordMessageId: string;
+    readonly jobId: string;
+    readonly discordAuthorId: string;
+    readonly fluxerMessageId: string | null;
+    readonly fluxerTargetId: string;
+    readonly inThread: boolean;
+    readonly webhookId: string;
+}
+
+/** Reads Discord history and writes copies to Fluxer. */
+export interface HistoryPorts {
+    /** Up to `limit` messages after `afterId`, oldest first. */
+    listMessages(
+        discordId: string,
+        afterId: string,
+        limit: number
+    ): Promise<SourceMessage[]>;
+    /** The newest message in a channel or thread, or null when empty. */
+    newestMessageId(discordId: string): Promise<string | null>;
+    /** The relay's payload for a message: text, author name and avatar. */
+    payload(raw: unknown, guildLinkId: string): Promise<RelayPayload>;
+    /** Sends a copy. Returns the new Fluxer message ID. */
+    sendCopy(target: SendTarget, payload: RelayPayload): Promise<string>;
+    /** Edits or deletes a copy through the webhook that sent it. */
+    editCopy(
+        target: SendTarget,
+        messageId: string,
+        content: string
+    ): Promise<void>;
+    deleteCopy(target: SendTarget, messageId: string): Promise<void>;
+    /** The newest message in a Fluxer channel or thread, for crash recovery. */
+    newestFluxerMessage(
+        fluxerId: string
+    ): Promise<{ id: string; webhookId: string | null } | null>;
+    createImportWebhook(fluxerChannelId: string): Promise<WebhookRef>;
+    /** Whether a Discord thread is archived and locked right now. */
+    threadState(
+        discordThreadId: string
+    ): Promise<{ archived: boolean; locked: boolean }>;
+    /** True when the relay already copied this message after the link. */
+    relayedLive(discordMessageId: string): Promise<boolean>;
+}

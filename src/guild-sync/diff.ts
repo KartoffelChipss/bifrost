@@ -44,6 +44,12 @@ export interface DiffInput {
     readonly links?: {
         readonly linked: ReadonlySet<string>;
         readonly never: ReadonlySet<string>;
+        /**
+         * With history import on: the text and announcement channels whose
+         * past messages are copied. Any other one waits, because a bridge
+         * opened earlier would put live chat above the history.
+         */
+        readonly historyReady?: ReadonlySet<string>;
     };
 }
 
@@ -395,6 +401,14 @@ function diffLinks(input: DiffInput, map: IdMap, out: Out) {
         if (!THREAD_PARENT_TYPES.has(channel.type)) continue;
         if (input.links.linked.has(channel.id)) continue;
         if (input.links.never.has(channel.id)) continue;
+        const ready = input.links.historyReady;
+        if (
+            ready &&
+            channelKind(channel.type) !== 'forum' &&
+            !ready.has(channel.id)
+        ) {
+            continue;
+        }
         const destId = map.dest('channel', channel.id);
         if (!destId || !present.has(destId)) continue;
         out.ops.push({
