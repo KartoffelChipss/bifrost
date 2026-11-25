@@ -39,11 +39,47 @@ function presentSourceIds(source: GuildSnapshot): Map<SyncKind, Set<string>> {
         ['channel', ids(channels)],
         ['emoji', ids(source.emojis)],
         ['sticker', ids(source.stickers)],
-        // With a gap in the thread list, no thread may count as missing.
-        ...(source.threadGaps.length === 0
-            ? [['thread', ids(source.threads)] as [SyncKind, Set<string>]]
-            : []),
+        ['thread', ids(source.threads)],
     ]);
+}
+
+/**
+ * The source parent channel of a mapped thread, from the destination
+ * parent its applied fields record, or null when it cannot be told.
+ */
+function threadParents(
+    rows: readonly MapRow[],
+    direction: SyncDirection
+): (row: MapRow) => string | null {
+    const sourceOfDest = new Map<string, string>();
+    for (const row of rows) {
+        const sourceId = sourceIdOf(row, direction);
+        const destId = destIdOf(row, direction);
+        if (row.kind === 'channel' && sourceId && destId) {
+            sourceOfDest.set(destId, sourceId);
+        }
+    }
+    return (row) => {
+        const parent = row.appliedFields?.parentId;
+        return typeof parent === 'string'
+            ? (sourceOfDest.get(parent) ?? null)
+            : null;
+    };
+}
+
+/**
+ * True for a thread row that must not count as missing: its parent's
+ * thread list is incomplete, or its parent cannot be told, so a gap
+ * anywhere could hide it.
+ */
+function threadProtected(
+    row: MapRow,
+    gaps: ReadonlySet<string>,
+    parentOf: (row: MapRow) => string | null
+): boolean {
+    if (row.kind !== 'thread' || gaps.size === 0) return false;
+    const parent = parentOf(row);
+    return parent === null || gaps.has(parent);
 }
 
 /**
@@ -60,12 +96,15 @@ export function trackMissing(
     const present = presentSourceIds(source);
     // Without Manage Threads, archived private threads cannot be listed.
     const privateHidden = (source.privateThreadGaps ?? []).length > 0;
+    const gaps = new Set(source.threadGaps);
+    const parentOf = threadParents(rows, direction);
     const updates: MissingUpdate[] = [];
     for (const row of rows) {
         const ids = present.get(row.kind as SyncKind);
         const sourceId = sourceIdOf(row, direction);
         if (!ids || !sourceId || row.state === 'tombstoned') continue;
         if (privateHidden && row.appliedFields?.private === true) continue;
+        if (threadProtected(row, gaps, parentOf)) continue;
         if (ids.has(sourceId)) {
             if (row.missingCount > 0 || row.missingSince) {
                 updates.push({

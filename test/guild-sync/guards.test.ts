@@ -51,6 +51,33 @@ describe('trackMissing and removalCandidates (guard 4)', () => {
         assert.deepEqual(counts, [0, 0, 0, 1]);
     });
 
+    it('protects threads only under a parent whose thread list has a gap', () => {
+        const source = discordGuild({
+            channels: [channel('a'), channel('b')],
+            threadGaps: ['a'],
+        });
+        const thread = (id: string, parentId: unknown) =>
+            mapRow('thread', id, `f-${id}`, {
+                appliedFields:
+                    parentId === undefined
+                        ? {}
+                        : { parentId: parentId as string },
+            });
+        const rows = [
+            mapRow('channel', 'a', 'f-a'),
+            mapRow('channel', 'b', 'f-b'),
+            thread('in-gap', 'f-a'),
+            thread('elsewhere', 'f-b'),
+            thread('unknown', undefined),
+            thread('unmapped-parent', 'f-zzz'),
+        ];
+        const missing = trackMissing(rows, source, 'discord-to-fluxer', T0);
+        const counted = rows
+            .filter((r) => missing.some((m) => m.rowId === r.id))
+            .map((r) => r.discordId);
+        assert.deepEqual(counted, ['elsewhere']);
+    });
+
     it('resets the counter when the object comes back', () => {
         const row = mapRow('channel', 'c1', 'f1', {
             missingCount: 2,

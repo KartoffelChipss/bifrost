@@ -1,13 +1,18 @@
 import type { SyncDirection } from '../addons/db/schema';
 import type { IdMap } from './idmap';
 import type { JsonValue } from './ops';
-import { MANAGED_BITS, translatePermissions } from './permissions';
+import {
+    MANAGED_BITS,
+    NO_BITS,
+    bitOf,
+    translatePermissions,
+} from './permissions';
 import type {
     ChannelSnap,
     EmojiRef,
     EmojiSnap,
     GuildSettingsSnap,
-    OverwriteSnap,
+    GuildSnapshot,
     RoleSnap,
     StickerSnap,
     ThreadSnap,
@@ -32,11 +37,147 @@ export interface ProjectionContext {
      * add-on). A member overwrite is synced only for a linked member.
      */
     readonly members?: ReadonlyMap<string, string>;
+    /**
+     * True when the source @everyone lacks View Channel. A channel without
+     * its own @everyone overwrite is then private on the source, and its
+     * copy gets an explicit deny so it is private from birth, whatever
+     * the destination @everyone holds at that moment.
+     */
+    readonly hiddenFromEveryone?: boolean;
+    /** The highest voice bitrate the destination accepts, if capped. */
+    readonly maxBitrate?: number;
+    /**
+     * Source channels whose history import is not finished. Their copies
+     * deny @everyone posting and reacting until it is (historyLocks).
+     */
+    readonly historyLocked?: ReadonlySet<string>;
 }
 
-/** Destination user IDs whose member overwrites the sync manages. */
-export function managedMembers(ctx: ProjectionContext): ReadonlySet<string> {
-    return new Set(ctx.members?.values() ?? []);
+/**
+ * Denied to @everyone on a copy while its history imports: SendMessages,
+ * AddReactions and SendMessagesInThreads. The channel is not bridged yet,
+ * so posts there would never reach Discord and would land in the middle
+ * of the imported history.
+ */
+const HISTORY_LOCK_BITS = bitOf(11) | bitOf(6) | bitOf(38);
+
+/** Channel types whose history is imported: text, voice, announcement. */
+const HISTORY_TYPES: ReadonlySet<number> = new Set([0, 2, 5]);
+
+/**
+ * The source channels to lock while history import gates bridging: text,
+ * voice and announcement channels not ready yet. Forums (their posts are
+ * handled apart), excluded channels and the admin channel never lock.
+ */
+export function historyLocks(
+    channels: readonly ChannelSnap[],
+    gate: {
+        readonly ready?: ReadonlySet<string>;
+        readonly never: ReadonlySet<string>;
+        readonly excluded?: ReadonlySet<string>;
+    }
+): ReadonlySet<string> {
+    const { ready } = gate;
+    if (!ready) return new Set();
+    const locked = new Set<string>();
+    for (const c of channels) {
+        if (!HISTORY_TYPES.has(c.type) || ready.has(c.id)) continue;
+        if (gate.never.has(c.id) || gate.excluded?.has(c.id)) continue;
+        locked.add(c.id);
+    }
+    return locked;
+}
+
+/** Adds the history lock to the @everyone entry of a projected list. */
+function withHistoryLock(
+    list: Record<string, string>[],
+    ctx: ProjectionContext
+): void {
+    const lock = translatePermissions(HISTORY_LOCK_BITS, ctx.direction).bits;
+    const everyone = list.find((o) => o.id === ctx.map.destEveryone);
+    if (!everyone) {
+        list.push({
+            id: ctx.map.destEveryone,
+            allow: '0',
+            deny: lock.toString(),
+        });
+        return;
+    }
+    everyone.allow = (BigInt(everyone.allow) & ~lock).toString();
+    everyone.deny = (BigInt(everyone.deny) | lock).toString();
+}
+
+/**
+ * Fluxer's voice bitrate limits (packages/constants LimitConstants.ts and
+ * GuildConstants.ts getMaxVoiceChannelBitrate): 96 kbps, raised by an
+ * AUDIO_BITRATE_* server feature. Fluxer clamps a higher value, so the
+ * copy is compared against what Fluxer can hold, not Discord's value.
+ */
+const FLUXER_BITRATE_MIN = 8_000;
+const FLUXER_BITRATE_STANDARD = 96_000;
+const FLUXER_BITRATE_FEATURES: Readonly<Record<string, number>> = {
+    AUDIO_BITRATE_128_KBPS: 128_000,
+    AUDIO_BITRATE_256_KBPS: 256_000,
+    AUDIO_BITRATE_384_KBPS: 384_000,
+};
+
+/** The voice bitrate cap of a destination, or undefined when not Fluxer. */
+export function maxBitrateOf(
+    destination: Pick<GuildSnapshot, 'side' | 'features'>
+): number | undefined {
+    if (destination.side !== 'fluxer') return undefined;
+    let max = FLUXER_BITRATE_STANDARD;
+    for (const feature of destination.features ?? []) {
+        max = Math.max(max, FLUXER_BITRATE_FEATURES[feature] ?? 0);
+    }
+    return max;
+}
+
+function clampBitrate(bitrate: number | null, max: number | undefined) {
+    if (bitrate === null || max === undefined) return bitrate;
+    return Math.min(Math.max(bitrate, FLUXER_BITRATE_MIN), max);
+}
+
+const VIEW_CHANNEL = bitOf(10);
+
+/** True when the source @everyone role cannot view channels. */
+export function everyoneHidden(
+    source: Pick<GuildSnapshot, 'roles' | 'everyoneRoleId'>,
+    direction: SyncDirection
+): boolean {
+    const everyone = source.roles.find((r) => r.id === source.everyoneRoleId);
+    if (!everyone) return false;
+    const bits = translatePermissions(BigInt(everyone.permissions), direction);
+    return (bits.bits & VIEW_CHANNEL) === NO_BITS;
+}
+
+/**
+ * Destination user IDs whose member overwrites the sync manages on one
+ * channel: every linked member, and every member the sync wrote an
+ * overwrite for there before. The second part lets an overwrite go once
+ * its member unlinks, instead of keeping their access forever.
+ */
+export function managedMembers(
+    ctx: ProjectionContext,
+    channel?: { readonly kind: 'category' | 'channel'; readonly destId: string }
+): ReadonlySet<string> {
+    const members = new Set(ctx.members?.values() ?? []);
+    if (!channel) return members;
+    const written = ctx.map.appliedTo(channel.kind, channel.destId)?.overwrites;
+    if (!Array.isArray(written)) return members;
+    for (const item of written) {
+        if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+            continue;
+        }
+        const { id, type } = item as Record<string, JsonValue>;
+        if (type === MEMBER_TYPE && typeof id === 'string') members.add(id);
+    }
+    return members;
+}
+
+/** The map kind of a channel: category or channel. */
+export function channelMapKind(type: number): 'category' | 'channel' {
+    return channelKind(type) === 'category' ? 'category' : 'channel';
 }
 
 const managed = (bits: string) => (BigInt(bits) & MANAGED_BITS).toString();
@@ -91,9 +232,10 @@ function sortOverwrites(list: Record<string, string>[]): JsonValue {
 const MEMBER_TYPE = '1';
 
 function sourceOverwrites(
-    overwrites: readonly OverwriteSnap[],
+    channel: ChannelSnap,
     ctx: ProjectionContext
 ): JsonValue {
+    const { overwrites } = channel;
     const list: Record<string, string>[] = [];
     for (const overwrite of overwrites) {
         const destId =
@@ -108,14 +250,29 @@ function sourceOverwrites(
             deny: translated(overwrite.deny, ctx.direction),
         });
     }
+    const ownEveryone = overwrites.some(
+        (o) => o.type === 0 && o.id === ctx.map.sourceEveryone
+    );
+    if (ctx.hiddenFromEveryone && !ownEveryone) {
+        list.push({
+            id: ctx.map.destEveryone,
+            allow: '0',
+            deny: VIEW_CHANNEL.toString(),
+        });
+    }
+    if (ctx.historyLocked?.has(channel.id)) withHistoryLock(list, ctx);
     return sortOverwrites(list);
 }
 
 function destOverwrites(
-    overwrites: readonly OverwriteSnap[],
+    channel: ChannelSnap,
     ctx: ProjectionContext
 ): JsonValue {
-    const members = managedMembers(ctx);
+    const { overwrites } = channel;
+    const members = managedMembers(ctx, {
+        kind: channelMapKind(channel.type),
+        destId: channel.id,
+    });
     const list: Record<string, string>[] = [];
     for (const overwrite of overwrites) {
         const isManaged =
@@ -180,14 +337,15 @@ function threadParentFields(
 
 function kindFields(
     channel: ChannelSnap,
-    emoji: EmojiProjection
+    emoji: EmojiProjection,
+    maxBitrate?: number
 ): Record<string, JsonValue> {
     const kind = channelKind(channel.type);
     if (kind === 'category') return {};
     if (kind === 'voice') {
         return {
             nsfw: channel.nsfw,
-            bitrate: channel.bitrate,
+            bitrate: clampBitrate(channel.bitrate, maxBitrate),
             userLimit: channel.userLimit,
         };
     }
@@ -196,7 +354,7 @@ function kindFields(
         topic: channel.topic,
         rateLimitPerUser: channel.rateLimitPerUser,
     };
-    if (kind === 'forum') fields.tags = [...channel.tags];
+    if (kind === 'forum' || kind === 'media') fields.tags = [...channel.tags];
     return { ...fields, ...threadParentFields(channel, emoji) };
 }
 
@@ -206,8 +364,8 @@ export function projectSourceChannel(
 ): Fields {
     const fields: Record<string, JsonValue> = {
         name: channel.name,
-        ...kindFields(channel, sourceEmoji(ctx)),
-        overwrites: sourceOverwrites(channel.overwrites, ctx),
+        ...kindFields(channel, sourceEmoji(ctx), ctx.maxBitrate),
+        overwrites: sourceOverwrites(channel, ctx),
     };
     if (channel.parentId === null) fields.parentId = null;
     else {
@@ -224,7 +382,7 @@ export function projectDestChannel(
     return {
         name: channel.name,
         ...kindFields(channel, destEmoji),
-        overwrites: destOverwrites(channel.overwrites, ctx),
+        overwrites: destOverwrites(channel, ctx),
         parentId: channel.parentId,
     };
 }

@@ -1,6 +1,7 @@
 import type { RelayPayload, WebhookRef } from '../../src/guild-sync/links';
 import type { HistoryStore } from '../../src/history/store';
 import type {
+    FluxerCopy,
     HistoryJob,
     HistoryPorts,
     ImportedMessage,
@@ -51,10 +52,14 @@ export class FakeHistoryStore implements HistoryStore {
             catchUps: 0,
             imported: 0,
             failures: 0,
+            retries: 0,
+            retryAt: null,
+            skipped: 0,
             messageCount: null,
             attachmentCount: null,
             surveyedAt: null,
             importWebhook: null,
+            archiveThreadId: null,
             lastError: null,
         });
     }
@@ -96,6 +101,19 @@ export class FakeHistoryStore implements HistoryStore {
         );
     }
 
+    async setContentHash(discordId: string, hash: string) {
+        this.messages = this.messages.map((m) =>
+            m.discordMessageId === discordId ? { ...m, contentHash: hash } : m
+        );
+    }
+
+    /** Fluxer message IDs the thread relay sent. */
+    relayedThreadFluxer = new Set<string>();
+
+    async relayedInThreadByFluxerId(id: string) {
+        return this.relayedThreadFluxer.has(id);
+    }
+
     async unfinishedMessage(jobId: string) {
         return (
             this.messages.find(
@@ -118,6 +136,43 @@ export class FakeHistoryStore implements HistoryStore {
 
     async relayedInThread(discordId: string) {
         return this.relayedThread.has(discordId);
+    }
+
+    async channelsReadyToBridge(guildLinkId: string) {
+        return new Set(
+            this.jobs
+                .filter(
+                    (j) =>
+                        j.guildLinkId === guildLinkId &&
+                        j.kind === 'channel' &&
+                        (j.status === 'ready' ||
+                            j.status === 'done' ||
+                            j.archiveThreadId !== null)
+                )
+                .map((j) => j.discordId)
+        );
+    }
+
+    async isArchiveThread(id: string) {
+        return this.jobs.some((j) => j.archiveThreadId === id);
+    }
+
+    async retryFailed(guildLinkId: string) {
+        let count = 0;
+        this.jobs = this.jobs.map((j) => {
+            if (j.guildLinkId !== guildLinkId || j.status !== 'failed')
+                return j;
+            count += 1;
+            return {
+                ...j,
+                status: j.cutoffId === null ? 'pending' : 'importing',
+                failures: 0,
+                retries: 0,
+                retryAt: null,
+                lastError: null,
+            };
+        });
+        return count;
     }
 
     async isOptedOut(id: string) {
@@ -159,8 +214,12 @@ export class FakeHistoryPorts implements HistoryPorts {
         { archived: boolean; locked: boolean }
     >();
     readonly relayed = new Set<string>();
-    /** Sends that fail while this is above zero. */
+    /** Sends that fail while this is above zero, with `failure`. */
     failNext = 0;
+    /** What a failing send throws: by default a temporary 503. */
+    failure: unknown = Object.assign(new Error('Service Unavailable'), {
+        statusCode: 503,
+    });
     refuseFiles = false;
     webhooks = 0;
     private seq = 0;
@@ -174,6 +233,7 @@ export class FakeHistoryPorts implements HistoryPorts {
             copyable: true,
             attachments: 0,
             webhookId: null,
+            ownWebhook: false,
             reply: null,
             reactions: [],
             raw: { id, text: `message ${id}` },
@@ -217,10 +277,14 @@ export class FakeHistoryPorts implements HistoryPorts {
     async sendCopy(target: SendTarget, payload: RelayPayload) {
         if (this.failNext > 0) {
             this.failNext -= 1;
-            throw new Error('503');
+            throw this.failure;
         }
         const files = payload.attachments?.length ?? 0;
-        if (files > 0 && this.refuseFiles) throw new Error('file too large');
+        if (files > 0 && this.refuseFiles)
+            throw Object.assign(new Error('File size too large'), {
+                statusCode: 413,
+                code: 'FILE_SIZE_TOO_LARGE',
+            });
         this.sent.push({
             webhook: target.webhook.id,
             threadId: target.threadId,
@@ -240,11 +304,17 @@ export class FakeHistoryPorts implements HistoryPorts {
         this.edits.push(`delete ${target.webhook.id} ${messageId}`);
     }
 
-    /** What the newest Fluxer message is, for crash recovery. */
-    newestCopy: { id: string; webhookId: string | null } | null = null;
+    /** Recent Fluxer messages, newest first, for crash recovery. */
+    recentCopies: FluxerCopy[] = [];
+    /** Fluxer message IDs the live relay sent (message_links). */
+    readonly relayedFluxer = new Set<string>();
 
-    async newestFluxerMessage() {
-        return this.newestCopy;
+    async recentFluxerMessages(_id: string, limit: number) {
+        return this.recentCopies.slice(0, limit);
+    }
+
+    async relayedLiveFluxer(id: string) {
+        return this.relayedFluxer.has(id);
     }
 
     async createImportWebhook(fluxerChannelId: string): Promise<WebhookRef> {
@@ -254,6 +324,20 @@ export class FakeHistoryPorts implements HistoryPorts {
 
     async threadState(id: string) {
         return this.threadStates.get(id) ?? { archived: false, locked: false };
+    }
+
+    /** Bridge webhooks found in each Discord channel, by name or owner. */
+    readonly bridgeHooks = new Map<string, string[]>();
+
+    async bridgeWebhookIds(id: string) {
+        return new Set(this.bridgeHooks.get(id) ?? []);
+    }
+
+    /** When each channel was bridged; unset means far in the future. */
+    readonly linkTimes = new Map<string, Date>();
+
+    async linkCreatedAt(id: string) {
+        return this.linkTimes.get(id) ?? new Date(8.64e15);
     }
 
     async relayedLive(id: string) {

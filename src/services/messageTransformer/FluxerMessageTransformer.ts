@@ -1,18 +1,30 @@
 import { Message, MessageAttachmentFlags } from '@fluxerjs/core';
 import MessageTransformer from './MessageTransformer';
 import { WebhookMessageData } from '../WebhookService';
-import { breakMentions, sanitizeMentions } from '../../utils/sanitizeMentions';
+// Fork: breakMentions runs through the fidelity view.
+import { sanitizeMentions } from '../../utils/sanitizeMentions';
 import { buildFluxerStickerUrl } from '../../utils/buildStickerUrl';
 import WebhookEmbed from '../WebhookEmbed';
 import { GeneralEmoji } from '../../utils/emojis';
+// Fork: mentions, pings and names (src/relay-extras/fidelity).
+import {
+    fluxerFidelity,
+    NO_FIDELITY,
+    type FidelityView,
+} from '../../relay-extras/fidelity';
 
 export default class FluxerMessageTransformer extends MessageTransformer<
     Message,
     WebhookMessageData
 > {
-    private sanitizeContent(message: Message): string {
-        return breakMentions(
+    private sanitizeContent(
+        message: Message,
+        fidelity: FidelityView = NO_FIDELITY // Fork
+    ): string {
+        // Fork: spares the mentions fidelity lets ping.
+        return fidelity.breakMentions(
             sanitizeMentions(message.content, {
+                mapMention: fidelity.mention, // Fork
                 resolveUser: (id) => {
                     const user = message.client.users.get(id);
                     return user ? user.username : null;
@@ -34,9 +46,10 @@ export default class FluxerMessageTransformer extends MessageTransformer<
         message: Message,
         discordEmojis: GeneralEmoji[] = []
     ): Promise<WebhookMessageData> {
-        const sanitizedContent = this.sanitizeContent(message);
+        const fidelity = await fluxerFidelity(message); // Fork
+        const sanitizedContent = this.sanitizeContent(message, fidelity);
         const emojiReplacedContent = this.replaceEmojis(
-            sanitizedContent,
+            fidelity.emojis(sanitizedContent, discordEmojis), // Fork
             discordEmojis
         );
 
@@ -91,12 +104,12 @@ export default class FluxerMessageTransformer extends MessageTransformer<
             );
         }
 
-        return {
+        return fidelity.finish({
             content: emojiReplacedContent,
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
             attachments: attachments,
             embeds,
-        };
+        }); // Fork
     }
 }

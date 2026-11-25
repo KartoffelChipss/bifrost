@@ -7,6 +7,7 @@ import {
     type FluxerThreadInfo,
 } from '../../src/guild-sync/threadMirror';
 import { ThreadRelay } from '../../src/guild-sync/threadRelay';
+import { UnrecordedWriteError } from '../../src/addons/isolation';
 import { createRecordingLogger } from '../addons/fakes';
 import { FakeLinker } from './fake-store';
 
@@ -31,7 +32,10 @@ class MirrorStore {
 
     async deleteThreadMessage() {}
 
+    failInsert = false;
+
     async insertMapping(mapping: NewMapping) {
+        if (this.failInsert) throw new Error('connection reset');
         this.mappings.push(mapping);
         if (mapping.discordId && mapping.fluxerId) {
             this.pairs.push({
@@ -56,7 +60,7 @@ const post = (overrides: Partial<FluxerThreadInfo> = {}): FluxerThreadInfo => ({
     ...overrides,
 });
 
-async function setup(info: FluxerThreadInfo | null = post()) {
+async function setup(info: FluxerThreadInfo | null = post(), archive = false) {
     const store = new MirrorStore();
     const links = new FakeLinker();
     await links.link('link-1', 'd-forum', 'f-forum');
@@ -90,9 +94,13 @@ async function setup(info: FluxerThreadInfo | null = post()) {
             },
             async edit() {},
             async remove() {},
+            async fetch() {
+                return null;
+            },
         },
         active: () => true,
         mirror: (link, event, raw) => mirror.mirror(link, event, raw),
+        isArchiveThread: async () => archive,
         now: () => new Date(0),
         logger: createRecordingLogger(),
     });
@@ -174,5 +182,21 @@ describe('a thread started on Fluxer', () => {
             await s.relay.created('fluxer', inFluxerPost('r1'), 'reply');
             assert.deepEqual(s.calls, []);
         }
+    });
+
+    it('raises an unrecorded write when the new thread cannot be saved', async () => {
+        const s = await setup();
+        s.store.failInsert = true;
+        await assert.rejects(
+            s.relay.created('fluxer', inFluxerPost('r1'), 'reply'),
+            UnrecordedWriteError
+        );
+    });
+
+    it('never relays or copies a history archive thread', async () => {
+        const s = await setup(post(), true);
+        await s.relay.created('fluxer', inFluxerPost('r1'), 'imported');
+        assert.deepEqual(s.calls, []);
+        assert.equal(s.store.mappings.length, 0);
     });
 });

@@ -12,3 +12,9 @@ export const MAX_PARALLEL = 4;
  * transaction short: at most this plus one send per parallel job.
  */
 export const PASS_BUDGET_MS = 60_000;
+/**
+ * Fluxer's content limit for webhook sends and edits: the premium length,
+ * which applies to webhooks (fluxer_api MessageValidationService
+ * validateContentLength, MAX_MESSAGE_LENGTH_PREMIUM in LimitConstants).
+ */
+export const MAX_CONTENT_LENGTH = 4_000;

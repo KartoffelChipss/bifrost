@@ -7,6 +7,9 @@ import * as appliedFields from './migrations/00002-object-map-applied-fields';
 import * as adminApproval from './migrations/00003-settings-admin-approval';
 import * as threads from './migrations/00004-threads';
 import * as historyIdentity from './migrations/00005-history-identity';
+import * as parkedMessages from './migrations/00006-parked-messages';
+import * as historyResilience from './migrations/00007-history-resilience';
+import * as enforceDrift from './migrations/00008-settings-enforce-drift';
 import { MIGRATIONS_MODEL, MIGRATIONS_TABLE } from './schema';
 
 /**
@@ -31,6 +34,21 @@ const MIGRATIONS: RunnableMigration<QueryInterface>[] = [
         name: '00005-history-identity',
         up: historyIdentity.up,
         down: historyIdentity.down,
+    },
+    {
+        name: '00006-parked-messages',
+        up: parkedMessages.up,
+        down: parkedMessages.down,
+    },
+    {
+        name: '00007-history-resilience',
+        up: historyResilience.up,
+        down: historyResilience.down,
+    },
+    {
+        name: '00008-settings-enforce-drift',
+        up: enforceDrift.up,
+        down: enforceDrift.down,
     },
 ];
 

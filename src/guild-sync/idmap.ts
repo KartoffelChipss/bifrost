@@ -20,6 +20,10 @@ export class IdMap {
         string,
         Readonly<Record<string, JsonValue>> | null
     >();
+    private readonly appliedByDest = new Map<
+        string,
+        Readonly<Record<string, JsonValue>> | null
+    >();
 
     constructor(
         rows: readonly MapRow[],
@@ -39,6 +43,7 @@ export class IdMap {
                 `${row.kind}:${sourceId}`,
                 row.appliedFields
             );
+            this.appliedByDest.set(`${row.kind}:${destId}`, row.appliedFields);
         }
     }
 
@@ -76,6 +81,14 @@ export class IdMap {
         sourceId: string
     ): Readonly<Record<string, JsonValue>> | null {
         return this.appliedBySource.get(`${kind}:${sourceId}`) ?? null;
+    }
+
+    /** The fields last written to a destination object, or null. */
+    appliedTo(
+        kind: SyncKind,
+        destId: string
+    ): Readonly<Record<string, JsonValue>> | null {
+        return this.appliedByDest.get(`${kind}:${destId}`) ?? null;
     }
 
     /** True when the destination object has an `addon_object_map` row. */

@@ -17,6 +17,7 @@ import type {
     PendingLink,
     Side,
 } from '../../src/identity/store';
+import { createRecordingLogger } from '../addons/fakes';
 import { FakeLinker } from '../guild-sync/fake-store';
 import { FakeHistoryPorts, FakeHistoryStore } from '../history/fakes';
 
@@ -105,6 +106,8 @@ function setup() {
     const links = new FakeLinker();
     const state = { now: new Date('2026-11-25T12:00:00Z'), code: 'ABCD2345' };
     const linked: AccountPair[] = [];
+    const unlinked: AccountPair[] = [];
+    const logger = createRecordingLogger();
     const deps: FlowDeps = {
         store,
         nameOf: async (side, id) => `${side}-${id}`,
@@ -115,12 +118,27 @@ function setup() {
         onLinked: async (pair) => {
             linked.push(pair);
         },
+        onUnlinked: async (pair) => {
+            unlinked.push(pair);
+        },
         now: () => state.now,
         newCode: () => state.code,
+        logger,
     };
     const dm = (side: Side, userId: string, text: string) =>
         handleDm({ side, userId, text } satisfies DmInput, deps);
-    return { store, history, ports, links, state, linked, deps, dm };
+    return {
+        store,
+        history,
+        ports,
+        links,
+        state,
+        linked,
+        unlinked,
+        deps,
+        dm,
+        logger,
+    };
 }
 
 describe('account linking', () => {
@@ -199,6 +217,9 @@ describe('account linking', () => {
         const gone = await s.dm('fluxer', 'f1', 'unlink');
         assert.deepEqual(s.store.pairs, []);
         assert.equal(gone.length, 2);
+        assert.deepEqual(s.unlinked, [
+            { discordUserId: 'd1', fluxerUserId: 'f1' },
+        ]);
     });
 
     it('stores only a hash of each code', async () => {
@@ -226,6 +247,25 @@ describe('account linking', () => {
         const s = setup();
         const [help] = await s.dm('discord', 'd1', 'hello?');
         assert.match(help.text, /history-optout/);
+    });
+});
+
+describe('lookup failures', () => {
+    it('names the redeeming account by ID when its lookup fails', async () => {
+        const s = setup();
+        const deps: FlowDeps = {
+            ...s.deps,
+            nameOf: async () => {
+                throw new Error('Unknown User');
+            },
+        };
+        await handleDm({ side: 'discord', userId: 'd1', text: 'link' }, deps);
+        const redeem = await handleDm(
+            { side: 'fluxer', userId: 'f1', text: 'link ABCD2345' },
+            deps
+        );
+        assert.match(redeem[1].text, /\*\*user ID f1\*\*/);
+        assert.equal(s.logger.entries.length, 1);
     });
 });
 
@@ -268,6 +308,49 @@ describe('history requests by DM', () => {
             'delete import-f10 555555',
         ]);
         assert.deepEqual(s.history.messages, []);
+    });
+
+    async function importedCopy(s: ReturnType<typeof setup>) {
+        await s.history.ensureJob('link-1', 'channel', '10', null);
+        const job = s.history.job('10');
+        await s.history.updateJob(job.id, {
+            importWebhook: { id: 'import-f10', token: 't' },
+        });
+        await s.history.startMessage({
+            discordMessageId: '11',
+            jobId: job.id,
+            discordAuthorId: 'd1',
+            fluxerMessageId: null,
+            fluxerTargetId: 'f10',
+            inThread: false,
+            webhookId: 'import-f10',
+        });
+        await s.history.finishMessage('11', '555555');
+    }
+
+    it('answers and logs a copy that cannot be changed instead of throwing', async () => {
+        const s = setup();
+        await importedCopy(s);
+        const gone = async () => {
+            throw new Error('Unknown Message');
+        };
+        s.ports.editCopy = gone;
+        s.ports.deleteCopy = gone;
+        for (const text of ['edit 555555 new', 'delete 555555']) {
+            const [answer] = await s.dm('discord', 'd1', text);
+            assert.match(answer.text, /could not be changed/);
+        }
+        assert.equal(s.logger.entries.length, 2);
+        assert.equal(s.history.messages.length, 1);
+    });
+
+    it('cuts an edit to the Fluxer limit and keeps the edit marker', async () => {
+        const s = setup();
+        await importedCopy(s);
+        await s.dm('discord', 'd1', `edit 555555 ${'x'.repeat(5000)}`);
+        const sent = s.ports.edits[0].slice('edit import-f10 555555 '.length);
+        assert.equal(sent.length, 4000);
+        assert.ok(sent.endsWith('…\n*Edited by its author*'));
     });
 });
 

@@ -3,17 +3,21 @@ import type { FailureLedger } from './failures';
 import type { AddonLogger } from '../addons/isolation';
 import type { AssetSource } from './assets';
 import { IdMap } from './idmap';
+import { OwnershipLostError } from './cycleGuard';
 import type { ChannelLinker, ThreadSource } from './links';
 import type { JsonValue, MapRow, PlanOp } from './ops';
 import { destIdOf, isRemoval } from './ops';
 import type { Plan } from './plan';
+import { MAX_CHANNELS_PER_CATEGORY } from './diff';
 import { ORDER_PENDING } from './order';
 import {
+    everyoneHidden,
+    maxBitrateOf,
     projectSourceRole,
     projectSourceSettings,
     type Fields,
 } from './project';
-import type { GuildSnapshot } from './snapshot';
+import { THREAD_ONLY_TYPES, type GuildSnapshot } from './snapshot';
 import type { GuildSyncStore } from './store';
 import {
     ARCHIVE_CATEGORY,
@@ -47,6 +51,8 @@ export function pauseAfter(action: Write, kind: PlanOp['kind']): number {
             return SLOW_WRITE_MS;
         case 'link':
             return SLOW_WRITE_MS;
+        case 'adopt':
+            return 0;
         case 'create-emoji':
         case 'create-sticker':
         case 'create-thread':
@@ -75,6 +81,8 @@ export interface ApplyInput {
     readonly rows: readonly MapRow[];
     /** Linked accounts, source user ID to destination user ID. */
     readonly members?: ReadonlyMap<string, string>;
+    /** Source channels locked while their history imports. */
+    readonly historyLocked?: ReadonlySet<string>;
 }
 
 export interface ApplyDeps {
@@ -115,13 +123,19 @@ interface RunState {
     map: IdMap;
     applied: number;
     failed: number;
-    readonly failedByKind: Map<PlanOp['kind'], number>;
+    /** Failed writes this cycle, by failure bucket (see bucketOf). */
+    readonly failedByKind: Map<string, number>;
     readonly skipped: { op: PlanOp; reason: string }[];
     postponed: number;
     /** Kinds of position-holding objects this run created. */
     readonly created: Set<'role' | 'channel'>;
-    /** The archive category, once found or created in this run. */
-    archiveCategoryId: string | null;
+    /** Channels moved into each archive category this run. */
+    readonly archiveMoves: Map<string, number>;
+    /**
+     * True while an @everyone update in the plan has not been written.
+     * Channel creates wait for it (see everyoneGate).
+     */
+    everyonePending: boolean;
 }
 
 function buildMap(state: RunState): IdMap {
@@ -135,39 +149,100 @@ function pair(direction: SyncDirection, sourceId: string, destId: string) {
         : { discordId: destId, fluxerId: sourceId };
 }
 
-/** Finds the archive category, or creates it locked for @everyone. */
+/** The applied-fields key that marks a map row as an archive category. */
+export const ARCHIVE_KEY = 'archiveCategory';
+
+/** The archive categories the map records, in number order. */
+function archiveSlots(state: RunState): { id: string; number: number }[] {
+    const { direction } = state.input.plan;
+    const slots: { id: string; number: number }[] = [];
+    for (const row of state.rows) {
+        const number = row.appliedFields?.[ARCHIVE_KEY];
+        const id = destIdOf(row, direction);
+        if (row.kind !== 'category' || row.state !== 'active') continue;
+        if (typeof number === 'number' && id) slots.push({ id, number });
+    }
+    return slots.sort((a, b) => a.number - b.number);
+}
+
+/** Channels in a category now, counting moves made earlier this run. */
+function archiveFill(state: RunState, id: string): number {
+    const { channels } = state.input.destination;
+    const before = channels.filter((c) => c.parentId === id).length;
+    return before + (state.archiveMoves.get(id) ?? 0);
+}
+
+/**
+ * An archive category with room, found only through the map so a user's
+ * own category of the same name is never used. Fluxer holds 50 channels
+ * per category; a full one gets a numbered successor.
+ */
 async function archiveCategory(state: RunState): Promise<string> {
-    if (state.archiveCategoryId) return state.archiveCategoryId;
-    const { destination } = state.input;
-    const existing = destination.channels.find(
-        (c) => c.type === CATEGORY_TYPE && c.name === ARCHIVE_CATEGORY
-    );
-    state.archiveCategoryId =
-        existing?.id ??
-        (await state.deps.writer.createChannel(destination.guildId, {
-            type: CATEGORY_TYPE,
-            name: ARCHIVE_CATEGORY,
-            parentId: null,
-            topic: null,
-            nsfw: false,
-            rateLimitPerUser: 0,
-            bitrate: null,
-            userLimit: null,
-            tags: [],
-            overwrites: [
-                {
-                    id: destination.everyoneRoleId,
-                    type: 0,
-                    allow: '0',
-                    deny: LOCK_BITS.toString(),
-                },
-            ],
-        }));
-    return state.archiveCategoryId;
+    const present = new Set(state.input.destination.channels.map((c) => c.id));
+    const slots = archiveSlots(state);
+    for (const slot of slots) {
+        const exists = present.has(slot.id) || state.archiveMoves.has(slot.id);
+        if (!exists) continue;
+        if (archiveFill(state, slot.id) < MAX_CHANNELS_PER_CATEGORY) {
+            return slot.id;
+        }
+    }
+    const number = slots.reduce((max, s) => Math.max(max, s.number), 0) + 1;
+    return createArchiveCategory(state, number);
+}
+
+/** Creates archive category `number`, locked for @everyone, and owns it. */
+async function createArchiveCategory(
+    state: RunState,
+    number: number
+): Promise<string> {
+    const { destination, plan } = state.input;
+    const name =
+        number === 1 ? ARCHIVE_CATEGORY : `${ARCHIVE_CATEGORY}-${number}`;
+    const id = await state.deps.writer.createChannel(destination.guildId, {
+        type: CATEGORY_TYPE,
+        name,
+        parentId: null,
+        topic: null,
+        nsfw: false,
+        rateLimitPerUser: 0,
+        bitrate: null,
+        userLimit: null,
+        tags: [],
+        overwrites: [
+            {
+                id: destination.everyoneRoleId,
+                type: 0,
+                allow: '0',
+                deny: LOCK_BITS.toString(),
+            },
+        ],
+    });
+    const toFluxer = plan.direction === 'discord-to-fluxer';
+    try {
+        const row = await state.deps.store.insertMapping(
+            {
+                guildLinkId: plan.guildLinkId,
+                kind: 'category',
+                discordId: toFluxer ? null : id,
+                fluxerId: toFluxer ? id : null,
+                createdBySync: true,
+                appliedFields: { [ARCHIVE_KEY]: number, name },
+            },
+            state.deps.now()
+        );
+        state.rows = [...state.rows, row];
+    } catch (error) {
+        throw new OwnershipLostError(
+            `archive category ${id} was created but not recorded`,
+            error
+        );
+    }
+    state.archiveMoves.set(id, 0);
+    return id;
 }
 
 const CATEGORY_TYPE = 4;
-const FORUM_TYPE = 15;
 
 /** A write that must wait for an earlier one, such as a channel link. */
 export class NotReadyError extends Error {}
@@ -193,7 +268,7 @@ async function createThread(
     const { writer, links, threads } = state.deps;
     let starter = null;
     let webhook = null;
-    if (action.parentType === FORUM_TYPE) {
+    if (THREAD_ONLY_TYPES.has(action.parentType)) {
         const toFluxer = plan.direction === 'discord-to-fluxer';
         const link = toFluxer
             ? await links?.byDiscordChannel(action.parentSourceId)
@@ -288,6 +363,8 @@ async function performLifecycle(
             );
         case 'link':
             return linkChannels(state, op);
+        case 'adopt':
+            return action.destId;
         case 'delete':
             await deleteObject(state, op, destId);
             return null;
@@ -314,6 +391,26 @@ async function withRoleIcon(
     return { ...patch, icon: image };
 }
 
+/** Locks a channel and, unless it is a category, moves it to the archive. */
+async function archiveChannel(
+    state: RunState,
+    action: Extract<Write, { type: 'archive-channel' }>,
+    destId: string
+): Promise<void> {
+    const { writer } = state.deps;
+    const guildId = state.input.destination.guildId;
+    if (!action.move) {
+        await writer.updateChannel(guildId, destId, action.patch);
+        return;
+    }
+    const parentId = await archiveCategory(state);
+    await writer.updateChannel(guildId, destId, { ...action.patch, parentId });
+    state.archiveMoves.set(
+        parentId,
+        (state.archiveMoves.get(parentId) ?? 0) + 1
+    );
+}
+
 /** Performs the write. Returns the new ID for a create, else null. */
 async function perform(
     state: RunState,
@@ -337,13 +434,9 @@ async function perform(
         case 'update-channel':
             await writer.updateChannel(guildId, destId, action.patch);
             return null;
-        case 'archive-channel': {
-            const patch = action.move
-                ? { ...action.patch, parentId: await archiveCategory(state) }
-                : action.patch;
-            await writer.updateChannel(guildId, destId, patch);
+        case 'archive-channel':
+            await archiveChannel(state, action, destId);
             return null;
-        }
         case 'update-guild':
             await writer.updateGuild(guildId, action.patch);
             return null;
@@ -351,7 +444,7 @@ async function perform(
             await writer.setRolePositions(guildId, action.positions);
             return null;
         case 'channel-positions':
-            await writer.setChannelPositions(guildId, action.positions);
+            await writer.setChannelPositions(guildId, action.moves);
             return null;
         case 'rename-emoji':
         case 'archive-emoji':
@@ -361,7 +454,7 @@ async function perform(
             await writer.updateSticker(guildId, destId, action.patch);
             return null;
         case 'archive-sticker':
-            await writer.updateSticker(guildId, destId, { name: action.name });
+            await writer.updateSticker(guildId, destId, action.patch);
             return null;
         case 'update-thread':
         case 'archive-thread':
@@ -461,11 +554,29 @@ async function record(
     if (pending) state.created.add(op.kind === 'role' ? 'role' : 'channel');
 }
 
+/**
+ * A channel that changed parent this run sits elsewhere than the snapshot
+ * says, so channel positions wait for the next cycle's fresh read.
+ */
+function noteMoves(state: RunState, op: PlanOp): void {
+    if (op.op !== 'update' || (op.kind !== 'channel' && op.kind !== 'category'))
+        return;
+    if (op.changes.some((c) => c.field === 'parentId')) {
+        state.created.add('channel');
+    }
+}
+
 /** After a reorder, the objects it placed are no longer pending. */
-async function settleOrder(state: RunState, op: PlanOp): Promise<void> {
+async function settleOrder(
+    state: RunState,
+    op: PlanOp,
+    action: WriteAction
+): Promise<void> {
     if (op.op !== 'reorder') return;
     const kinds = op.kind === 'role' ? ['role'] : ['category', 'channel'];
-    for (const destId of op.destIds) {
+    const placed =
+        action.type === 'channel-positions' ? action.placed : op.destIds;
+    for (const destId of placed) {
         const row = state.rows.find(
             (r) =>
                 kinds.includes(r.kind) &&
@@ -484,6 +595,7 @@ function auditFields(op: PlanOp, action: WriteAction): JsonValue {
     }
     if (op.op === 'reorder') return [...op.destIds];
     if (action.type === 'gone') return { gone: true };
+    if (action.type === 'adopt') return { adopted: true };
     return 'applied' in action ? action.applied : null;
 }
 
@@ -518,8 +630,26 @@ function opKey(plan: Plan, op: PlanOp): string {
     return `${plan.guildLinkId}:${op.op}:${op.kind}:${target}`;
 }
 
+/** True for an update of the destination @everyone role. */
+function isEveryoneUpdate(op: PlanOp, everyoneId: string): boolean {
+    return op.op === 'update' && op.kind === 'role' && op.destId === everyoneId;
+}
+
+/**
+ * Channels are created only once @everyone's permissions are synced. A
+ * Discord channel kept private by @everyone's own permissions, with no
+ * overwrite of its own, would otherwise appear open on Fluxer.
+ */
+function everyoneGate(state: RunState, op: PlanOp): string | null {
+    if (!state.everyonePending || op.op !== 'create') return null;
+    if (op.kind !== 'category' && op.kind !== 'channel') return null;
+    return 'waits for the @everyone permission sync to succeed';
+}
+
 /** Why an op waits for a later cycle, or null. */
 function holdReason(state: RunState, op: PlanOp): string | null {
+    const gate = everyoneGate(state, op);
+    if (gate) return gate;
     const { failures, now } = state.deps;
     if (failures?.blocked(opKey(state.input.plan, op), now())) {
         return 'failed repeatedly; retried after a backoff';
@@ -603,18 +733,55 @@ async function followUp(
     return true;
 }
 
-/** Records a successful write: audit, ownership, removal state, follow-up. */
-async function recordWrite(
+/** The name a create gives its object, for its intent; null for others. */
+function createdName(action: Write): string | null {
+    switch (action.type) {
+        case 'create-role':
+        case 'create-channel':
+            return action.spec.name;
+        case 'create-emoji':
+        case 'create-sticker':
+        case 'create-thread':
+            return action.name;
+        default:
+            return null;
+    }
+}
+
+/**
+ * Records that a create is about to be sent, before it is sent. If the
+ * create then times out after the platform made the object, or the
+ * process stops before the map row is saved, a later cycle adopts the
+ * object instead of skipping it forever or making a duplicate (adopt.ts).
+ */
+async function recordIntent(
+    state: RunState,
+    op: PlanOp,
+    action: Write
+): Promise<void> {
+    const name = createdName(action);
+    if (name === null) return;
+    await state.deps.store.audit(
+        {
+            ...auditBase(state.input.plan, op),
+            op: 'create-intent',
+            destId: null,
+            after: { name },
+            result: 'intent',
+        },
+        state.deps.now()
+    );
+}
+
+/** Audit, ownership and removal state for a write that went through. */
+async function recordOutcome(
     state: RunState,
     op: PlanOp,
     action: Exclude<WriteAction, { type: 'skip' }>,
     result: Extract<Attempt, { ok: true }>
-): Promise<'written' | 'failed'> {
+): Promise<void> {
     const { plan } = state.input;
-    const { store, now, failures } = state.deps;
-    failures?.succeeded(opKey(plan, op));
-    // A database error from here on is not caught: the write happened but
-    // ownership was not recorded, so the add-ons must stop (guard 15).
+    const { store, now } = state.deps;
     await store.audit(
         {
             ...auditBase(plan, op),
@@ -628,7 +795,34 @@ async function recordWrite(
         await record(state, op, action.applied, result.newId);
     }
     await recordRemoval(state, op, result.gone || action.type === 'gone');
-    await settleOrder(state, op);
+    await settleOrder(state, op, action);
+}
+
+/**
+ * Records a write that went through. A failure to record it means the
+ * bot may own an object the map does not know of: that is the one case
+ * that must stop the add-ons (guard 15, see cycleGuard.ts).
+ */
+async function recordWrite(
+    state: RunState,
+    op: PlanOp,
+    action: Exclude<WriteAction, { type: 'skip' }>,
+    result: Extract<Attempt, { ok: true }>
+): Promise<'written' | 'failed'> {
+    state.deps.failures?.succeeded(opKey(state.input.plan, op));
+    try {
+        await recordOutcome(state, op, action, result);
+    } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new OwnershipLostError(
+            `${op.op} ${op.kind} was written but not recorded: ${detail}`,
+            error
+        );
+    }
+    noteMoves(state, op);
+    if (isEveryoneUpdate(op, state.input.destination.everyoneRoleId)) {
+        state.everyonePending = false;
+    }
     const next = 'followUp' in action ? action.followUp : null;
     if (next && result.newId) {
         await state.deps.pause(UPDATE_WRITE_MS);
@@ -649,6 +843,9 @@ async function applyOp(
         map: state.map,
         direction: plan.direction,
         members: state.input.members,
+        hiddenFromEveryone: everyoneHidden(source, plan.direction),
+        maxBitrate: maxBitrateOf(destination),
+        historyLocked: state.input.historyLocked,
     };
     const action = writeFor(op, ctx);
     const held = action.type === 'skip' ? action.reason : holdReason(state, op);
@@ -663,6 +860,7 @@ async function applyOp(
             gone: true,
         });
     }
+    await recordIntent(state, op, action);
     const result = await attempt(state, action, op);
     if (!result.ok) {
         if (result.notReady) {
@@ -721,6 +919,14 @@ async function recordBaselines(state: RunState): Promise<void> {
     }
 }
 
+/**
+ * The failure cap bucket of an op. Reorders count apart from the other
+ * writes of their kind, so a refused reorder cannot hold up links.
+ */
+export function bucketOf(op: PlanOp): string {
+    return op.op === 'reorder' ? `reorder:${op.kind}` : op.kind;
+}
+
 /** Why the run must stop before the next op, or null. */
 async function stopReason(state: RunState): Promise<string | null> {
     if (!state.deps.canWrite()) return 'writes were switched off';
@@ -751,7 +957,11 @@ function newState(input: ApplyInput, deps: ApplyDeps): RunState {
         skipped: [],
         postponed: 0,
         created: new Set(),
-        archiveCategoryId: null,
+        archiveMoves: new Map(),
+        everyonePending: [
+            ...input.plan.body.ops,
+            ...input.plan.body.deferred,
+        ].some((op) => isEveryoneUpdate(op, input.destination.everyoneRoleId)),
     };
 }
 
@@ -770,11 +980,12 @@ export async function applyPlan(
     for (const op of input.plan.body.ops) {
         stopped = await stopReason(state);
         if (stopped !== null) break;
-        const kindFailures = state.failedByKind.get(op.kind) ?? 0;
+        const bucket = bucketOf(op);
+        const kindFailures = state.failedByKind.get(bucket) ?? 0;
         if (kindFailures >= MAX_FAILURES_PER_KIND) {
             state.skipped.push({
                 op,
-                reason: `${kindFailures} ${op.kind} writes failed this cycle`,
+                reason: `${kindFailures} ${bucket} writes failed this cycle`,
             });
             continue;
         }
@@ -782,7 +993,7 @@ export async function applyPlan(
         if (outcome === 'written') state.applied += 1;
         else if (outcome === 'failed') {
             state.failed += 1;
-            state.failedByKind.set(op.kind, kindFailures + 1);
+            state.failedByKind.set(bucket, kindFailures + 1);
         }
     }
     if (stopped === null && state.failed === 0) await recordBaselines(state);

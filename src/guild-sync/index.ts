@@ -11,7 +11,9 @@ import {
     type CycleDeps,
     type LinkedGuild,
 } from './cycle';
+import { CycleBackoff, guardCycle } from './cycleGuard';
 import { MemoryFailureLedger } from './failures';
+import { PostgresParkedMessages } from './parkedMessages';
 import { ThreadMirror, type ThreadMirrorPorts } from './threadMirror';
 import type { ChannelLinker, ThreadSource } from './links';
 import { NoticeBoard } from './notices';
@@ -93,34 +95,48 @@ export type GuildSyncBridge = ChannelLinker &
     ThreadRelayPorts &
     ThreadMirrorPorts & { readonly sendViaFluxerWebhook: FluxerWebhookSend };
 
+/** The links one run walks through, bounded by MAX_LINKS_PER_RUN. */
+async function linksToSync(
+    deps: GuildSyncDeps,
+    cycleDeps: CycleDeps
+): Promise<readonly LinkedGuild[]> {
+    const links = await deps.listGuildLinks();
+    if (links.length > MAX_LINKS_PER_RUN) {
+        cycleDeps.logger.warn(
+            `[guild-sync] ${links.length} guild links; syncing the first ${MAX_LINKS_PER_RUN}`
+        );
+    }
+    return links.slice(0, MAX_LINKS_PER_RUN);
+}
+
 /**
  * Runs one cycle per linked guild while holding the leader lock. Returns
- * true when an applied plan left ops for the next cycle.
+ * true when an applied plan left ops for the next cycle. A link whose
+ * cycle fails backs off alone; the other links still run (cycleGuard.ts).
  */
-async function runAll(
+export async function runAll(
     store: GuildSyncStore,
     deps: GuildSyncDeps,
     cycleDeps: CycleDeps,
-    holder: string
+    holder: string,
+    backoff: CycleBackoff
 ): Promise<boolean> {
     let more = false;
+    const guard = { backoff, now: cycleDeps.now, logger: cycleDeps.logger };
     const result = await store.withLeaderLock(holder, async (held) => {
-        const links = await deps.listGuildLinks();
-        if (links.length > MAX_LINKS_PER_RUN) {
-            cycleDeps.logger.warn(
-                `[guild-sync] ${links.length} guild links; syncing the first ${MAX_LINKS_PER_RUN}`
+        for (const link of await linksToSync(deps, cycleDeps)) {
+            const outcome = await guardCycle(`link ${link.id}`, guard, () =>
+                runCycle(link, { ...cycleDeps, stillLeader: held })
             );
+            if (!outcome.ok) continue;
+            if (outcome.value.status === 'planned' && outcome.value.more) {
+                more = true;
+            }
         }
-        for (const link of links.slice(0, MAX_LINKS_PER_RUN)) {
-            const outcome = await runCycle(link, {
-                ...cycleDeps,
-                stillLeader: held,
-            });
-            if (outcome.status === 'planned' && outcome.more) more = true;
-        }
-        await store.pruneSnapshots(
-            new Date(cycleDeps.now().getTime() - SNAPSHOT_RETENTION_MS)
-        );
+        const now = cycleDeps.now().getTime();
+        await store.pruneSnapshots(new Date(now - SNAPSHOT_RETENTION_MS));
+        await store.prunePlans(new Date(now - SNAPSHOT_RETENTION_MS));
+        await store.pruneTombstoned(cycleDeps.now());
     });
     if (!result.ran) {
         cycleDeps.logger.info(
@@ -135,15 +151,10 @@ const pause = (ms: number) =>
 
 /** Text channels whose history is copied, or that gave up, may be bridged. */
 function historyReady(store: PostgresHistoryStore) {
-    return async (linkId: string): Promise<ReadonlySet<string>> => {
-        const jobs = await store.listJobs(linkId);
-        return new Set(
-            jobs
-                .filter((j) => j.kind === 'channel')
-                .filter((j) => ['ready', 'done', 'failed'].includes(j.status))
-                .map((j) => j.discordId)
-        );
-    };
+    // Completed imports only: a failed one waits for `history retry`
+    // rather than being bridged with part of its history. Channels in
+    // archive-thread mode are ready at once (history/store.ts).
+    return (linkId: string) => store.channelsReadyToBridge(linkId);
 }
 
 /** What a cycle needs: the store, both platforms and the clock. */
@@ -225,7 +236,13 @@ function startThreadRelay(
             ? (id) =>
                   new PostgresHistoryStore(deps.sequelize).threadImporting(id)
             : undefined,
+        isArchiveThread: deps.historyEnabled
+            ? (id) =>
+                  new PostgresHistoryStore(deps.sequelize).isArchiveThread(id)
+            : undefined,
         mirror: (link, event, raw) => mirror.mirror(link, event, raw),
+        // Held replies survive a restart (addon_parked_messages).
+        parked: new PostgresParkedMessages(deps.sequelize),
         now: () => new Date(),
         logger: context.logger,
     });
@@ -265,21 +282,26 @@ export function createGuildSyncAddon(deps: GuildSyncDeps): Addon {
             const holder = `${hostname()}:${process.pid}`;
             const threads = startThreadRelay(deps, context, store);
             stopRelay = threads.stop;
+            const backoff = new CycleBackoff();
+            const guard = {
+                backoff,
+                now: cycleDeps.now,
+                logger: context.logger,
+            };
             // Declared first: a cycle that leaves work asks for the next one.
+            // Only an OwnershipLostError reaches the boundary and trips
+            // read-only; other errors back off (cycleGuard.ts).
             const active: SyncScheduler = new SyncScheduler(async () => {
                 const result = await context.boundary.run(
                     ADDON_NAME,
                     'cycle',
                     async () => {
-                        const more = await runAll(
-                            store,
-                            deps,
-                            cycleDeps,
-                            holder
+                        const run = await guardCycle('run', guard, () =>
+                            runAll(store, deps, cycleDeps, holder, backoff)
                         );
                         // A cycle may have created threads that held messages.
                         await threads.relay.flush();
-                        return more;
+                        return run.ok && run.value;
                     }
                 );
                 if (result.ok && result.value) active.notify();

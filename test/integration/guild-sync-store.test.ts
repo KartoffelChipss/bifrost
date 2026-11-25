@@ -8,6 +8,7 @@ import { EMPTY_BODY } from '../../src/guild-sync/plan';
 import { stableJson } from '../../src/guild-sync/snapshot';
 import {
     HISTORY_LOCK_KEY,
+    PLANS_KEPT_PER_LINK,
     PostgresGuildSyncStore,
 } from '../../src/guild-sync/store';
 import { PostgresHistoryStore } from '../../src/history/store';
@@ -467,5 +468,114 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
             ran: true,
             value: { ran: true, value: 'nested' },
         });
+    });
+
+    it('prunes tombstoned map rows and keeps the rest', async () => {
+        const now = new Date();
+        const mapping = (discordId: string) =>
+            store.insertMapping(
+                {
+                    guildLinkId: linkId,
+                    kind: 'role',
+                    discordId,
+                    fluxerId: `f-${discordId}`,
+                    createdBySync: true,
+                    appliedFields: {},
+                },
+                now
+            );
+        const gone = await mapping('gone-role');
+        const kept = await mapping('kept-role');
+        await store.setRowState(gone.id, 'tombstoned', now);
+        const later = new Date(now.getTime() + 1000);
+        assert.equal(await store.pruneTombstoned(later), 1);
+        const ids = (await store.loadObjectMap(linkId)).map((r) => r.id);
+        assert.ok(!ids.includes(gone.id));
+        assert.ok(ids.includes(kept.id));
+    });
+
+    it('reads back create intents from the audit log', async () => {
+        const at = new Date();
+        await store.audit(
+            {
+                planId: randomUUID(),
+                guildLinkId: linkId,
+                op: 'create-intent',
+                kind: 'channel',
+                sourceId: 'src-1',
+                destId: null,
+                before: null,
+                after: { name: 'general' },
+                result: 'intent',
+            },
+            at
+        );
+        const intents = await store.createIntents(
+            linkId,
+            new Date(at.getTime() - 1000)
+        );
+        assert.deepEqual(
+            intents.map((i) => [i.kind, i.sourceId, i.name]),
+            [['channel', 'src-1', 'general']]
+        );
+        assert.equal(intents[0].at.getTime(), at.getTime());
+        assert.equal(await store.removalsSince(linkId, new Date(0)), 1);
+    });
+
+    it('prunes old plans but keeps recent, pending and approved ones', async () => {
+        const link = randomUUID();
+        await db.query(
+            `INSERT INTO guild_links (id, "discordGuildId", "fluxerGuildId", "createdAt") VALUES ($1, 'd2', 'f2', now())`,
+            { bind: [link] }
+        );
+        const old = new Date('2020-01-01T00:00:00Z');
+        const save = async (
+            status: 'dry-run' | 'pending-approval',
+            at: Date
+        ) => {
+            const id = randomUUID();
+            await store.savePlan(
+                {
+                    id,
+                    guildLinkId: link,
+                    direction: 'discord-to-fluxer',
+                    status,
+                    body: EMPTY_BODY,
+                    abortReason: null,
+                },
+                at
+            );
+            return id;
+        };
+        const approved = await save('pending-approval', old);
+        await store.setApprovedPlan(link, approved, new Date());
+        const stalePending = await save('pending-approval', old);
+        const pending = await save(
+            'pending-approval',
+            new Date(old.getTime() + 1)
+        );
+        const stale: string[] = [];
+        for (let i = 0; i < PLANS_KEPT_PER_LINK + 3; i++) {
+            stale.push(
+                await save('dry-run', new Date(old.getTime() + 100 + i))
+            );
+        }
+        const pruned = await store.prunePlans(new Date('2021-01-01T00:00:00Z'));
+        assert.ok(pruned >= 4);
+        assert.ok(await store.getPlan(approved));
+        assert.ok(await store.getPlan(pending));
+        assert.equal(await store.getPlan(stalePending), null);
+        // The newest plans stay; the oldest dry-runs past the limit go.
+        assert.equal(await store.getPlan(stale[0]), null);
+        assert.ok(await store.getPlan(stale[stale.length - 1]));
+        await store.setApprovedPlan(link, null, new Date());
+    });
+
+    it('turns drift enforcement on and off', async () => {
+        assert.equal((await store.loadSettings(linkId)).enforceDrift, false);
+        await store.setEnforceDrift(linkId, true, new Date());
+        assert.equal((await store.loadSettings(linkId)).enforceDrift, true);
+        await store.setEnforceDrift(linkId, false, new Date());
+        assert.equal((await store.loadSettings(linkId)).enforceDrift, false);
     });
 });

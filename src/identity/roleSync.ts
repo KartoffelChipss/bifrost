@@ -3,9 +3,19 @@ import type { AddonLogger } from '../addons/isolation';
 import { resolveMode, type LinkedGuild } from '../guild-sync/cycle';
 import type { GuildSyncStore } from '../guild-sync/store';
 import { RollingLimit } from './limits';
+import {
+    MemberModeration,
+    type ModerationPorts,
+    type ModerationTally,
+} from './moderationSync';
 import { NickMemory, nickChange, type NickChange } from './nick';
 import type { IdentityPorts, MemberState } from './ports';
-import { roleChanges, syncableRoles, type RoleChange } from './roles';
+import {
+    managedRoles,
+    roleChanges,
+    syncableRoles,
+    type RoleChange,
+} from './roles';
 import type { AccountPair } from './store';
 
 /**
@@ -18,6 +28,31 @@ const HOUR_MS = 60 * 60_000;
 export const MAX_LINKS = 50;
 /** Guild links whose removal budget is kept at once. */
 const MAX_TRACKED_LINKS = 1_000;
+/**
+ * A link's role lists, from its snapshot and map, are reused this long by
+ * member events: the sweep interval, after which a sweep reloads them.
+ */
+export const PLAN_TTL_MS = 10 * 60_000;
+/**
+ * A sweep starts no new member after this long. The sweep holds the
+ * identity leader lock, a Postgres transaction, so the bound keeps it
+ * short; the next sweep carries on where this one stopped.
+ */
+export const SWEEP_BUDGET_MS = 60_000;
+
+/** Role lists loaded from a link's snapshot and map. */
+interface RoleLists {
+    readonly at: number;
+    readonly syncable: ReadonlyMap<string, string>;
+    readonly managed: ReadonlyMap<string, string>;
+}
+
+/** `items` starting at `start`, wrapping around: a sweep's resume order. */
+export function rotate<T>(items: readonly T[], start: number): T[] {
+    if (items.length === 0) return [];
+    const at = ((start % items.length) + items.length) % items.length;
+    return [...items.slice(at), ...items.slice(0, at)];
+}
 
 export interface RoleSyncDeps {
     readonly store: Pick<
@@ -30,7 +65,8 @@ export interface RoleSyncDeps {
         | 'fluxerMember'
         | 'setFluxerMemberRoles'
         | 'setFluxerMemberNick'
-    >;
+    > &
+        ModerationPorts;
     readonly listGuildLinks: () => Promise<readonly LinkedGuild[]>;
     readonly processMode: () => AddonMode;
     readonly allowApply: boolean;
@@ -43,17 +79,26 @@ export interface LinkPlan {
     readonly link: LinkedGuild;
     readonly mode: 'dry-run' | 'apply';
     readonly adminChannelId: string | null;
+    /** Roles that may be added: mapped and not privileged. */
     readonly syncable: ReadonlyMap<string, string>;
+    /** Roles that may be removed: every mapped member role. */
+    readonly managed: ReadonlyMap<string, string>;
 }
 
 /** Changes counted in one pass. In dry-run they are only counted. */
-export interface Tally {
+export interface Tally extends ModerationTally {
     add: number;
     remove: number;
     nicks: number;
 }
 
-export const emptyTally = (): Tally => ({ add: 0, remove: 0, nicks: 0 });
+export const emptyTally = (): Tally => ({
+    add: 0,
+    remove: 0,
+    nicks: 0,
+    bans: 0,
+    timeouts: 0,
+});
 
 const describePair = (pair: AccountPair) =>
     `Discord ${pair.discordUserId} / Fluxer ${pair.fluxerUserId}`;
@@ -69,13 +114,20 @@ export class RoleSync {
         MAX_TRACKED_LINKS
     );
     private readonly nicks = new NickMemory();
+    private readonly lists = new Map<string, RoleLists>();
+    private readonly moderation: MemberModeration;
 
-    constructor(private readonly deps: RoleSyncDeps) {}
+    constructor(private readonly deps: RoleSyncDeps) {
+        this.moderation = new MemberModeration(deps);
+    }
 
-    /** Loads a link's settings, snapshot and map. Null when it syncs nothing. */
-    async plan(link: LinkedGuild): Promise<LinkPlan | null> {
-        const { store } = this.deps;
-        const settings = await store.loadSettings(link.id);
+    /**
+     * Loads a link's settings, and its role lists from the snapshot and
+     * map unless loaded within PLAN_TTL_MS (`fresh` always reloads them).
+     * Null when the link syncs nothing.
+     */
+    async plan(link: LinkedGuild, fresh = false): Promise<LinkPlan | null> {
+        const settings = await this.deps.store.loadSettings(link.id);
         if (settings.direction !== 'discord-to-fluxer') return null;
         const { mode } = resolveMode(
             this.deps.processMode(),
@@ -83,15 +135,40 @@ export class RoleSync {
             this.deps.allowApply
         );
         if (mode === 'read-only') return null;
-        const snapshot = await store.lastSnapshot(link.id, 'discord', true);
-        if (!snapshot) return null;
-        const rows = await store.loadObjectMap(link.id);
+        const lists = await this.roleLists(link, fresh);
+        if (!lists) return null;
         return {
             link,
             mode,
             adminChannelId: settings.adminChannelId,
-            syncable: syncableRoles(snapshot, rows),
+            syncable: lists.syncable,
+            managed: lists.managed,
         };
+    }
+
+    private async roleLists(
+        link: LinkedGuild,
+        fresh: boolean
+    ): Promise<RoleLists | null> {
+        const now = this.deps.now();
+        const cached = this.lists.get(link.id);
+        if (!fresh && cached && now - cached.at < PLAN_TTL_MS) return cached;
+        const { store } = this.deps;
+        const snapshot = await store.lastSnapshot(link.id, 'discord', true);
+        if (!snapshot) return null;
+        const rows = await store.loadObjectMap(link.id);
+        const lists = {
+            at: now,
+            syncable: syncableRoles(snapshot, rows),
+            managed: managedRoles(snapshot, rows),
+        };
+        this.lists.delete(link.id);
+        if (this.lists.size >= MAX_TRACKED_LINKS) {
+            const oldest = this.lists.keys().next();
+            if (!oldest.done) this.lists.delete(oldest.value);
+        }
+        this.lists.set(link.id, lists);
+        return lists;
     }
 
     /** Syncs one member on one link. Never throws. */
@@ -126,36 +203,104 @@ export class RoleSync {
         }
     }
 
-    /** Syncs every pair on one link. Null when the link syncs nothing. */
+    /**
+     * Removes every synced role from a member whose accounts were just
+     * unlinked, within the removal limit, in apply only. Never throws.
+     */
+    async strip(pair: AccountPair): Promise<void> {
+        try {
+            const links = await this.deps.listGuildLinks();
+            for (const link of links.slice(0, MAX_LINKS)) {
+                const plan = await this.plan(link);
+                if (plan?.mode === 'apply') await this.stripOn(plan, pair);
+            }
+        } catch (error) {
+            this.deps.logger.warn(
+                `[identity] Could not remove synced roles of ${describePair(pair)}:`,
+                error
+            );
+        }
+    }
+
+    private async stripOn(plan: LinkPlan, pair: AccountPair) {
+        const fluxer = await this.deps.ports.fluxerMember(
+            plan.link.fluxerGuildId,
+            pair.fluxerUserId
+        );
+        if (!fluxer) return;
+        const change = roleChanges(
+            [],
+            fluxer.roleIds,
+            plan.syncable,
+            plan.managed
+        );
+        await this.applyRoles(plan, pair, fluxer, change, emptyTally());
+    }
+
+    /**
+     * Lifts the Fluxer bans this sync made for a member unbanned on one
+     * Discord server, in apply only. Never throws.
+     */
+    async unban(pair: AccountPair, discordGuildId: string): Promise<void> {
+        try {
+            const links = await this.deps.listGuildLinks();
+            for (const link of links.slice(0, MAX_LINKS)) {
+                if (link.discordGuildId !== discordGuildId) continue;
+                const plan = await this.plan(link);
+                if (plan) await this.moderation.unban(plan, pair);
+            }
+        } catch (error) {
+            this.deps.logger.warn(
+                `[identity] Could not unban ${describePair(pair)}:`,
+                error
+            );
+        }
+    }
+
+    /**
+     * Syncs the pairs on one link in order until `deadline` (ms). Returns
+     * how many were checked, or null when the link syncs nothing.
+     */
     async sweepLink(
         link: LinkedGuild,
-        pairs: readonly AccountPair[]
-    ): Promise<{ plan: LinkPlan; tally: Tally } | null> {
-        const plan = await this.plan(link);
+        pairs: readonly AccountPair[],
+        deadline = Number.POSITIVE_INFINITY
+    ): Promise<{ plan: LinkPlan; tally: Tally; checked: number } | null> {
+        const plan = await this.plan(link, true);
         if (!plan) return null;
         const tally = emptyTally();
-        for (const pair of pairs) await this.member(plan, pair, tally);
-        return { plan, tally };
+        let checked = 0;
+        for (const pair of pairs) {
+            if (this.deps.now() >= deadline) break;
+            await this.member(plan, pair, tally);
+            checked += 1;
+        }
+        return { plan, tally, checked };
     }
 
     private async syncMember(plan: LinkPlan, pair: AccountPair, tally: Tally) {
         const { ports } = this.deps;
         const { link } = plan;
-        const discord = await ports.discordMember(
+        const present = await ports.discordMember(
             link.discordGuildId,
             pair.discordUserId
         );
-        if (!discord) return;
         const fluxer = await ports.fluxerMember(
             link.fluxerGuildId,
             pair.fluxerUserId
         );
         if (!fluxer) return;
+        if (!present && (await this.moderation.banIfBanned(plan, pair, tally)))
+            return;
+        // A member who left holds no roles there.
+        const discord = present ?? { roleIds: [], nick: null };
+        await this.moderation.syncTimeout(plan, pair, discord, fluxer, tally);
         const key = `${link.id}:${pair.fluxerUserId}`;
         const roles = roleChanges(
             discord.roleIds,
             fluxer.roleIds,
-            plan.syncable
+            plan.syncable,
+            plan.managed
         );
         const nick = nickChange(discord.nick, fluxer.nick, this.nicks.get(key));
         if (plan.mode !== 'apply') {

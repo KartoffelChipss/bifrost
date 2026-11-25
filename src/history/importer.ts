@@ -8,7 +8,14 @@ import {
     type GuildSnapshot,
 } from '../guild-sync/snapshot';
 import type { GuildWriter } from '../guild-sync/writers/writer';
-import { CopyFormatter } from './format';
+import {
+    MessageError,
+    describeError,
+    isTransient,
+    isUploadError,
+} from './errors';
+import { ArchiveThreads } from './archive';
+import { CopyFormatter, contentHash, withNote } from './format';
 import {
     MAX_PARALLEL,
     PAGE_SIZE,
@@ -20,6 +27,7 @@ import { HistorySurvey } from './survey';
 import type {
     HistoryJob,
     HistoryPorts,
+    ImportedMessage,
     SendTarget,
     SourceMessage,
 } from './types';
@@ -35,10 +43,27 @@ import type {
 export { MAX_PARALLEL, PAGE_SIZE, PASS_BUDGET_MS, SEND_INTERVAL_MS };
 /** Extra passes for messages posted while a channel was being copied. */
 export const MAX_CATCH_UPS = 2;
-/** A job stops after this many failed runs in a row. */
+/**
+ * Runs in a row with a lasting error (such as a 4xx) before the message
+ * at fault is skipped, or the job fails when no message is at fault.
+ * Temporary errors never count.
+ */
 export const MAX_FAILURES = 5;
+/** First wait after an error; it doubles per error in a row, up to the max. */
+export const RETRY_BASE_MS = 5_000;
+export const RETRY_MAX_MS = 10 * 60_000;
+/** Doublings before the wait reaches its cap; bounds the exponent. */
+const MAX_DOUBLINGS = 20;
+
+/** The wait before the next run after `count` errors in a row. */
+export function backoffMs(count: number): number {
+    const doublings = Math.min(Math.max(count - 1, 0), MAX_DOUBLINGS);
+    return Math.min(RETRY_BASE_MS * Math.pow(2, doublings), RETRY_MAX_MS);
+}
 /** Pages read per pass after a channel is bridged, to close the gap. */
 export const MAX_GAP_PAGES = 5;
+/** Recent Fluxer messages searched for a copy cut off by a crash. */
+export const RECOVERY_SCAN = 20;
 /** Pinned messages read per channel or thread. */
 const MAX_PINS = 250;
 
@@ -56,7 +81,12 @@ export interface ImporterDeps {
     };
     readonly ports: HistoryPorts;
     readonly links: ChannelLinker;
-    readonly writer: Pick<GuildWriter, 'updateThread'>;
+    readonly writer: Pick<GuildWriter, 'updateThread' | 'createThread'>;
+    /**
+     * Archive-thread mode: channels with more messages than this get their
+     * history in a thread and are bridged at once. 0 or absent: inline.
+     */
+    readonly inlineMax?: number;
     /**
      * Records a thread state written straight to Fluxer in guild-sync's
      * object map, so its next cycle does not take it for drift.
@@ -89,16 +119,29 @@ interface Pass {
     readonly deadline: number;
     /** Message channels guild-sync cannot bridge (see `plan`). */
     readonly unbridged: ReadonlySet<string>;
+    /** Discord channel types by ID, from the snapshot. */
+    readonly channelTypes: ReadonlyMap<string, number>;
 }
 
 /** Where a job's copies go, and the bridge whose Discord posts it skips. */
 interface Route {
     readonly target: SendTarget;
-    /** The bridge's Discord webhook: its posts are copies of Fluxer messages. */
-    readonly bridgeHook: string | null;
+    /**
+     * Discord webhooks whose posts are copies of Fluxer messages: the
+     * bridge's, and any earlier Bifröst bridge webhook in the channel.
+     */
+    readonly relayHooks: ReadonlySet<string>;
 }
 
 const later = (a: string, b: string) => BigInt(a) > BigInt(b);
+
+/** Discord's snowflake epoch: 2015-01-01T00:00:00Z. */
+const DISCORD_EPOCH_MS = 1_420_070_400_000;
+
+/** When a Discord snowflake was made, in ms since the Unix epoch. */
+export function snowflakeTime(id: string): number {
+    return Number(BigInt(id) >> BigInt(22)) + DISCORD_EPOCH_MS;
+}
 
 /** Stops a run cleanly when writes are switched off mid-way. */
 class StoppedError extends Error {}
@@ -106,10 +149,15 @@ class StoppedError extends Error {}
 export class HistoryImporter {
     private readonly formatter: CopyFormatter;
     private readonly survey: HistorySurvey;
+    private readonly archive: ArchiveThreads;
 
     constructor(private readonly deps: ImporterDeps) {
         this.formatter = new CopyFormatter(deps);
         this.survey = new HistorySurvey(deps);
+        this.archive = new ArchiveThreads({
+            ...deps,
+            inlineMax: deps.inlineMax ?? 0,
+        });
     }
 
     /**
@@ -140,9 +188,13 @@ export class HistoryImporter {
                 )
                 .map((c) => c.id)
         );
+        const channelTypes = new Map(
+            (snapshot?.channels ?? []).map((c) => [c.id, c.type])
+        );
         return {
             jobs: jobs.filter((job) => !skip.has(job.discordId)),
             unbridged,
+            channelTypes,
         };
     }
 
@@ -211,9 +263,31 @@ export class HistoryImporter {
     ): Promise<boolean> {
         const mode = await this.deps.mode(link.id);
         if (mode === 'read-only') return false;
-        const { jobs, unbridged } = await this.plan(link);
+        const { jobs, unbridged, channelTypes } = await this.plan(link);
         if (mode === 'dry-run') return this.survey.run(link, jobs, deadline);
-        return this.importAll({ link, deadline, unbridged }, jobs);
+        return this.importAll(
+            { link, deadline, unbridged, channelTypes },
+            jobs
+        );
+    }
+
+    /**
+     * True while a job of this link waits for a time rather than for work:
+     * a backoff after an error, or a copied channel waiting for its
+     * bridge, whose gap pass should start soon after the link. The add-on
+     * polls sooner than when idle.
+     */
+    async waiting(linkId: string): Promise<boolean> {
+        const now = this.deps.now().getTime();
+        const jobs = await this.deps.store.listJobs(linkId);
+        return jobs.some(
+            (j) =>
+                (j.kind === 'channel' && j.status === 'ready') ||
+                (j.status !== 'done' &&
+                    j.status !== 'failed' &&
+                    j.retryAt !== null &&
+                    j.retryAt.getTime() > now)
+        );
     }
 
     private overdue(pass: Pass): boolean {
@@ -222,17 +296,25 @@ export class HistoryImporter {
 
     // ---- apply: copy
 
+    /**
+     * Jobs with the same key send through the same webhook, so they never
+     * run at once. A channel's gap pass sends through its bridge webhook,
+     * which its threads' jobs share.
+     */
     private webhookKey(job: HistoryJob): string {
-        return job.kind === 'channel'
-            ? `own:${job.id}`
-            : `parent:${job.parentDiscordId}`;
+        if (job.kind === 'thread') return `parent:${job.parentDiscordId}`;
+        return job.status === 'ready'
+            ? `parent:${job.discordId}`
+            : `own:${job.id}`;
     }
 
     /** Jobs that can run now. Bridged channels finish with a gap pass. */
     private async runnable(link: LinkedGuild, jobs: HistoryJob[]) {
         const ready: HistoryJob[] = [];
+        const now = this.deps.now().getTime();
         for (const job of jobs) {
             if (!job.fluxerId) continue;
+            if (job.retryAt && job.retryAt.getTime() > now) continue;
             if (job.kind === 'channel') {
                 const next = await this.channelRunnable(link, job);
                 if (next) ready.push(next);
@@ -261,6 +343,8 @@ export class HistoryImporter {
         job: HistoryJob
     ): Promise<HistoryJob | null> {
         if (job.status === 'done' || job.status === 'failed') return null;
+        // An archive thread's history goes on through the import webhook.
+        if (job.archiveThreadId) return job.status === 'importing' ? job : null;
         const bridged = await this.deps.links.byDiscordChannel(job.discordId);
         if (!bridged) return job.status === 'ready' ? null : job;
         if (job.status === 'pending') {
@@ -310,9 +394,14 @@ export class HistoryImporter {
         );
         if (jobs.length === 0 || waiting.length > 0) return;
         const copied = jobs.reduce((sum, j) => sum + j.imported, 0);
+        const skipped = jobs.reduce((sum, j) => sum + j.skipped, 0);
         const failed = jobs.filter((j) => j.status === 'failed').length;
-        const text = `History import finished: ${copied} messages copied, ${failed} jobs failed.`;
-        await this.deps.report(link.id, `done:${copied}:${failed}`, text);
+        const text = `History import finished: ${copied} messages copied, ${skipped} messages skipped, ${failed} jobs failed.`;
+        await this.deps.report(
+            link.id,
+            `done:${copied}:${skipped}:${failed}`,
+            text
+        );
     }
 
     /** Runs one job for one page. Returns true when it has more to do. */
@@ -322,22 +411,64 @@ export class HistoryImporter {
             return await this.importPage(pass, job);
         } catch (error) {
             if (error instanceof StoppedError) return false;
-            const detail =
-                error instanceof Error ? error.message : String(error);
-            const failures = job.failures + 1;
-            if (failures >= MAX_FAILURES)
-                await this.fail(pass.link, job, detail);
-            else
-                await this.deps.store.updateJob(
-                    job.id,
-                    { failures, lastError: detail },
-                    this.deps.now()
-                );
-            this.deps.logger.warn(
-                `[history] ${job.kind} ${job.discordId}: ${detail}`
-            );
+            const fresh = (await this.deps.store.getJob(job.id)) ?? job;
+            await this.onError(pass.link, fresh, error);
             return false;
         }
+    }
+
+    /**
+     * A temporary error waits and retries without counting. A lasting one
+     * counts; at MAX_FAILURES the message at fault is skipped, or the job
+     * fails when no single message is at fault.
+     */
+    private async onError(link: LinkedGuild, job: HistoryJob, error: unknown) {
+        const { store, now, logger } = this.deps;
+        const detail = describeError(error);
+        logger.warn(`[history] ${job.kind} ${job.discordId}: ${detail}`);
+        if (isTransient(error)) {
+            const retries = job.retries + 1;
+            const retryAt = new Date(now().getTime() + backoffMs(retries));
+            await store.updateJob(
+                job.id,
+                { retries, retryAt, lastError: detail },
+                now()
+            );
+            return;
+        }
+        const failures = job.failures + 1;
+        if (failures < MAX_FAILURES) {
+            const retryAt = new Date(now().getTime() + backoffMs(failures));
+            await store.updateJob(
+                job.id,
+                { failures, retryAt, lastError: detail },
+                now()
+            );
+            return;
+        }
+        if (error instanceof MessageError)
+            await this.skip(job, error.messageId, detail);
+        else await this.fail(link, job, detail);
+    }
+
+    /** Gives up on one message that keeps failing, and records it. */
+    private async skip(job: HistoryJob, messageId: string, detail: string) {
+        const { store, now, logger } = this.deps;
+        await store.dropMessage(messageId);
+        await store.updateJob(
+            job.id,
+            {
+                checkpointId: messageId,
+                skipped: job.skipped + 1,
+                failures: 0,
+                retryAt: null,
+                lastError: `skipped message ${messageId}: ${detail}`,
+            },
+            now()
+        );
+        logger.warn(
+            `[history] Skipped message ${messageId} in ${job.kind} ${job.discordId}: ${detail}`
+        );
     }
 
     private async fail(link: LinkedGuild, job: HistoryJob, reason: string) {
@@ -356,19 +487,23 @@ export class HistoryImporter {
     private async route(job: HistoryJob): Promise<Route> {
         const fluxerId = job.fluxerId ?? '';
         if (job.kind === 'thread') {
-            const parent = await this.deps.links.byDiscordChannel(
-                job.parentDiscordId ?? ''
-            );
+            const parentId = job.parentDiscordId ?? '';
+            const parent = await this.deps.links.byDiscordChannel(parentId);
             if (!parent) throw new Error('the parent channel is not bridged');
             return {
                 target: { webhook: parent.fluxerWebhook, threadId: fluxerId },
-                bridgeHook: parent.discordWebhook.id,
+                relayHooks: await this.relayHooks(
+                    parentId,
+                    parent.discordWebhook.id
+                ),
             };
         }
+        const relayHooks = await this.relayHooks(job.discordId, null);
+        const threadId = job.archiveThreadId;
         if (job.importWebhook) {
             return {
-                target: { webhook: job.importWebhook, threadId: null },
-                bridgeHook: null,
+                target: { webhook: job.importWebhook, threadId },
+                relayHooks,
             };
         }
         const webhook = await this.deps.ports.createImportWebhook(fluxerId);
@@ -377,61 +512,93 @@ export class HistoryImporter {
             { importWebhook: webhook },
             this.deps.now()
         );
-        return { target: { webhook, threadId: null }, bridgeHook: null };
+        return { target: { webhook, threadId }, relayHooks };
     }
 
-    /** Sets the cutoff, and opens an archived or locked thread for writing. */
-    private async begin(
-        link: LinkedGuild,
-        job: HistoryJob
-    ): Promise<HistoryJob> {
+    /** The bridge webhook, if any, and earlier bridge webhooks still there. */
+    private async relayHooks(
+        discordChannelId: string,
+        bridgeHook: string | null
+    ): Promise<Set<string>> {
+        const hooks = await this.deps.ports.bridgeWebhookIds(discordChannelId);
+        if (bridgeHook) hooks.add(bridgeHook);
+        return hooks;
+    }
+
+    /**
+     * Sets the cutoff the import copies up to, and opens the archive
+     * thread when the channel is big enough for archive-thread mode.
+     */
+    private async begin(pass: Pass, job: HistoryJob): Promise<HistoryJob> {
         const cutoffId =
             (await this.deps.ports.newestMessageId(job.discordId)) ?? '0';
-        if (job.kind === 'thread' && job.fluxerId) {
-            await this.deps.writer.updateThread(
-                link.fluxerGuildId,
-                job.fluxerId,
-                {
-                    archived: false,
-                    locked: false,
-                }
-            );
-        }
-        // lastError may hold a dry-run survey note.
-        await this.deps.store.updateJob(
-            job.id,
-            { status: 'importing', cutoffId, lastError: null },
+        const archiveThreadId = await this.archive.open(
+            pass.link,
+            job,
+            pass.channelTypes.get(job.discordId),
             this.deps.now()
         );
-        return { ...job, status: 'importing', cutoffId, lastError: null };
+        // lastError may hold a dry-run survey note.
+        const patch = {
+            status: 'importing' as const,
+            cutoffId,
+            archiveThreadId,
+            lastError: null,
+        };
+        await this.deps.store.updateJob(job.id, patch, this.deps.now());
+        return { ...job, ...patch };
     }
 
     /**
      * A message that was sent but not recorded when the process stopped is
-     * found as the newest message from the webhook that sent it. Otherwise
+     * looked for among the last RECOVERY_SCAN Fluxer messages; otherwise
      * it is resent.
      */
     private async recover(job: HistoryJob) {
-        const { store, ports } = this.deps;
+        const { store } = this.deps;
         const unfinished = await store.unfinishedMessage(job.id);
         if (!unfinished) return;
-        const newest = await ports.newestFluxerMessage(
-            unfinished.fluxerTargetId
-        );
-        const ours =
-            newest &&
-            newest.webhookId === unfinished.webhookId &&
-            !(await store.importedByFluxerId(newest.id));
-        if (ours && newest)
-            await store.finishMessage(unfinished.discordMessageId, newest.id);
+        const sent = await this.findSentCopy(unfinished);
+        if (sent) await store.finishMessage(unfinished.discordMessageId, sent);
         else await store.dropMessage(unfinished.discordMessageId);
+    }
+
+    /**
+     * The copy's Fluxer ID: a recent message from the same webhook that no
+     * other record claims and whose text matches what was sent. The same
+     * webhook also posts live relay messages, so neither alone is enough.
+     */
+    private async findSentCopy(
+        unfinished: ImportedMessage
+    ): Promise<string | null> {
+        const recent = await this.deps.ports.recentFluxerMessages(
+            unfinished.fluxerTargetId,
+            RECOVERY_SCAN
+        );
+        const hash = unfinished.contentHash ?? null;
+        for (const message of recent.slice(0, RECOVERY_SCAN)) {
+            if (message.webhookId !== unfinished.webhookId) continue;
+            if (hash !== null && contentHash(message.content) !== hash)
+                continue;
+            if (await this.claimed(message.id)) continue;
+            return message.id;
+        }
+        return null;
+    }
+
+    /** True when an import or a relay already owns this Fluxer message. */
+    private async claimed(fluxerMessageId: string): Promise<boolean> {
+        const { store, ports } = this.deps;
+        return (
+            (await store.importedByFluxerId(fluxerMessageId)) !== null ||
+            (await store.relayedInThreadByFluxerId(fluxerMessageId)) ||
+            (await ports.relayedLiveFluxer(fluxerMessageId))
+        );
     }
 
     private async importPage(pass: Pass, start: HistoryJob): Promise<boolean> {
         const job =
-            start.status === 'pending'
-                ? await this.begin(pass.link, start)
-                : start;
+            start.status === 'pending' ? await this.begin(pass, start) : start;
         const route = await this.route(job);
         await this.recover(job);
         const cutoff = job.cutoffId ?? '0';
@@ -440,8 +607,67 @@ export class HistoryImporter {
             job.checkpointId,
             PAGE_SIZE
         );
-        const due = page.filter((m) => !later(m.id, cutoff));
+        const end = await this.archiveEnd(job);
+        const due = page.filter(
+            (m) => !later(m.id, cutoff) && snowflakeTime(m.id) < end
+        );
         if (due.length === 0) return this.finish(pass, job);
+        return this.whileOpen(pass.link, job, () =>
+            this.copyPage(pass, job, due, route)
+        );
+    }
+
+    /**
+     * Fluxer refuses webhook posts in a locked thread and unarchives an
+     * archived one on its own (fluxer_api ThreadMessageActivity
+     * beforeWebhookSend). A thread locked on Discord is unlocked only for
+     * one page and locked again at once, so members cannot post there
+     * while it is copied.
+     */
+    private async whileOpen(
+        link: LinkedGuild,
+        job: HistoryJob,
+        work: () => Promise<boolean>
+    ): Promise<boolean> {
+        const threadId = await this.lockedThread(job);
+        if (!threadId) return work();
+        const { writer } = this.deps;
+        await writer.updateThread(link.fluxerGuildId, threadId, {
+            locked: false,
+        });
+        try {
+            return await work();
+        } finally {
+            await writer.updateThread(link.fluxerGuildId, threadId, {
+                locked: true,
+            });
+        }
+    }
+
+    /** The Fluxer thread a job writes to, when it is kept locked. */
+    private async lockedThread(job: HistoryJob): Promise<string | null> {
+        if (job.archiveThreadId) return job.archiveThreadId;
+        if (job.kind !== 'thread' || !job.fluxerId) return null;
+        const { locked } = await this.deps.ports.threadState(job.discordId);
+        return locked ? job.fluxerId : null;
+    }
+
+    /**
+     * An archive thread's history ends where the bridge begins: messages
+     * from then on are relayed live. Without a bridge, there is no end.
+     */
+    private async archiveEnd(job: HistoryJob): Promise<number> {
+        if (!job.archiveThreadId) return Number.POSITIVE_INFINITY;
+        const linkedAt = await this.deps.ports.linkCreatedAt(job.discordId);
+        return linkedAt ? linkedAt.getTime() : Number.POSITIVE_INFINITY;
+    }
+
+    private async copyPage(
+        pass: Pass,
+        job: HistoryJob,
+        due: readonly SourceMessage[],
+        route: Route
+    ): Promise<boolean> {
         let state = job;
         for (const message of due) {
             if (this.overdue(pass)) return true;
@@ -449,6 +675,7 @@ export class HistoryImporter {
             // relay the copy back to Discord.
             if (
                 state.kind === 'channel' &&
+                !state.archiveThreadId &&
                 (await this.deps.links.byDiscordChannel(state.discordId))
             ) {
                 await this.handOver(state);
@@ -468,10 +695,11 @@ export class HistoryImporter {
         if (!message.copyable) return true;
         // The sync posts a forum post's first message when it creates it.
         if (job.kind === 'thread' && message.id === job.discordId) return true;
-        // The bridge's Discord webhook posts copies of Fluxer messages.
+        // Bridge webhooks, this one's or an earlier link's, post copies of
+        // Fluxer messages; so does any webhook this bot's app owns.
         if (
             message.webhookId !== null &&
-            message.webhookId === route.bridgeHook
+            (message.ownWebhook || route.relayHooks.has(message.webhookId))
         )
             return true;
         // The thread relay copied it live, either way.
@@ -511,7 +739,6 @@ export class HistoryImporter {
         message: SourceMessage,
         route: Route
     ): Promise<HistoryJob> {
-        const { store, now } = this.deps;
         if ((await this.deps.mode(link.id)) !== 'apply')
             throw new StoppedError();
         if (
@@ -520,6 +747,21 @@ export class HistoryImporter {
         ) {
             return this.advance(job, message.id);
         }
+        try {
+            return await this.sendOne(link, job, message, route);
+        } catch (error) {
+            throw new MessageError(message.id, error);
+        }
+    }
+
+    /** Records, sends and checkpoints one copy. */
+    private async sendOne(
+        link: LinkedGuild,
+        job: HistoryJob,
+        message: SourceMessage,
+        route: Route
+    ): Promise<HistoryJob> {
+        const { store, now } = this.deps;
         const payload = await this.formatter.build(message, link.id);
         const { target } = route;
         await store.startMessage(
@@ -531,57 +773,73 @@ export class HistoryImporter {
                 fluxerTargetId: target.threadId ?? job.fluxerId ?? '',
                 inThread: target.threadId !== null,
                 webhookId: target.webhook.id,
+                contentHash: contentHash(payload.content),
             },
             now()
         );
         const fluxerId = await this.send(target, payload, message.id);
         await store.finishMessage(message.id, fluxerId);
-        const next = {
-            ...job,
+        const patch = {
             checkpointId: message.id,
             imported: job.imported + 1,
             failures: 0,
+            retries: 0,
+            retryAt: null,
         };
-        await store.updateJob(
-            job.id,
-            {
-                checkpointId: next.checkpointId,
-                imported: next.imported,
-                failures: 0,
-            },
-            now()
-        );
+        await store.updateJob(job.id, patch, now());
         await this.deps.pause(SEND_INTERVAL_MS);
-        return next;
+        return { ...job, ...patch };
     }
 
-    /** Sends a copy. A refused upload is retried once without its files. */
+    /**
+     * Sends a copy. Only an upload refusal is retried, once, without the
+     * files. After a temporary error the message stays recorded as
+     * unfinished: the send may have gone through, and recovery checks
+     * before anything is resent. Any other error definitely sent nothing.
+     */
     private async send(
         target: SendTarget,
         payload: RelayPayload,
         discordId: string
-    ) {
-        const { store, ports } = this.deps;
+    ): Promise<string> {
         try {
-            return await ports.sendCopy(target, payload);
+            return await this.deps.ports.sendCopy(target, payload);
         } catch (error) {
             const files = payload.attachments ?? [];
-            if (files.length === 0) {
-                await store.dropMessage(discordId);
+            if (files.length === 0 || !isUploadError(error)) {
+                await this.forget(discordId, error);
                 throw error;
             }
-            const names = files.map((f) => f.name).join(', ');
-            try {
-                return await ports.sendCopy(target, {
-                    ...payload,
-                    attachments: [],
-                    content: `${payload.content}\n*Attachments not copied: ${names}*`,
-                });
-            } catch (retry) {
-                await store.dropMessage(discordId);
-                throw retry;
-            }
+            return this.sendWithoutFiles(target, payload, discordId);
         }
+    }
+
+    private async sendWithoutFiles(
+        target: SendTarget,
+        payload: RelayPayload,
+        discordId: string
+    ): Promise<string> {
+        const names = (payload.attachments ?? []).map((f) => f.name);
+        const content = withNote(
+            payload.content,
+            `*Attachments not copied: ${names.join(', ')}*`
+        );
+        await this.deps.store.setContentHash(discordId, contentHash(content));
+        try {
+            return await this.deps.ports.sendCopy(target, {
+                ...payload,
+                attachments: [],
+                content,
+            });
+        } catch (retry) {
+            await this.forget(discordId, retry);
+            throw retry;
+        }
+    }
+
+    /** Drops the record of a send that surely failed. */
+    private async forget(discordId: string, error: unknown) {
+        if (!isTransient(error)) await this.deps.store.dropMessage(discordId);
     }
 
     /**
@@ -622,6 +880,10 @@ export class HistoryImporter {
             return true;
         }
         await this.pinCopies(job);
+        if (job.archiveThreadId) {
+            await this.archive.close(pass.link, job.archiveThreadId);
+            return this.done(job);
+        }
         if (job.kind === 'channel') {
             // A channel that is never bridged has no gap to close.
             const status = pass.unbridged.has(job.discordId) ? 'done' : 'ready';
@@ -641,15 +903,22 @@ export class HistoryImporter {
     /**
      * After the bridge exists, copies messages posted between the last
      * catch-up and the link, through the bridge's webhook (which the relay
-     * never copies back). It stops at the first message the relay copied.
-     * A gap longer than MAX_GAP_PAGES carries on in the next pass.
+     * never copies back). Only messages older than the link are copied:
+     * newer ones are the relay's, including those still in its retry
+     * queue. A gap longer than MAX_GAP_PAGES carries on in the next pass.
      */
     private async closeGap(pass: Pass, job: HistoryJob): Promise<boolean> {
         const bridge = await this.deps.links.byDiscordChannel(job.discordId);
         if (!bridge) return false;
+        const linkedAt =
+            (await this.deps.ports.linkCreatedAt(job.discordId)) ??
+            this.deps.now();
         const route: Route = {
             target: { webhook: bridge.fluxerWebhook, threadId: null },
-            bridgeHook: bridge.discordWebhook.id,
+            relayHooks: await this.relayHooks(
+                job.discordId,
+                bridge.discordWebhook.id
+            ),
         };
         await this.recover(job);
         let state = job;
@@ -661,9 +930,11 @@ export class HistoryImporter {
             );
             for (const message of batch) {
                 if (this.overdue(pass)) return true;
-                if (await this.deps.ports.relayedLive(message.id))
+                if (snowflakeTime(message.id) >= linkedAt.getTime())
                     return this.done(state);
-                state = await this.copy(pass.link, state, message, route);
+                state = (await this.deps.ports.relayedLive(message.id))
+                    ? await this.advance(state, message.id)
+                    : await this.copy(pass.link, state, message, route);
             }
             if (batch.length < PAGE_SIZE) return this.done(state);
         }

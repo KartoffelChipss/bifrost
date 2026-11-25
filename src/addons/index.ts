@@ -7,6 +7,7 @@ import {
 import { AddonHost, selectAddons, type AddonFactories } from './host';
 import { IsolationBoundary, type AddonLogger } from './isolation';
 import { AddonModeController } from './mode';
+import { addonDatabaseState, recordAddonDatabaseState } from './state';
 import { createGuildSyncAddon, type GuildSyncDeps } from '../guild-sync';
 import { discordNoticeSender } from '../guild-sync/notifier';
 import { FluxerGuildWriter } from '../guild-sync/writers/fluxer';
@@ -20,20 +21,18 @@ export { requireAddonConfig } from './config';
 export { addonDiscordIntents, addonDiscordPartials } from './intents';
 
 /**
- * The result of the last {@link initAddonDatabase} call. Upstream's
- * src/index.ts ignores its return value, so {@link startAddons} reads it
- * here: after a failed migration the add-ons stay off and the relay runs.
+ * Prepares the add-on tables and records whether they are ready
+ * (state.ts): after a failed migration the add-ons stay off and the relay
+ * runs.
  */
-let databaseState: AddonDatabaseState | null = null;
-
-/** Prepares the add-on tables and records whether they are ready. */
 export async function initAddonDatabase(
     config: AddonConfig,
     sequelize: Sequelize,
     logger: AddonLogger
 ): Promise<AddonDatabaseState> {
-    databaseState = await migrateAddonDatabase(config, sequelize, logger);
-    return databaseState;
+    const state = await migrateAddonDatabase(config, sequelize, logger);
+    recordAddonDatabaseState(state);
+    return state;
 }
 
 export interface AddonsHandle {
@@ -75,6 +74,9 @@ export function addonFactories(
                     fluxerClientRef: deps.fluxerClientRef,
                     sequelize: deps.sequelize,
                     lookups: deps.bridge,
+                    excludedChannels: config.excludedChannels,
+                    listGuildLinks: deps.listGuildLinks,
+                    links: deps.bridge,
                 })
             ),
         history: () =>
@@ -88,6 +90,7 @@ export function addonFactories(
                 sendNotice,
                 excludedChannels: config.excludedChannels,
                 commandPrefix: deps.commandPrefix,
+                inlineMax: config.historyInlineMax ?? 0,
             }),
         identity: () =>
             createIdentityAddon({
@@ -120,7 +123,7 @@ export async function startAddons(
         logger.info('[addons] Add-ons are disabled');
         return null;
     }
-    if (databaseState === 'failed') {
+    if (addonDatabaseState() === 'failed') {
         logger.error(
             '[addons] Add-ons are off because their migrations failed. The relay keeps running.'
         );

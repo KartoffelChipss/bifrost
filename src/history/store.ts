@@ -29,6 +29,8 @@ export interface HistoryStore {
         fluxerMessageId: string
     ): Promise<void>;
     dropMessage(discordMessageId: string): Promise<void>;
+    /** Replaces the content hash, when a copy is resent with other text. */
+    setContentHash(discordMessageId: string, hash: string): Promise<void>;
     /** A message that was being sent when the process stopped. */
     unfinishedMessage(jobId: string): Promise<ImportedMessage | null>;
     importedByFluxerId(
@@ -39,6 +41,22 @@ export interface HistoryStore {
     ): Promise<ImportedMessage | null>;
     /** True when the thread relay copied this Discord message, either way. */
     relayedInThread(discordMessageId: string): Promise<boolean>;
+    /** True when this Fluxer message is one side of a thread relay pair. */
+    relayedInThreadByFluxerId(fluxerMessageId: string): Promise<boolean>;
+    /**
+     * Discord channels guild-sync may bridge: jobs whose history is
+     * copied (ready or done), and archive-thread jobs, whose history goes
+     * to a thread while live chat flows. A failed inline job never counts;
+     * its channel stays unbridged until an admin retries it.
+     */
+    channelsReadyToBridge(guildLinkId: string): Promise<Set<string>>;
+    /** True when this Fluxer thread is an archive thread of history. */
+    isArchiveThread(fluxerThreadId: string): Promise<boolean>;
+    /**
+     * Restarts a link's failed jobs where they stopped. Returns how many.
+     * A job that never started goes back to pending.
+     */
+    retryFailed(guildLinkId: string, now: Date): Promise<number>;
     isOptedOut(discordUserId: string): Promise<boolean>;
     setOptOut(discordUserId: string, out: boolean, now: Date): Promise<void>;
     /**
@@ -105,6 +123,9 @@ export function parseJob(row: Row): HistoryJob {
         catchUps: int(row, 'catchUps'),
         imported: int(row, 'imported'),
         failures: int(row, 'failures'),
+        retries: int(row, 'retries'),
+        retryAt: row.retryAt instanceof Date ? row.retryAt : null,
+        skipped: int(row, 'skipped'),
         messageCount:
             row.messageCount === null ? null : int(row, 'messageCount'),
         attachmentCount:
@@ -112,6 +133,7 @@ export function parseJob(row: Row): HistoryJob {
         surveyedAt: surveyedAt instanceof Date ? surveyedAt : null,
         importWebhook:
             hookId && hookToken ? { id: hookId, token: hookToken } : null,
+        archiveThreadId: optStr(row, 'archiveThreadId'),
         lastError: optStr(row, 'lastError'),
     };
 }
@@ -128,6 +150,7 @@ function parseImported(row: Row): ImportedMessage {
         fluxerTargetId: str(row, 'fluxerTargetId'),
         inThread: row.inThread,
         webhookId: str(row, 'webhookId'),
+        contentHash: optStr(row, 'contentHash'),
     };
 }
 
@@ -140,9 +163,13 @@ const PATCH_COLUMNS: readonly (keyof JobPatch)[] = [
     'catchUps',
     'imported',
     'failures',
+    'retries',
+    'retryAt',
+    'skipped',
     'messageCount',
     'attachmentCount',
     'surveyedAt',
+    'archiveThreadId',
     'lastError',
 ];
 
@@ -223,8 +250,8 @@ export class PostgresHistoryStore implements HistoryStore {
 
     async startMessage(message: ImportedMessage, now: Date): Promise<void> {
         await this.db.query(
-            `INSERT INTO ${TABLES.historyMessages} ("discordMessageId", "jobId", "discordAuthorId", "fluxerMessageId", "fluxerTargetId", "inThread", "webhookId", "createdAt")
-             VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)`,
+            `INSERT INTO ${TABLES.historyMessages} ("discordMessageId", "jobId", "discordAuthorId", "fluxerMessageId", "fluxerTargetId", "inThread", "webhookId", "createdAt", "contentHash")
+             VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8)`,
             {
                 bind: [
                     message.discordMessageId,
@@ -234,6 +261,7 @@ export class PostgresHistoryStore implements HistoryStore {
                     message.inThread,
                     message.webhookId,
                     now,
+                    message.contentHash ?? null,
                 ],
             }
         );
@@ -250,6 +278,13 @@ export class PostgresHistoryStore implements HistoryStore {
         await this.db.query(
             `DELETE FROM ${TABLES.historyMessages} WHERE "discordMessageId" = $1`,
             { bind: [discordMessageId] }
+        );
+    }
+
+    async setContentHash(discordMessageId: string, hash: string) {
+        await this.db.query(
+            `UPDATE ${TABLES.historyMessages} SET "contentHash" = $2 WHERE "discordMessageId" = $1`,
+            { bind: [discordMessageId, hash] }
         );
     }
 
@@ -280,6 +315,45 @@ export class PostgresHistoryStore implements HistoryStore {
         const rows = await this.db.query<Row>(
             `SELECT 1 FROM ${TABLES.threadMessages} WHERE "discordMessageId" = $1 LIMIT 1`,
             { bind: [discordMessageId], type: QueryTypes.SELECT }
+        );
+        return rows.length > 0;
+    }
+
+    async channelsReadyToBridge(guildLinkId: string): Promise<Set<string>> {
+        const rows = await this.db.query<Row>(
+            `SELECT "discordId" FROM ${TABLES.historyJobs}
+             WHERE "guildLinkId" = $1 AND kind = 'channel'
+               AND (status IN ('ready', 'done') OR "archiveThreadId" IS NOT NULL)
+             LIMIT $2`,
+            { bind: [guildLinkId, MAX_JOBS], type: QueryTypes.SELECT }
+        );
+        return new Set(rows.map((row) => str(row, 'discordId')));
+    }
+
+    async isArchiveThread(fluxerThreadId: string): Promise<boolean> {
+        const rows = await this.db.query<Row>(
+            `SELECT 1 FROM ${TABLES.historyJobs} WHERE "archiveThreadId" = $1 LIMIT 1`,
+            { bind: [fluxerThreadId], type: QueryTypes.SELECT }
+        );
+        return rows.length > 0;
+    }
+
+    async retryFailed(guildLinkId: string, now: Date): Promise<number> {
+        const rows = await this.db.query<Row>(
+            `UPDATE ${TABLES.historyJobs}
+             SET status = CASE WHEN "cutoffId" IS NULL THEN 'pending' ELSE 'importing' END,
+                 failures = 0, retries = 0, "retryAt" = NULL, "lastError" = NULL, "updatedAt" = $2
+             WHERE "guildLinkId" = $1 AND status = 'failed'
+             RETURNING id`,
+            { bind: [guildLinkId, now], type: QueryTypes.SELECT }
+        );
+        return rows.length;
+    }
+
+    async relayedInThreadByFluxerId(fluxerMessageId: string) {
+        const rows = await this.db.query<Row>(
+            `SELECT 1 FROM ${TABLES.threadMessages} WHERE "fluxerMessageId" = $1 LIMIT 1`,
+            { bind: [fluxerMessageId], type: QueryTypes.SELECT }
         );
         return rows.length > 0;
     }

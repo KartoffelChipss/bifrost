@@ -25,7 +25,11 @@ function fakeRelays() {
     };
     const relays = {
         reactions: { added: record('add'), removed: record('remove') },
-        pins: { changed: record('pin') },
+        pins: {
+            changed: record('pin'),
+            pinsChanged: (side: Side, channelId: string) =>
+                seen.push(`pins ${side} ${channelId}`),
+        },
     } as unknown as Relays;
     const wrap: Wrap = (task, fn) => {
         return (...args) => {
@@ -95,7 +99,12 @@ describe('listenToDiscord', () => {
         const { seen, relays, wrap } = fakeRelays();
         const client = new EventEmitter();
         listenToDiscord(client as unknown as DiscordClient, relays, wrap);
-        const next = { id: 'd-msg', guildId: 'g', pinned: true };
+        const next = {
+            id: 'd-msg',
+            channelId: 'd-chan',
+            guildId: 'g',
+            pinned: true,
+        };
         client.emit(
             Events.MessageUpdate,
             { partial: false, pinned: false },
@@ -112,9 +121,17 @@ describe('listenToDiscord', () => {
             { ...next, pinned: null }
         );
         assert.deepEqual(seen, [
-            `pin discord ${json({ messageId: 'd-msg', pinned: true, previous: false })}`,
-            `pin discord ${json({ messageId: 'd-msg', pinned: true, previous: null })}`,
+            `pin discord ${json({ messageId: 'd-msg', channelId: 'd-chan', pinned: true, previous: false })}`,
+            `pin discord ${json({ messageId: 'd-msg', channelId: 'd-chan', pinned: true, previous: null })}`,
         ]);
+    });
+
+    it('records channel pin events as evidence', () => {
+        const { seen, relays, wrap } = fakeRelays();
+        const client = new EventEmitter();
+        listenToDiscord(client as unknown as DiscordClient, relays, wrap);
+        client.emit(Events.ChannelPinsUpdate, { id: 'd-chan' }, new Date());
+        assert.deepEqual(seen, ['pins discord d-chan']);
     });
 
     it('runs every listener inside the wrap and detaches on stop', () => {
@@ -206,6 +223,7 @@ describe('listenToFluxer', () => {
         listenToFluxer(client as unknown as FluxerClient, relays, wrap);
         const next = {
             id: 'f-msg',
+            channelId: 'f-chan',
             guildId: 'g',
             partial: false,
             pinned: true,
@@ -216,9 +234,21 @@ describe('listenToFluxer', () => {
             partial: true,
         });
         assert.deepEqual(seen, [
-            `pin fluxer ${json({ messageId: 'f-msg', pinned: true, previous: false })}`,
-            `pin fluxer ${json({ messageId: 'f-msg', pinned: null, previous: null })}`,
+            `pin fluxer ${json({ messageId: 'f-msg', channelId: 'f-chan', pinned: true, previous: false })}`,
+            `pin fluxer ${json({ messageId: 'f-msg', channelId: 'f-chan', pinned: null, previous: null })}`,
         ]);
+    });
+
+    it('records channel pin events as evidence', () => {
+        const { seen, relays, wrap } = fakeRelays();
+        const client = new EventEmitter();
+        listenToFluxer(client as unknown as FluxerClient, relays, wrap);
+        client.emit(FluxerEvents.ChannelPinsUpdate, {
+            channelId: 'f-chan',
+            guildId: 'g',
+            lastPinTimestamp: null,
+        });
+        assert.deepEqual(seen, ['pins fluxer f-chan']);
     });
 
     it('detaches every listener on stop', () => {
@@ -229,7 +259,7 @@ describe('listenToFluxer', () => {
             relays,
             wrap
         );
-        assert.equal(client.eventNames().length, 5);
+        assert.equal(client.eventNames().length, 6);
         stop();
         assert.equal(client.eventNames().length, 0);
     });

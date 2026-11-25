@@ -3,6 +3,7 @@ import type { IdMap } from './idmap';
 import type { FieldChange, JsonValue, PlanOp } from './ops';
 import { bitOf, mergePermissions, NO_BITS } from './permissions';
 import {
+    channelMapKind,
     managedMembers,
     projectEmoji,
     projectSourceChannel,
@@ -13,8 +14,10 @@ import {
     type ProjectionContext,
 } from './project';
 import type { ChannelSnap, GuildSnapshot } from './snapshot';
-import { channelKind } from './snapshot';
+import { channelKind, copyType } from './snapshot';
+import { layoutGroup } from './order';
 import type {
+    ChannelMove,
     ChannelPatch,
     ChannelSpec,
     EmojiChoice,
@@ -41,6 +44,12 @@ export interface WriteContext {
     readonly direction: SyncDirection;
     /** Linked accounts, source user ID to destination user ID. */
     readonly members?: ReadonlyMap<string, string>;
+    /** The source @everyone lacks View Channel (see ProjectionContext). */
+    readonly hiddenFromEveryone?: boolean;
+    /** The destination's voice bitrate cap (see ProjectionContext). */
+    readonly maxBitrate?: number;
+    /** Channels locked while their history imports (see ProjectionContext). */
+    readonly historyLocked?: ReadonlySet<string>;
 }
 
 /**
@@ -68,7 +77,12 @@ export type WriteAction =
     | { readonly type: 'update-channel'; patch: ChannelPatch; applied: Fields }
     | { readonly type: 'update-guild'; patch: GuildPatch; applied: Fields }
     | { readonly type: 'role-positions'; positions: PositionSpec[] }
-    | { readonly type: 'channel-positions'; positions: PositionSpec[] }
+    | {
+          readonly type: 'channel-positions';
+          moves: ChannelMove[];
+          /** The objects this write places; only their order flag clears. */
+          placed: string[];
+      }
     | { readonly type: 'create-emoji'; name: string; applied: Fields }
     | { readonly type: 'rename-emoji'; name: string; applied: Fields }
     | {
@@ -87,9 +101,11 @@ export type WriteAction =
           move: boolean;
       }
     | { readonly type: 'archive-emoji'; name: string }
-    | { readonly type: 'archive-sticker'; name: string }
+    | { readonly type: 'archive-sticker'; patch: StickerPatch }
     | { readonly type: 'delete' }
     | { readonly type: 'link' }
+    /** Records an object an earlier create made (adopt.ts). No write. */
+    | { readonly type: 'adopt'; destId: string; applied: Fields }
     | {
           readonly type: 'create-thread';
           parentId: string;
@@ -121,10 +137,19 @@ const ROLE_NAME_MAX = 100;
 const EMOJI_NAME_MAX = 32;
 const STICKER_NAME_MAX = 30;
 
-const archivedName = (name: string, max: number) =>
-    `[archived] ${name}`.slice(0, max);
+const ARCHIVED_PREFIX = '[archived] ';
+const ARCHIVED_EXPRESSION_PREFIX = 'archived_';
+
+/** The archived name. A name archived before keeps its one prefix. */
+export function archivedName(name: string, max: number): string {
+    if (name.startsWith(ARCHIVED_PREFIX)) return name.slice(0, max);
+    return `${ARCHIVED_PREFIX}${name}`.slice(0, max);
+}
+
 const archivedExpression = (name: string, max: number) =>
-    `archived_${name}`.slice(0, max);
+    name.startsWith(ARCHIVED_EXPRESSION_PREFIX)
+        ? name.slice(0, max)
+        : `${ARCHIVED_EXPRESSION_PREFIX}${name}`.slice(0, max);
 
 /** Adds the lock to @everyone and leaves every other overwrite as it is. */
 export function lockOverwrites(
@@ -147,6 +172,10 @@ export function lockOverwrites(
 }
 
 const skip = (reason: string): WriteAction => ({ type: 'skip', reason });
+
+/** A sticker's comma-separated tags as a list. */
+const stickerTags = (tags: string): string[] =>
+    tags.split(',').filter((tag) => tag !== '');
 
 const text = (value: JsonValue | undefined, fallback: string): string =>
     typeof value === 'string' ? value : fallback;
@@ -308,7 +337,7 @@ function channelSpec(
 ): ChannelSpec {
     return {
         ...parentSettings(fields),
-        type: channel.type,
+        type: copyType(channel.type),
         name: text(fields.name, channel.name),
         parentId: typeof fields.parentId === 'string' ? fields.parentId : null,
         topic: typeof fields.topic === 'string' ? fields.topic : null,
@@ -332,6 +361,11 @@ type ReorderOp = Extract<PlanOp, { op: 'reorder' }>;
 type ArchiveOp = Extract<PlanOp, { op: 'archive' }>;
 
 function createAction(op: CreateOp, ctx: WriteContext): WriteAction {
+    // An empty base makes the next diff bring every field in line with
+    // the source, whatever the earlier create left unfinished.
+    if (op.existingDestId && op.adopt) {
+        return { type: 'adopt', destId: op.existingDestId, applied: {} };
+    }
     if (op.existingDestId) {
         return skip(
             `a destination ${op.kind} named "${op.name}" already exists; adopting it is not built yet`
@@ -369,7 +403,7 @@ function createAction(op: CreateOp, ctx: WriteContext): WriteAction {
             type: 'create-sticker',
             name: sticker.name,
             description: sticker.description,
-            tags: sticker.tags.split(',').filter((tag) => tag !== ''),
+            tags: stickerTags(sticker.tags),
             applied: projectSticker(sticker),
         };
     }
@@ -407,7 +441,10 @@ function channelPatch(
                 managedOverwrites(change.to),
                 dest.overwrites,
                 ctx.map,
-                managedMembers(ctx)
+                managedMembers(ctx, {
+                    kind: channelMapKind(dest.type),
+                    destId: dest.id,
+                })
             );
         } else if (change.field === 'tags') patch.tags = names(change.to);
         else if (change.field === 'tagMeta') patch.tagMeta = tagMeta(change.to);
@@ -572,20 +609,15 @@ function expressionUpdate(op: UpdateOp, ctx: WriteContext): WriteAction {
     if (op.kind === 'sticker') {
         const sticker = ctx.source.stickers.find((s) => s.id === op.sourceId);
         if (!sticker) return skip('the source sticker is gone');
-        const name = changed('name');
-        const description = changed('description');
-        const patch: StickerPatch = {
-            ...(typeof name === 'string' ? { name } : {}),
-            ...(typeof description === 'string' ? { description } : {}),
-        };
-        // Fluxer has no call that changes a sticker's tags.
-        if (Object.keys(patch).length === 0) {
-            return skip('sticker tags cannot be changed on the destination');
-        }
+        // Fluxer clears what an update leaves out, so all fields go.
         return {
             type: 'update-sticker',
-            patch,
-            applied: settledFields(op, ['tags']),
+            patch: {
+                name: sticker.name,
+                description: sticker.description,
+                tags: stickerTags(sticker.tags),
+            },
+            applied: settledFields(op, []),
         };
     }
     if (op.kind === 'thread') {
@@ -606,6 +638,27 @@ function expressionUpdate(op: UpdateOp, ctx: WriteContext): WriteAction {
     return skip(`a ${op.kind} cannot be updated`);
 }
 
+/** A locked channel, moved to the archive; a category is renamed instead. */
+function archiveChannel(
+    destId: string,
+    destination: GuildSnapshot
+): WriteAction {
+    const channel = destination.channels.find((c) => c.id === destId);
+    if (!channel) return { type: 'gone' };
+    const overwrites = lockOverwrites(
+        channel.overwrites,
+        destination.everyoneRoleId
+    );
+    const isCategory = channelKind(channel.type) === 'category';
+    return {
+        type: 'archive-channel',
+        move: !isCategory,
+        patch: isCategory
+            ? { name: archivedName(channel.name, ROLE_NAME_MAX), overwrites }
+            : { overwrites },
+    };
+}
+
 /** Soft delete (guard 5): the object stays, renamed or locked. */
 function archiveAction(op: ArchiveOp, ctx: WriteContext): WriteAction {
     const { destination } = ctx;
@@ -621,23 +674,7 @@ function archiveAction(op: ArchiveOp, ctx: WriteContext): WriteAction {
         };
     }
     if (op.kind === 'category' || op.kind === 'channel') {
-        const channel = destination.channels.find((c) => c.id === op.destId);
-        if (!channel) return { type: 'gone' };
-        const overwrites = lockOverwrites(
-            channel.overwrites,
-            destination.everyoneRoleId
-        );
-        const isCategory = channelKind(channel.type) === 'category';
-        return {
-            type: 'archive-channel',
-            move: !isCategory,
-            patch: isCategory
-                ? {
-                      name: archivedName(channel.name, ROLE_NAME_MAX),
-                      overwrites,
-                  }
-                : { overwrites },
-        };
+        return archiveChannel(op.destId, destination);
     }
     if (op.kind === 'emoji') {
         const emoji = destination.emojis.find((e) => e.id === op.destId);
@@ -652,7 +689,11 @@ function archiveAction(op: ArchiveOp, ctx: WriteContext): WriteAction {
         if (!sticker) return { type: 'gone' };
         return {
             type: 'archive-sticker',
-            name: archivedExpression(sticker.name, STICKER_NAME_MAX),
+            patch: {
+                name: archivedExpression(sticker.name, STICKER_NAME_MAX),
+                description: sticker.description,
+                tags: stickerTags(sticker.tags),
+            },
         };
     }
     if (op.kind === 'thread') {
@@ -687,17 +728,83 @@ export function positionsFor(
     return destIds.map((id, i) => ({ id, position: slots[i] }));
 }
 
+/**
+ * The destination channels under one parent, in Fluxer's display order:
+ * by position, and inside a category text-like before voice
+ * (GuildChannelOrdering.ts sortChannelsForOrdering).
+ */
+function siblingsOf(
+    channels: readonly ChannelSnap[],
+    parentId: string | null
+): ChannelSnap[] {
+    const group = (c: ChannelSnap) =>
+        parentId === null ? 0 : layoutGroup(c.type);
+    return channels
+        .filter((c) => (c.parentId ?? null) === parentId)
+        .sort(
+            (a, b) =>
+                group(a) - group(b) ||
+                a.position - b.position ||
+                a.id.localeCompare(b.id)
+        );
+}
+
+/**
+ * Moves that give the listed channels the wanted order among their
+ * siblings. Fluxer applies a list of moves one by one, each relative to a
+ * preceding sibling (ChannelOperationsService.updateChannelPositionsByList),
+ * so global positions do not work. Listed channels take over the slots
+ * they hold now; every other sibling stays where it is. Sent in final
+ * order, each move lands after a channel that already sits where it
+ * should, and inside a category a text-like channel never lands below a
+ * voice channel, so every step passes Fluxer's voice placement check.
+ */
+export function channelMoves(
+    destIds: readonly string[],
+    channels: readonly ChannelSnap[],
+    parentId: string | null
+): { moves: ChannelMove[]; placed: string[] } {
+    const siblings = siblingsOf(channels, parentId);
+    const present = new Set(siblings.map((c) => c.id));
+    const placed = destIds.filter((id) => present.has(id));
+    const listed = new Set(placed);
+    let next = 0;
+    const final = siblings.map((c) =>
+        listed.has(c.id) ? placed[next++] : c.id
+    );
+    const moves: ChannelMove[] = [];
+    final.forEach((id, index) => {
+        if (!listed.has(id)) return;
+        moves.push({ id, precedingId: index === 0 ? null : final[index - 1] });
+    });
+    return { moves, placed };
+}
+
+/** The destination parent a channel scope's objects sit under. */
+function scopeParent(scope: string): string | null {
+    return scope === 'top' || scope === 'categories' ? null : scope;
+}
+
 function reorderAction(op: ReorderOp, ctx: WriteContext): WriteAction {
-    const items =
-        op.kind === 'role' ? ctx.destination.roles : ctx.destination.channels;
+    if (op.kind === 'channel') {
+        const ids = new Set(ctx.destination.channels.map((c) => c.id));
+        if (op.destIds.some((id) => !ids.has(id))) {
+            return skip('an object in the order is gone');
+        }
+        const { moves, placed } = channelMoves(
+            op.destIds,
+            ctx.destination.channels,
+            scopeParent(op.scope)
+        );
+        if (placed.length < 2) return skip('the channels moved elsewhere');
+        return { type: 'channel-positions', moves, placed };
+    }
     const positions = positionsFor(
         op.destIds,
-        new Map(items.map((item) => [item.id, item.position]))
+        new Map(ctx.destination.roles.map((item) => [item.id, item.position]))
     );
     if (!positions) return skip('an object in the order is gone');
-    return op.kind === 'role'
-        ? { type: 'role-positions', positions }
-        : { type: 'channel-positions', positions };
+    return { type: 'role-positions', positions };
 }
 
 /** The write one op needs, or the reason it cannot be applied. */

@@ -189,14 +189,18 @@ describe('diff', () => {
             allow: bits(a),
             deny: '0',
         });
+        // @everyone can view, so no private-by-default deny is added.
+        const everyone = role(D_GUILD, {
+            permissions: bits(PermissionFlagsBits.ViewChannel),
+        });
         const prev = discordGuild({
-            roles: [role(D_GUILD), role('r1')],
+            roles: [everyone, role('r1')],
             channels: [channel('c1')],
         });
         const result = diff(
             input({
                 source: discordGuild({
-                    roles: [role(D_GUILD), role('r1')],
+                    roles: [everyone, role('r1')],
                     channels: [
                         channel('c1', { overwrites: [ow('r1', allow)] }),
                     ],
@@ -290,18 +294,18 @@ describe('diff', () => {
             input({
                 source: discordGuild({
                     roles: [role(D_GUILD), role('bot', { managed: true })],
-                    channels: [channel('c1'), channel('stage', { type: 13 })],
+                    // Type 14 is a Discord directory channel.
+                    channels: [channel('c1'), channel('dir', { type: 14 })],
                 }),
             })
         );
         const skipped = result.findings
             .filter((f) => f.type === 'skipped')
             .map((f) => f.id);
-        assert.deepEqual(skipped, ['bot', 'stage']);
+        assert.deepEqual(skipped, ['bot', 'dir']);
         assert.ok(
             !result.ops.some(
-                (o) =>
-                    o.op === 'create' && ['bot', 'stage'].includes(o.sourceId)
+                (o) => o.op === 'create' && ['bot', 'dir'].includes(o.sourceId)
             )
         );
     });

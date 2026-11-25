@@ -12,7 +12,8 @@ export type JobKind = 'channel' | 'thread';
  * - importing: copying past messages up to the cutoff
  * - ready: a channel copied up to now and waiting to be bridged
  * - done: finished; new messages come through the relay
- * - failed: stopped after repeated errors, see lastError
+ * - failed: stopped after repeated errors outside any one message, see
+ *   lastError. An admin can retry it (HistoryStore.retryFailed).
  */
 export type JobStatus = 'pending' | 'importing' | 'ready' | 'done' | 'failed';
 
@@ -33,12 +34,24 @@ export interface HistoryJob {
     readonly checkpointId: string;
     readonly catchUps: number;
     readonly imported: number;
+    /** Failed runs in a row with a lasting error, such as a 4xx. */
     readonly failures: number;
+    /** Temporary errors in a row (5xx, 429, timeouts); never fail a job. */
+    readonly retries: number;
+    /** No run starts before this time, after an error. */
+    readonly retryAt: Date | null;
+    /** Messages given up on after repeated lasting errors. */
+    readonly skipped: number;
     readonly messageCount: number | null;
     readonly attachmentCount: number | null;
     readonly surveyedAt: Date | null;
     /** A channel's own import webhook, used before the channel is bridged. */
     readonly importWebhook: WebhookRef | null;
+    /**
+     * Archive-thread mode: the Fluxer thread a big channel's history goes
+     * to, through the import webhook. Such a channel is bridged at once.
+     */
+    readonly archiveThreadId: string | null;
     readonly lastError: string | null;
 }
 
@@ -52,10 +65,14 @@ export type JobPatch = Partial<
         | 'catchUps'
         | 'imported'
         | 'failures'
+        | 'retries'
+        | 'retryAt'
+        | 'skipped'
         | 'messageCount'
         | 'attachmentCount'
         | 'surveyedAt'
         | 'importWebhook'
+        | 'archiveThreadId'
         | 'lastError'
     >
 >;
@@ -76,6 +93,11 @@ export interface SourceMessage {
     readonly attachments: number;
     /** Set when a webhook posted the message. */
     readonly webhookId: string | null;
+    /**
+     * True when a webhook owned by this bot's application posted it, such
+     * as an earlier Bifröst link's copy of a Fluxer message.
+     */
+    readonly ownWebhook: boolean;
     /**
      * For a reply: the author of the message it quotes, or null when that
      * message is gone or its author is unknown.
@@ -106,6 +128,19 @@ export interface ImportedMessage {
     readonly fluxerTargetId: string;
     readonly inThread: boolean;
     readonly webhookId: string;
+    /**
+     * A hash of the content sent (see contentHash), so crash recovery can
+     * tell this copy from other posts by the same webhook. Null for rows
+     * written before it was recorded.
+     */
+    readonly contentHash?: string | null;
+}
+
+/** A recent Fluxer message, for crash recovery. */
+export interface FluxerCopy {
+    readonly id: string;
+    readonly webhookId: string | null;
+    readonly content: string;
 }
 
 /** Reads Discord history and writes copies to Fluxer. */
@@ -135,19 +170,36 @@ export interface HistoryPorts {
         content: string
     ): Promise<void>;
     deleteCopy(target: SendTarget, messageId: string): Promise<void>;
-    /** The newest message in a Fluxer channel or thread, for crash recovery. */
-    newestFluxerMessage(
-        fluxerId: string
-    ): Promise<{ id: string; webhookId: string | null } | null>;
+    /** Up to `limit` newest messages in a Fluxer channel or thread. */
+    recentFluxerMessages(
+        fluxerId: string,
+        limit: number
+    ): Promise<FluxerCopy[]>;
+    /** True when the live relay sent this Fluxer message (message_links). */
+    relayedLiveFluxer(fluxerMessageId: string): Promise<boolean>;
     createImportWebhook(fluxerChannelId: string): Promise<WebhookRef>;
     /** Whether a Discord thread is archived and locked right now. */
     threadState(
         discordThreadId: string
     ): Promise<{ archived: boolean; locked: boolean }>;
+    /** When the channel's bridge was made, or null when it has none. */
+    linkCreatedAt(discordChannelId: string): Promise<Date | null>;
+    /**
+     * IDs of the channel's Discord webhooks that upstream's bridge made,
+     * by name or by owner. Empty when the bot cannot list webhooks there.
+     */
+    bridgeWebhookIds(discordChannelId: string): Promise<Set<string>>;
     /** True when the relay already copied this message after the link. */
     relayedLive(discordMessageId: string): Promise<boolean>;
     /** The pinned messages of a Discord channel or thread, oldest pin first. */
     pinnedMessageIds(discordId: string): Promise<string[]>;
     /** Pins a message in a Fluxer channel or thread. */
     pinCopy(fluxerChannelId: string, fluxerMessageId: string): Promise<void>;
+    /**
+     * Gives the platform side history's opt-out check, for copies made
+     * outside the importer (forum post starters). Null removes it.
+     */
+    useOptOuts?(
+        check: ((discordUserId: string) => Promise<boolean>) | null
+    ): void;
 }

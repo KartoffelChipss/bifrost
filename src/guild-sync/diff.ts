@@ -10,6 +10,9 @@ import {
 } from './permissions';
 import type { Fields, ProjectionContext } from './project';
 import {
+    everyoneHidden,
+    historyLocks,
+    maxBitrateOf,
     projectDestChannel,
     projectDestRole,
     projectDestSettings,
@@ -28,7 +31,13 @@ import type {
     RoleSnap,
     ThreadSnap,
 } from './snapshot';
-import { LINKED_CHANNEL_TYPES, channelKind } from './snapshot';
+import {
+    LINKED_CHANNEL_TYPES,
+    STAGE_TYPE,
+    THREAD_ONLY_TYPES,
+    channelKind,
+    copyType,
+} from './snapshot';
 
 /** Fluxer refuses a 51st channel in one category (ChannelHelpers.ts). */
 export const MAX_CHANNELS_PER_CATEGORY = 50;
@@ -65,6 +74,12 @@ export interface DiffInput {
          */
         readonly historyReady?: ReadonlySet<string>;
     };
+    /**
+     * Revert destination edits to managed fields (`sync enforce on`): a
+     * drifted field counts as a change. Unmanaged objects and bits stay
+     * out of reach as always: the projections and ownership see to that.
+     */
+    readonly enforceDrift?: boolean;
 }
 
 export interface DiffResult {
@@ -126,6 +141,34 @@ interface ObjectSpec<T extends { readonly id: string; readonly name: string }> {
     readonly implicit?: (item: T) => boolean;
     /** Fields compared only with the last write (see projectOpaqueRole). */
     readonly projectOpaque?: (item: T) => Fields;
+    /**
+     * The destination ID of the item's mapped parent when that parent is
+     * gone from the destination, else null. Such an item is not created:
+     * the create would fail every cycle.
+     */
+    readonly missingParent?: (item: T) => string | null;
+}
+
+/** One finding per missing parent, however many children wait on it. */
+function reportMissingParent(out: Out, kind: SyncKind, parentId: string) {
+    const detail = `parent ${parentId} is missing on Fluxer; its children wait`;
+    if (out.findings.some((f) => f.id === parentId && f.detail === detail)) {
+        return;
+    }
+    out.findings.push({
+        type: 'missing-on-destination',
+        kind,
+        id: parentId,
+        detail,
+    });
+}
+
+/** The mapped destination parent when it is gone from the destination. */
+function goneParent(
+    destId: string | null,
+    present: ReadonlySet<string>
+): string | null {
+    return destId !== null && !present.has(destId) ? destId : null;
 }
 
 /** Source changes in fields the destination cannot be compared on. */
@@ -172,7 +215,14 @@ function createOp<T extends { readonly id: string; readonly name: string }>(
 /** Compares one mapped pair against its base (see compareFields). */
 function compareMapped<
     T extends { readonly id: string; readonly name: string },
->(spec: ObjectSpec<T>, map: IdMap, item: T, dest: T, prev: T | undefined) {
+>(
+    spec: ObjectSpec<T>,
+    map: IdMap,
+    item: T,
+    dest: T,
+    prev: T | undefined,
+    enforce: boolean
+) {
     const firstSync =
         spec.implicit?.(item) === true && !map.hasRow(spec.kind, item.id);
     const base =
@@ -182,7 +232,7 @@ function compareMapped<
         spec.projectSource(item),
         spec.projectDest(dest),
         base,
-        firstSync
+        firstSync || enforce
     );
     const opaque = opaqueChanges(
         spec.projectOpaque?.(item) ?? {},
@@ -196,10 +246,30 @@ function compareMapped<
     };
 }
 
+/** A create, or a finding when the item's parent is gone on Fluxer. */
+function planCreate<T extends { readonly id: string; readonly name: string }>(
+    spec: ObjectSpec<T>,
+    map: IdMap,
+    item: T,
+    out: Out
+): void {
+    const parent = spec.missingParent?.(item) ?? null;
+    if (parent === null) {
+        out.ops.push(createOp(spec, map, item));
+        return;
+    }
+    reportMissingParent(
+        out,
+        spec.kind === 'thread' ? 'channel' : 'category',
+        parent
+    );
+}
+
 function diffObjects<T extends { readonly id: string; readonly name: string }>(
     spec: ObjectSpec<T>,
     map: IdMap,
-    out: Out
+    out: Out,
+    enforce = false
 ): void {
     const destById = new Map(spec.dests.map((item) => [item.id, item]));
     const prevById = new Map((spec.previous ?? []).map((i) => [i.id, i]));
@@ -216,7 +286,7 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
         }
         const destId = map.dest(spec.kind, item.id);
         if (!destId) {
-            out.ops.push(createOp(spec, map, item));
+            planCreate(spec, map, item, out);
             continue;
         }
         const dest = destById.get(destId);
@@ -229,32 +299,45 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
             });
             continue;
         }
-        const { changes, drifted, settled, firstSync } = compareMapped(
+        const compared = compareMapped(
             spec,
             map,
             item,
             dest,
-            prevById.get(item.id)
+            prevById.get(item.id),
+            enforce
         );
-        if (changes.length > 0) {
-            out.ops.push({
-                op: 'update',
-                kind: spec.kind,
-                sourceId: item.id,
-                destId,
-                changes,
-                settled,
-                ...(firstSync ? { baseline: true as const } : {}),
-            });
-        }
-        if (drifted.length > 0) {
-            out.findings.push({
-                type: 'drift',
-                kind: spec.kind,
-                id: destId,
-                detail: `edited on the destination: ${drifted.join(', ')}`,
-            });
-        }
+        pushCompared(out, spec.kind, item.id, destId, compared);
+    }
+}
+
+/** The update and the drift finding one compared pair needs, if any. */
+function pushCompared(
+    out: Out,
+    kind: SyncKind,
+    sourceId: string,
+    destId: string,
+    compared: ReturnType<typeof compareMapped>
+): void {
+    const { changes, drifted, settled, firstSync } = compared;
+    if (changes.length > 0) {
+        out.ops.push({
+            op: 'update',
+            kind,
+            sourceId,
+            destId,
+            changes,
+            settled,
+            ...(firstSync ? { baseline: true as const } : {}),
+        });
+    }
+    if (drifted.length > 0) {
+        out.findings.push({
+            type: 'drift',
+            kind,
+            id: destId,
+            detail: `edited on the destination: ${drifted.join(', ')}`,
+        });
     }
 }
 
@@ -273,6 +356,8 @@ const notCategory = (c: ChannelSnap) => !isCategory(c);
 
 function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
     const { source, destination, previousSource } = input;
+    const enforce = input.enforceDrift === true;
+    const present = new Set(destination.channels.map((c) => c.id));
     // Creates run in source order, so new channels land in that order.
     const channelSpec = (
         filter: (c: ChannelSnap) => boolean,
@@ -286,11 +371,16 @@ function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
         previous: previousSource?.channels.filter(filter) ?? null,
         projectSource: (c: ChannelSnap) => projectSourceChannel(c, ctx),
         projectDest: (c: ChannelSnap) => projectDestChannel(c, ctx),
-        sameType: (a: ChannelSnap, b: ChannelSnap) => a.type === b.type,
+        sameType: (a: ChannelSnap, b: ChannelSnap) =>
+            copyType(a.type) === b.type,
         skipReason: (c: ChannelSnap) =>
             input.excluded?.has(c.id)
                 ? 'excluded by BF_ADDONS_EXCLUDE_CHANNELS'
                 : channelSkip(c),
+        missingParent: (c: ChannelSnap) =>
+            c.parentId === null
+                ? null
+                : goneParent(ctx.map.dest('category', c.parentId), present),
     });
     diffObjects(
         {
@@ -306,10 +396,11 @@ function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
             projectOpaque: projectOpaqueRole,
         },
         ctx.map,
-        out
+        out,
+        enforce
     );
-    diffObjects(channelSpec(isCategory, 'category'), ctx.map, out);
-    diffObjects(channelSpec(notCategory, 'channel'), ctx.map, out);
+    diffObjects(channelSpec(isCategory, 'category'), ctx.map, out, enforce);
+    diffObjects(channelSpec(notCategory, 'channel'), ctx.map, out, enforce);
 }
 
 function diffExpressions(input: DiffInput, map: IdMap, out: Out) {
@@ -326,7 +417,8 @@ function diffExpressions(input: DiffInput, map: IdMap, out: Out) {
             skipReason: () => null,
         },
         map,
-        out
+        out,
+        input.enforceDrift === true
     );
     diffObjects(
         {
@@ -340,7 +432,8 @@ function diffExpressions(input: DiffInput, map: IdMap, out: Out) {
             skipReason: () => null,
         },
         map,
-        out
+        out,
+        input.enforceDrift === true
     );
 }
 
@@ -363,7 +456,7 @@ function diffGuild(input: DiffInput, ctx: ProjectionContext, out: Out) {
         guildFields(source, ctx),
         guildFields(destination, null),
         map.applied('guild', source.guildId) ?? prev,
-        firstSync
+        firstSync || input.enforceDrift === true
     );
     // The server icon and banner are not synced. Each server keeps its own.
     const destId = destination.guildId;
@@ -428,6 +521,21 @@ function reportMemberOverwrites(input: DiffInput, out: Out) {
                 (denies > 0
                     ? `; ${denies} of them deny access, which the destination does not enforce`
                     : ''),
+        });
+    }
+}
+
+/** One finding per stage channel: Fluxer gets a voice channel instead. */
+function reportStages(input: DiffInput, out: Out) {
+    for (const channel of input.source.channels) {
+        if (channel.type !== STAGE_TYPE || input.excluded?.has(channel.id)) {
+            continue;
+        }
+        out.findings.push({
+            type: 'skipped',
+            kind: 'channel',
+            id: channel.id,
+            detail: 'stage channel: it is a voice channel on Fluxer, which has no stage channels',
         });
     }
 }
@@ -512,7 +620,7 @@ function diffLinks(input: DiffInput, map: IdMap, out: Out) {
         const ready = input.links.historyReady;
         if (
             ready &&
-            channelKind(channel.type) !== 'forum' &&
+            !THREAD_ONLY_TYPES.has(channel.type) &&
             !ready.has(channel.id)
         ) {
             continue;
@@ -536,13 +644,14 @@ function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
             type: 'skipped',
             kind: 'thread',
             id: parentId,
-            detail: 'the thread list here is incomplete (unreadable, or more archived threads than one read pages through); no thread is removed until it is complete',
+            detail: 'the thread list here is incomplete (unreadable, or more archived threads than one read pages through); no thread in this channel is removed until it is complete',
         });
     }
     // Creates and updates follow the object map, so an incomplete list
     // cannot duplicate anything. Removals wait instead: trackMissing counts
-    // no thread as missing while any list has a gap.
+    // no thread in a channel with a gap as missing.
     const mapped = (t: ThreadSnap) => ctx.map.dest('channel', t.parentId);
+    const present = new Set(destination.channels.map((c) => c.id));
     const included = (t: ThreadSnap) => !input.excluded?.has(t.id);
     diffObjects(
         {
@@ -556,9 +665,11 @@ function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
             projectDest: projectDestThread,
             sameType: (a, b) => mapped(a) === b.parentId,
             skipReason: () => null,
+            missingParent: (t) => goneParent(mapped(t), present),
         },
         ctx.map,
-        out
+        out,
+        input.enforceDrift === true
     );
 }
 
@@ -578,6 +689,13 @@ export function diff(input: DiffInput): DiffResult {
         map,
         direction: input.direction,
         members: input.members,
+        hiddenFromEveryone: everyoneHidden(input.source, input.direction),
+        maxBitrate: maxBitrateOf(input.destination),
+        historyLocked: historyLocks(input.source.channels, {
+            ready: input.links?.historyReady,
+            never: input.links?.never ?? new Set(),
+            excluded: input.excluded,
+        }),
     };
     const out: Out = { ops: [], findings: [] };
     diffStructure(input, ctx, out);
@@ -586,9 +704,10 @@ export function diff(input: DiffInput): DiffResult {
     diffThreads(input, ctx, out);
     diffGuild(input, ctx, out);
     reportMemberOverwrites(input, out);
-    diffOrders(input, map, out);
+    diffOrders({ ...input, enforce: input.enforceDrift === true }, map, out);
     reportPermissions(input, out);
     reportFullCategories(input.source, out);
+    reportStages(input, out);
     reportBotPermissions(input, out);
     return out;
 }

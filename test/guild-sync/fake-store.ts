@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: SyncSettings = {
     mode: 'dry-run',
     direction: 'discord-to-fluxer',
     killSwitch: false,
+    enforceDrift: false,
     adminChannelId: null,
     approvedPlanId: null,
     shrinkPercent: 10,
@@ -42,6 +43,8 @@ export class FakeStore implements GuildSyncStore {
     missingWrites: MissingUpdate[][] = [];
     plans: Plan[] = [];
     audits: AuditEntry[] = [];
+    /** When each audit row was written, by index into `audits`. */
+    auditTimes: Date[] = [];
     lockHeld = false;
     /** Set by a test to make the held check fail. */
     lockLost = false;
@@ -118,6 +121,16 @@ export class FakeStore implements GuildSyncStore {
 
     async pruneSnapshots() {}
 
+    async prunePlans() {
+        return 0;
+    }
+
+    async pruneTombstoned() {
+        const before = this.rows.length;
+        this.rows = this.rows.filter((row) => row.state !== 'tombstoned');
+        return before - this.rows.length;
+    }
+
     async insertMapping(mapping: NewMapping): Promise<MapRow> {
         const row: MapRow = {
             id: `map-${++this.mapSeq}`,
@@ -140,8 +153,25 @@ export class FakeStore implements GuildSyncStore {
         );
     }
 
-    async audit(entry: AuditEntry) {
+    async audit(entry: AuditEntry, now: Date) {
         this.audits.push(entry);
+        this.auditTimes.push(now);
+    }
+
+    async createIntents(_link: string, since: Date) {
+        return this.audits.flatMap((entry, i) => {
+            const at = this.auditTimes[i];
+            const name = (entry.after as { name?: unknown } | null)?.name;
+            const intent =
+                entry.op === 'create-intent' &&
+                at >= since &&
+                entry.sourceId !== null &&
+                entry.kind !== 'overwrite' &&
+                typeof name === 'string';
+            return intent
+                ? [{ kind: entry.kind, sourceId: entry.sourceId, name, at }]
+                : [];
+        });
     }
 
     async setPlanStatus(
@@ -160,6 +190,10 @@ export class FakeStore implements GuildSyncStore {
 
     async setKillSwitch(_link: string, on: boolean) {
         this.settings = { ...this.settings, killSwitch: on };
+    }
+
+    async setEnforceDrift(_link: string, on: boolean) {
+        this.settings = { ...this.settings, enforceDrift: on };
     }
 
     async setAdminChannel(_link: string, adminChannelId: string | null) {

@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import type { RelayPayload } from '../guild-sync/links';
+import { MAX_CONTENT_LENGTH } from './limits';
 import type { HistoryStore } from './store';
 import type { HistoryPorts, Reaction, SourceMessage } from './types';
 
@@ -33,7 +35,76 @@ export function defuseCommand(content: string, prefix: string): string {
         : content;
 }
 
-function optOutBody(): RelayPayload {
+const ELLIPSIS = '…';
+
+/** Cuts `text` to at most `max` UTF-16 units without splitting a pair. */
+export function cut(text: string, max: number): string {
+    if (text.length <= max) return text;
+    if (max <= 0) return '';
+    const end = max;
+    const code = text.charCodeAt(end - 1);
+    const highSurrogate = code >= 0xd800 && code <= 0xdbff;
+    return text.slice(0, highSurrogate ? end - 1 : end);
+}
+
+/**
+ * Fits content within `max` characters, keeping its last line (the date
+ * note or an edit marker) and shortening what comes before it.
+ */
+export function clipContent(content: string, max: number): string {
+    if (content.length <= max) return content;
+    const split = content.lastIndexOf('\n');
+    const tail = split >= 0 ? content.slice(split) : '';
+    if (tail.length + ELLIPSIS.length >= max) {
+        return `${cut(content, max - ELLIPSIS.length)}${ELLIPSIS}`;
+    }
+    const head = cut(content, max - tail.length - ELLIPSIS.length);
+    return `${head}${ELLIPSIS}${tail}`;
+}
+
+/**
+ * A hash of a copy's text, to recognise it on Fluxer. Line endings and
+ * surrounding whitespace are normalised, as a server may trim them.
+ */
+export function contentHash(content: string): string {
+    const normal = content.replace(/\r\n/g, '\n').trim();
+    return createHash('sha256').update(normal).digest('hex');
+}
+
+/**
+ * Adds a note line just above the last line (the date note), fitted to
+ * Fluxer's limit.
+ */
+export function withNote(content: string, note: string): string {
+    const split = content.lastIndexOf('\n');
+    const joined =
+        split < 0
+            ? `${content}\n${note}`
+            : `${content.slice(0, split)}\n${note}${content.slice(split)}`;
+    return clipContent(joined, MAX_CONTENT_LENGTH);
+}
+
+/**
+ * Breaks @everyone and @here with a zero-width space, so they never ping
+ * even where allowed_mentions is not sent.
+ */
+export function defuseMentions(content: string): string {
+    return content.replace(/@(everyone|here)/g, `@${ZERO_WIDTH_SPACE}$1`);
+}
+
+/**
+ * Shortens the message text so it, the lines below it and the leading
+ * character defuseCommand may add stay within Fluxer's limit.
+ */
+export function fitBody(body: string, tail: readonly string[]): string {
+    const below = tail.reduce((total, line) => total + line.length + 1, 0);
+    const room = MAX_CONTENT_LENGTH - ZERO_WIDTH_SPACE.length - below;
+    if (body.length <= room) return body;
+    return `${cut(body, room - ELLIPSIS.length)}${ELLIPSIS}`;
+}
+
+/** The copy of a message whose author opted out: no name, avatar or text. */
+export function optOutPayload(): RelayPayload {
     return {
         content: '*A message from a member who opted out of history import.*',
         username: 'Member',
@@ -54,19 +125,22 @@ export class CopyFormatter {
     async build(message: SourceMessage, linkId: string): Promise<RelayPayload> {
         const { store, ports } = this.deps;
         const base = (await store.isOptedOut(message.authorId))
-            ? optOutBody()
+            ? optOutPayload()
             : await ports.payload(message.raw, linkId, {
                   withoutReply: await this.hideReply(message),
               });
         // The copy carries its original time, which Fluxer cannot set.
-        const lines = [
-            base.content,
+        const tail = [
             reactionLine(message.reactions),
             dateNote(message.createdAt),
         ].filter((line): line is string => Boolean(line));
+        const lines = [fitBody(defuseMentions(base.content), tail), ...tail];
         return {
             ...base,
-            content: defuseCommand(lines.join('\n'), this.deps.commandPrefix),
+            content: defuseCommand(
+                lines.filter(Boolean).join('\n'),
+                this.deps.commandPrefix
+            ),
         };
     }
 

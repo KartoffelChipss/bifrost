@@ -134,6 +134,11 @@ describe('createRelayExtras', () => {
                 bridgedMessage: async () => null,
                 guildEmoji: async () => null,
             },
+            listGuildLinks: async () => [],
+            links: {
+                byDiscordChannel: async () => null,
+                byFluxerChannel: async () => null,
+            },
         });
         await extras.start(context());
         for (const event of [

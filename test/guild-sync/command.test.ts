@@ -10,6 +10,13 @@ import { EMPTY_BODY, type Plan } from '../../src/guild-sync/plan';
 import { DEFAULT_SETTINGS, FakeStore } from './fake-store';
 
 describe('parseSyncCommand', () => {
+    it('reads history retry', () => {
+        assert.deepEqual(parseSyncCommand(['history', 'retry']), {
+            type: 'history-retry',
+        });
+        assert.equal(parseSyncCommand(['history']).type, 'error');
+    });
+
     it('reads status, mode and kill', () => {
         assert.deepEqual(parseSyncCommand([]), { type: 'status' });
         assert.deepEqual(parseSyncCommand(['status']), { type: 'status' });
@@ -93,15 +100,24 @@ describe('runSyncCommand', () => {
     const PLAN_ID = '00000000-0000-4000-8000-000000000001';
     type Runnable = Exclude<SyncCommand, { type: 'error' }>;
 
-    function setup(linked: string[] = []) {
+    function setup(
+        linked: string[] = [],
+        retryHistory?: (linkId: string, now: Date) => Promise<number>
+    ) {
         const store = new FakeStore();
-        const run = (command: Runnable, channelId = 'admin') =>
+        const result = (command: Runnable, channelId = 'admin') =>
             runSyncCommand(command, LINK, channelId, {
                 store,
                 isChannelLinked: async (id) => linked.includes(id),
+                retryHistory,
                 now: () => new Date(),
             });
-        return { store, run };
+        // The error text, or null when the command worked.
+        const run = async (command: Runnable, channelId = 'admin') => {
+            const outcome = await result(command, channelId);
+            return typeof outcome === 'string' ? outcome : null;
+        };
+        return { store, run, result };
     }
 
     const pending: Plan = {
@@ -160,5 +176,25 @@ describe('runSyncCommand', () => {
         assert.equal(store.plans[0].status, 'aborted');
         assert.equal(store.settings.approvedPlanId, null);
         assert.match((await run(approve)) ?? '', /No plan/);
+    });
+
+    it('restarts failed history imports and says how many', async () => {
+        const retried: string[] = [];
+        const { result } = setup([], async (linkId) => {
+            retried.push(linkId);
+            return 2;
+        });
+        assert.deepEqual(await result({ type: 'history-retry' }), {
+            note: 'Restarted 2 failed history imports.',
+        });
+        assert.deepEqual(retried, [LINK.id]);
+    });
+
+    it('says so when history import is off', async () => {
+        const { run } = setup();
+        assert.match(
+            (await run({ type: 'history-retry' })) ?? '',
+            /not switched on/
+        );
     });
 });

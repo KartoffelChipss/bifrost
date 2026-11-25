@@ -22,6 +22,9 @@ const MIGRATIONS = [
     '00003-settings-admin-approval',
     '00004-threads',
     '00005-history-identity',
+    '00006-parked-messages',
+    '00007-history-resilience',
+    '00008-settings-enforce-drift',
 ];
 
 describe('add-on tables on Postgres', { skip: !url }, () => {

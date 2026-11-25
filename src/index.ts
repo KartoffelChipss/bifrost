@@ -35,19 +35,8 @@ import {
     generateFluxerBotInviteLink,
 } from './utils/generateBotInvite';
 import logger from './utils/logging/logger';
-import {
-    addonDiscordIntents,
-    addonDiscordPartials,
-    addonFactories,
-    initAddonDatabase,
-    requireAddonConfig,
-    startAddons,
-} from './addons';
-// Apart from './addons': the commands load upstream's command classes.
-import { addonDiscordCommands } from './addons/commands';
-import { UpstreamBridge } from './guild-sync/upstreamBridge';
-import sequelize from './db/sequelize';
-import { COMMAND_PREFIX, DISCORD_OWNER_ID } from './utils/env';
+// Fork hook: the add-on bootstrap (src/addons/fork.ts).
+import { forkInit } from './addons/fork';
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import FluxerStatsService from './services/statsService/FluxerStatsService';
 
@@ -57,11 +46,11 @@ process.on('unhandledRejection', (reason) => {
 
 const main = async () => {
     // Fork hook: fail startup on bad add-on settings, before anything runs.
-    const addonConfig = requireAddonConfig(process.env);
+    const fork = forkInit();
 
     await initDatabase();
     // Fork hook: add-on tables, only when add-ons are on.
-    await initAddonDatabase(addonConfig, sequelize, logger);
+    await fork.initDatabase();
 
     logger.debug(
         `GIT_COMMIT: ${GIT_COMMIT ?? 'not resolved — stats will show N/A'}`
@@ -233,17 +222,8 @@ const main = async () => {
             discordStatsService,
             fluxerStatsService,
             dbStatsService,
-            extraIntents: addonDiscordIntents(addonConfig),
-            extraPartials: addonDiscordPartials(addonConfig),
-            extraCommands: addonDiscordCommands(addonConfig, {
-                sequelize,
-                findGuildLink: (id) =>
-                    linkService.getGuildLinkForDiscordGuild(id),
-                discordOwnerId: DISCORD_OWNER_ID,
-                isChannelLinked: async (id) =>
-                    (await linkService.getChannelLinkByDiscordChannelId(id)) !==
-                    null,
-            }),
+            // Fork hook: add-on intents, partials and commands.
+            extend: fork.discordExtension(linkService),
         }),
         connectFluxer(),
     ]);
@@ -255,32 +235,14 @@ const main = async () => {
     logger.info('Both Discord and Fluxer clients have started successfully.');
 
     // Fork hook: add-ons start after both clients and stop on shutdown.
-    const addons = await startAddons(
-        addonConfig,
-        logger,
-        addonFactories(
-            {
-                discordClient,
-                fluxerClientRef,
-                listGuildLinks: () => linkService.getAllGuildLinks(),
-                isChannelLinked: async (id) =>
-                    (await linkService.getChannelLinkByDiscordChannelId(id)) !==
-                    null,
-                commandPrefix: COMMAND_PREFIX,
-                sequelize,
-                bridge: new UpstreamBridge({
-                    discordClient,
-                    fluxerClientRef,
-                    linkService,
-                    webhookService,
-                    discordEntityResolver,
-                    fluxerEntityResolver,
-                }),
-            },
-            addonConfig
-        )
-    );
-    if (addons) registerAddonShutdown(addons);
+    await fork.start({
+        discordClient,
+        fluxerClientRef,
+        linkService,
+        webhookService,
+        discordEntityResolver,
+        fluxerEntityResolver,
+    });
 
     if (ENABLE_WEB_DASHBOARD) {
         const webApp = createWebApp({
@@ -296,18 +258,6 @@ const main = async () => {
             logger.info(`Web dashboard listening on port ${WEB_PORT}`);
         });
     }
-};
-
-const registerAddonShutdown = (addons: { stop(): Promise<void> }) => {
-    const shutdown = (signal: NodeJS.Signals) => {
-        logger.info(`${signal} received, stopping add-ons`);
-        addons
-            .stop()
-            .catch((err) => logger.error('Add-on shutdown error:', err))
-            .finally(() => process.exit(0));
-    };
-    process.once('SIGTERM', shutdown);
-    process.once('SIGINT', shutdown);
 };
 
 main().catch((err) => {

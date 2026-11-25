@@ -5,8 +5,11 @@ import type { LinkedGuild } from '../../src/guild-sync/cycle';
 import type { MemberState } from '../../src/identity/ports';
 import {
     MAX_ROLE_REMOVALS_PER_HOUR,
+    PLAN_TTL_MS,
     RoleSync,
+    rotate,
 } from '../../src/identity/roleSync';
+import { BAN_REASON, MAX_BANS_PER_HOUR } from '../../src/identity/moderation';
 import type { AccountPair } from '../../src/identity/store';
 import { createRecordingLogger } from '../addons/fakes';
 import { DEFAULT_SETTINGS, FakeStore } from '../guild-sync/fake-store';
@@ -21,9 +24,16 @@ const HOUR_MS = 60 * 60_000;
 
 class CountingStore extends FakeStore {
     settingsLoads = 0;
+    snapshotLoads = 0;
     override async loadSettings() {
         this.settingsLoads += 1;
         return super.loadSettings();
+    }
+    override async lastSnapshot(
+        ...args: Parameters<FakeStore['lastSnapshot']>
+    ) {
+        this.snapshotLoads += 1;
+        return super.lastSnapshot(...args);
     }
 }
 
@@ -33,6 +43,36 @@ class FakeMembers {
     failFor = new Set<string>();
     roleWrites: string[] = [];
     nickWrites: string[] = [];
+    discordBans = new Set<string>();
+    fluxerBans = new Map<string, string>();
+    timeoutWrites: string[] = [];
+
+    async discordBanned(_guild: string, userId: string) {
+        return this.discordBans.has(userId);
+    }
+    async banFluxerMember(_guild: string, userId: string, reason: string) {
+        this.fluxerBans.set(userId, reason);
+        this.fluxer.delete(userId);
+    }
+    async fluxerBanReason(_guild: string, userId: string) {
+        return this.fluxerBans.get(userId) ?? null;
+    }
+    async unbanFluxerMember(_guild: string, userId: string) {
+        this.fluxerBans.delete(userId);
+    }
+    async setFluxerTimeout(
+        _guild: string,
+        userId: string,
+        until: string | null
+    ) {
+        this.timeoutWrites.push(`${userId}:${until}`);
+        const old = this.fluxer.get(userId);
+        this.fluxer.set(userId, {
+            roleIds: old?.roleIds ?? [],
+            nick: old?.nick ?? null,
+            timeoutUntil: until,
+        });
+    }
 
     async discordMember(_guild: string, userId: string) {
         if (this.failFor.has(userId)) throw new Error('Discord is down');
@@ -202,5 +242,140 @@ describe('RoleSync nicknames', () => {
             s.logger.entries.filter((e) => e.level === 'warn').length,
             2
         );
+    });
+});
+
+describe('RoleSync members who left and unlinks', () => {
+    it('treats a member gone from Discord as holding no roles, within the limit', async () => {
+        const s = setup();
+        const pairs: AccountPair[] = [];
+        for (let n = 0; n < MAX_ROLE_REMOVALS_PER_HOUR + 3; n++) {
+            pairs.push(pairOf(n));
+            s.members.fluxer.set(`f${n}`, {
+                roleIds: ['f-gamer', 'own'],
+                nick: null,
+            });
+        }
+        const result = await s.roles.sweepLink(LINK, pairs);
+        assert.equal(result?.tally.remove, MAX_ROLE_REMOVALS_PER_HOUR);
+        assert.equal(s.members.roleWrites[0], 'f0:own');
+    });
+
+    it('strips synced roles on unlink in apply, and nothing in dry-run', async () => {
+        const s = setup();
+        s.members.discord.set('d1', { roleIds: ['gamer'], nick: null });
+        s.members.fluxer.set('f1', { roleIds: ['f-gamer', 'own'], nick: null });
+        await s.roles.strip(pairOf(1));
+        assert.deepEqual(s.members.roleWrites, ['f1:own']);
+
+        const t = setup('dry-run');
+        t.members.fluxer.set('f1', { roleIds: ['f-gamer'], nick: null });
+        await t.roles.strip(pairOf(1));
+        assert.deepEqual(t.members.roleWrites, []);
+    });
+});
+
+describe('RoleSync bounds', () => {
+    it('stops a sweep at its deadline and reports how many it checked', async () => {
+        const s = setup();
+        const pairs = withStaleRoles(s, 5);
+        s.members.fluxerMember = async (_guild, userId) => {
+            s.clock.now += 10;
+            return { roleIds: ['f-gamer'], nick: null, userId };
+        };
+        const result = await s.roles.sweepLink(LINK, pairs, s.clock.now + 25);
+        assert.equal(result?.checked, 3);
+    });
+
+    it('resumes in rotated order', () => {
+        assert.deepEqual(rotate([1, 2, 3, 4], 3), [4, 1, 2, 3]);
+        assert.deepEqual(rotate([1, 2], 5), [2, 1]);
+        assert.deepEqual(rotate([], 2), []);
+    });
+
+    it('reuses a link role lists for member events until they expire', async () => {
+        const s = setup();
+        s.members.discord.set('d1', { roleIds: ['gamer'], nick: null });
+        s.members.fluxer.set('f1', { roleIds: [], nick: null });
+        await s.roles.pair(pairOf(1));
+        await s.roles.pair(pairOf(1));
+        assert.equal(s.store.snapshotLoads, 1);
+        s.clock.now += PLAN_TTL_MS;
+        await s.roles.pair(pairOf(1));
+        assert.equal(s.store.snapshotLoads, 2);
+        await s.roles.sweepLink(LINK, [pairOf(1)]);
+        assert.equal(s.store.snapshotLoads, 3);
+    });
+});
+
+describe('RoleSync bans and timeouts', () => {
+    it('bans the Fluxer account of a member banned on Discord, within the limit', async () => {
+        const s = setup();
+        const pairs: AccountPair[] = [];
+        for (let n = 0; n < MAX_BANS_PER_HOUR + 2; n++) {
+            pairs.push(pairOf(n));
+            s.members.discordBans.add(`d${n}`);
+            s.members.fluxer.set(`f${n}`, { roleIds: ['f-gamer'], nick: null });
+        }
+        const result = await s.roles.sweepLink(LINK, pairs);
+        assert.equal(result?.tally.bans, MAX_BANS_PER_HOUR);
+        assert.equal(s.members.fluxerBans.get('f0'), BAN_REASON);
+        assert.deepEqual(s.members.roleWrites, []);
+    });
+
+    it('only counts bans and timeouts in dry-run', async () => {
+        const s = setup('dry-run');
+        s.members.discordBans.add('d1');
+        s.members.fluxer.set('f1', { roleIds: [], nick: null });
+        s.members.discord.set('d2', {
+            roleIds: [],
+            nick: null,
+            timeoutUntil: new Date(s.clock.now + HOUR_MS).toISOString(),
+        });
+        s.members.fluxer.set('f2', { roleIds: [], nick: null });
+        const result = await s.roles.sweepLink(LINK, [pairOf(1), pairOf(2)]);
+        assert.equal(result?.tally.bans, 1);
+        assert.equal(result?.tally.timeouts, 1);
+        assert.equal(s.members.fluxerBans.size, 0);
+        assert.deepEqual(s.members.timeoutWrites, []);
+    });
+
+    it('copies a Discord timeout and lifts only the one it set', async () => {
+        const s = setup();
+        const until = new Date(s.clock.now + HOUR_MS).toISOString();
+        s.members.discord.set('d1', {
+            roleIds: [],
+            nick: null,
+            timeoutUntil: until,
+        });
+        s.members.fluxer.set('f1', { roleIds: [], nick: null });
+        await s.roles.pair(pairOf(1));
+        assert.deepEqual(s.members.timeoutWrites, [`f1:${until}`]);
+        s.members.discord.set('d1', {
+            roleIds: [],
+            nick: null,
+            timeoutUntil: null,
+        });
+        await s.roles.pair(pairOf(1));
+        assert.deepEqual(s.members.timeoutWrites, [`f1:${until}`, 'f1:null']);
+
+        const t = setup();
+        t.members.discord.set('d1', { roleIds: [], nick: null });
+        t.members.fluxer.set('f1', {
+            roleIds: [],
+            nick: null,
+            timeoutUntil: until,
+        });
+        await t.roles.pair(pairOf(1));
+        assert.deepEqual(t.members.timeoutWrites, []);
+    });
+
+    it('lifts on unban only a Fluxer ban this sync made', async () => {
+        const s = setup();
+        s.members.fluxerBans.set('f1', BAN_REASON);
+        s.members.fluxerBans.set('f2', 'spam on Fluxer');
+        await s.roles.unban(pairOf(1), LINK.discordGuildId);
+        await s.roles.unban(pairOf(2), LINK.discordGuildId);
+        assert.deepEqual([...s.members.fluxerBans.keys()], ['f2']);
     });
 });

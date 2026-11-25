@@ -3,15 +3,18 @@ import {
     Routes,
     ThreadChannel,
     ForumChannel,
+    MediaChannel,
     type Client,
     type Guild,
     type ThreadEditOptions,
     type Webhook,
 } from '@fluxerjs/core';
 import type { RelayPayload } from '../links';
+import { THREAD_ONLY_TYPES } from '../snapshot';
 import { fluxerThreadWebhook } from '../threadWebhook';
 import {
     timedWrite,
+    type ChannelMove,
     type ChannelPatch,
     type ChannelSpec,
     type EmojiChoice,
@@ -118,7 +121,6 @@ function tagList(
     });
 }
 
-const FORUM_TYPE = 15;
 const PRIVATE_THREAD = 12;
 /** The forum-post pinned flag (ThreadConstants.ts: PINNED = 1 << 1). */
 const PINNED_FLAG = 1 << 1;
@@ -131,9 +133,16 @@ export type FluxerWebhookSend = (
     payload: RelayPayload
 ) => Promise<{ messageId: string }>;
 
+/** Forum and media channels, which offer tags for their posts. */
+function postParent(
+    channel: GuildChannel
+): channel is ForumChannel | MediaChannel {
+    return channel instanceof ForumChannel || channel instanceof MediaChannel;
+}
+
 /** Tag IDs for tag names. A name the forum does not offer is left out. */
 function tagIds(parent: GuildChannel, names: readonly string[]): string[] {
-    if (!(parent instanceof ForumChannel)) return [];
+    if (!postParent(parent)) return [];
     const ids: string[] = [];
     for (const name of names) {
         const tag = parent.availableTags.find((t) => t.name === name);
@@ -155,7 +164,7 @@ function createOptions(spec: ChannelSpec): CreateOptions {
     };
     if (spec.parentId !== null) options.parentId = spec.parentId;
     if (spec.type === CATEGORY_TYPE) return options;
-    if (spec.type === FORUM_TYPE) {
+    if (THREAD_ONLY_TYPES.has(spec.type)) {
         options.availableTags = tagList(spec.tags, spec.tagMeta, []);
         if (spec.defaultReaction !== undefined) {
             options.defaultReactionEmoji = spec.defaultReaction
@@ -303,7 +312,7 @@ export class FluxerGuildWriter implements GuildWriter {
                 channel.client.rest.patch(Routes.channel(channelId), { body })
             );
         }
-        if ((patch.tags || patch.tagMeta) && channel instanceof ForumChannel) {
+        if ((patch.tags || patch.tagMeta) && postParent(channel)) {
             // A known name keeps its tag ID, so posts keep their tags.
             const names =
                 patch.tags ?? channel.availableTags.map((t) => t.name);
@@ -318,12 +327,18 @@ export class FluxerGuildWriter implements GuildWriter {
 
     async setChannelPositions(
         guildId: string,
-        positions: readonly PositionSpec[]
+        moves: readonly ChannelMove[]
     ): Promise<void> {
         const guild = await this.guild(guildId);
+        // The library's position helper cannot send preceding_sibling_id,
+        // which Fluxer's ChannelPositionUpdateRequest accepts.
+        const body = moves.map((m) => ({
+            id: m.id,
+            preceding_sibling_id: m.precedingId,
+        }));
         await timedWrite(
             'Fluxer channel positions',
-            guild.setChannelPositions(positions.map((p) => ({ ...p })))
+            guild.client.rest.patch(Routes.guildChannels(guildId), { body })
         );
     }
 
@@ -379,11 +394,18 @@ export class FluxerGuildWriter implements GuildWriter {
         patch: StickerPatch
     ) {
         const guild = await this.guild(guildId);
-        const sticker = await timedWrite(
-            'Fluxer sticker fetch',
-            guild.fetchSticker(stickerId)
+        // The library's sticker edit cannot send tags; the API takes them.
+        const body = {
+            name: patch.name,
+            description: patch.description === '' ? null : patch.description,
+            tags: [...patch.tags],
+        };
+        await timedWrite(
+            'Fluxer sticker edit',
+            guild.client.rest.patch(Routes.guildSticker(guildId, stickerId), {
+                body,
+            })
         );
-        await timedWrite('Fluxer sticker edit', sticker.edit({ ...patch }));
     }
 
     async deleteRole(guildId: string, roleId: string): Promise<void> {
@@ -453,7 +475,7 @@ export class FluxerGuildWriter implements GuildWriter {
 
     async createThread(guildId: string, spec: ThreadSpec): Promise<string> {
         const parent = await this.channel(guildId, spec.parentId);
-        if (spec.parentType === FORUM_TYPE) {
+        if (THREAD_ONLY_TYPES.has(spec.parentType)) {
             return this.createPost(parent, spec);
         }
         const manager = (

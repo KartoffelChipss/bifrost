@@ -46,6 +46,8 @@ import FluxerStatsService from './services/statsService/FluxerStatsService';
 import { DbStatsService } from './services/DbStatsService';
 // Fork: the relay's channel check (src/relay-extras/channels.ts).
 import { isRelayedFluxerChannel } from './relay-extras/channels';
+// Fork: tells real edits from pin and preview updates.
+import { isContentEdit } from './relay-extras/edits';
 
 const startFluxerClient = async ({
     linkService,
@@ -222,6 +224,9 @@ const startFluxerClient = async ({
             return;
         }
         if (newMessage.webhookId) return;
+        // Fork: a pin or link preview is not an edit; relaying it marks the
+        // copy "(edited)" (src/relay-extras/edits.ts).
+        if (!isContentEdit(_oldMessage, newMessage, Date.now())) return;
 
         const linkedChannel = await linkService.getChannelLinkById(
             linkedMessage.channelLinkId

@@ -9,6 +9,13 @@ export interface PlanBody {
     readonly findings: readonly Finding[];
     readonly needsApproval: boolean;
     readonly approvalReason: string | null;
+    /**
+     * Map rows behind this plan's removals. While the plan waits for
+     * approval, later cycles look up these rows again instead of a new
+     * batch, so the plan an admin approves stays the plan that runs.
+     * Absent in plans saved before it.
+     */
+    readonly removalRowIds?: readonly string[];
 }
 
 export interface Plan {
@@ -34,6 +41,9 @@ export const SUMMARY_OP_LIMIT = 20;
 function describeOp(op: PlanOp): string {
     switch (op.op) {
         case 'create': {
+            if (op.adopt) {
+                return `adopt ${op.kind} "${op.name}" (${op.existingDestId}, made by an earlier create)`;
+            }
             const match = op.existingDestId
                 ? ` (unmapped destination ${op.kind} ${op.existingDestId} has the same name)`
                 : '';
