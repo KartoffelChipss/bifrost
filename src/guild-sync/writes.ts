@@ -41,8 +41,22 @@ export interface WriteContext {
  * `applied` is the source's projected fields at write time. It becomes the
  * base the next diff compares the source against.
  */
+/**
+ * A second write some creates need, sent after the map row is saved, so a
+ * failure leaves an owned object to fix next cycle and never an orphan.
+ * `fields` join `applied` only once the follow-up succeeded.
+ */
+export type FollowUp =
+    | { readonly type: 'role'; patch: RolePatch; fields: Fields }
+    | { readonly type: 'thread'; patch: ThreadPatch; fields: Fields };
+
 export type WriteAction =
-    | { readonly type: 'create-role'; spec: RoleSpec; applied: Fields }
+    | {
+          readonly type: 'create-role';
+          spec: RoleSpec;
+          applied: Fields;
+          followUp: FollowUp | null;
+      }
     | { readonly type: 'create-channel'; spec: ChannelSpec; applied: Fields }
     | { readonly type: 'update-role'; patch: RolePatch; applied: Fields }
     | { readonly type: 'update-channel'; patch: ChannelPatch; applied: Fields }
@@ -77,12 +91,13 @@ export type WriteAction =
           parentType: number;
           name: string;
           tags: string[];
-          archived: boolean;
-          locked: boolean;
           applied: Fields;
+          followUp: FollowUp | null;
       }
     | { readonly type: 'update-thread'; patch: ThreadPatch; applied: Fields }
     | { readonly type: 'archive-thread'; patch: ThreadPatch }
+    /** The object is already gone from the destination: nothing to write. */
+    | { readonly type: 'gone' }
     | { readonly type: 'skip'; reason: string };
 
 /** The locked category archived channels move to (guard 5). */
@@ -186,6 +201,29 @@ export function mergeOverwrites(
     return [...kept, ...managed];
 }
 
+/** Splits off what Fluxer's role create cannot set: hoist and mentionable. */
+function roleCreate(fields: Fields): WriteAction {
+    const spec = roleSpec(fields);
+    const { hoist, mentionable, ...applied } = fields;
+    if (!spec.hoist && !spec.mentionable) {
+        return { type: 'create-role', spec, applied: fields, followUp: null };
+    }
+    const later: Record<string, JsonValue> = {};
+    if (hoist !== undefined) later.hoist = hoist;
+    if (mentionable !== undefined) later.mentionable = mentionable;
+    return {
+        type: 'create-role',
+        spec,
+        // A new role starts with both off, which is what the base records.
+        applied: { ...applied, hoist: false, mentionable: false },
+        followUp: {
+            type: 'role',
+            patch: { hoist: spec.hoist, mentionable: spec.mentionable },
+            fields: later,
+        },
+    };
+}
+
 function roleSpec(fields: Fields): RoleSpec {
     return {
         name: text(fields.name, ''),
@@ -234,8 +272,7 @@ function createAction(op: CreateOp, ctx: WriteContext): WriteAction {
     if (op.kind === 'role') {
         const role = ctx.source.roles.find((r) => r.id === op.sourceId);
         if (!role) return skip('the source role is gone');
-        const applied = projectSourceRole(role, projection);
-        return { type: 'create-role', spec: roleSpec(applied), applied };
+        return roleCreate(projectSourceRole(role, projection));
     }
     if (op.kind === 'category' || op.kind === 'channel') {
         const channel = ctx.source.channels.find((c) => c.id === op.sourceId);
@@ -329,6 +366,8 @@ function createThread(op: CreateOp, ctx: WriteContext): WriteAction {
     if (!parentId || !parent) {
         return skip('the parent channel is not created yet');
     }
+    const fields = projectSourceThread(thread, ctx);
+    const closed = thread.archived || thread.locked;
     return {
         type: 'create-thread',
         parentId,
@@ -336,14 +375,37 @@ function createThread(op: CreateOp, ctx: WriteContext): WriteAction {
         parentType: parent.type,
         name: thread.name,
         tags: [...thread.tags],
-        archived: thread.archived,
-        locked: thread.locked,
-        applied: projectSourceThread(thread, ctx),
+        // A new thread starts open; closing it is the follow-up.
+        applied: closed
+            ? { ...fields, archived: false, locked: false }
+            : fields,
+        followUp: closed
+            ? {
+                  type: 'thread',
+                  patch: { archived: thread.archived, locked: thread.locked },
+                  fields: { archived: thread.archived, locked: thread.locked },
+              }
+            : null,
     };
 }
 
+/**
+ * The base an update records: what was settled at plan time, without any
+ * changed field the write could not carry. Older plans lack `settled` and
+ * record just the changes.
+ */
+function settledFields(op: UpdateOp, unwritten: readonly string[]): Fields {
+    const base: Record<string, JsonValue> = op.settled
+        ? { ...op.settled }
+        : Object.fromEntries(op.changes.map((c) => [c.field, c.to]));
+    for (const field of unwritten) delete base[field];
+    return base;
+}
+
+/** The fields a thread patch carries. Any other change, such as the parent, is not written. */
+const THREAD_FIELDS = new Set(['name', 'archived', 'locked', 'tags']);
+
 function updateAction(op: UpdateOp, ctx: WriteContext): WriteAction {
-    const projection: ProjectionContext = ctx;
     if (op.kind === 'role') {
         const role = ctx.source.roles.find((r) => r.id === op.sourceId);
         const dest = ctx.destination.roles.find((r) => r.id === op.destId);
@@ -351,7 +413,7 @@ function updateAction(op: UpdateOp, ctx: WriteContext): WriteAction {
         return {
             type: 'update-role',
             patch: rolePatch(op.changes, dest.permissions),
-            applied: projectSourceRole(role, projection),
+            applied: settledFields(op, []),
         };
     }
     if (op.kind === 'category' || op.kind === 'channel') {
@@ -361,13 +423,13 @@ function updateAction(op: UpdateOp, ctx: WriteContext): WriteAction {
         return {
             type: 'update-channel',
             patch: channelPatch(op.changes, dest, ctx.map),
-            applied: projectSourceChannel(channel, projection),
+            applied: settledFields(op, []),
         };
     }
     if (op.kind === 'guild') {
         const name = op.changes.find((c) => c.field === 'name')?.to;
         if (typeof name !== 'string') return skip('nothing to write');
-        return { type: 'rename-guild', name, applied: { name } };
+        return { type: 'rename-guild', name, applied: settledFields(op, []) };
     }
     return expressionUpdate(op, ctx);
 }
@@ -379,7 +441,7 @@ function expressionUpdate(op: UpdateOp, ctx: WriteContext): WriteAction {
         const emoji = ctx.source.emojis.find((e) => e.id === op.sourceId);
         const name = changed('name');
         if (!emoji || typeof name !== 'string') return skip('nothing to write');
-        return { type: 'rename-emoji', name, applied: projectEmoji(emoji) };
+        return { type: 'rename-emoji', name, applied: settledFields(op, []) };
     }
     if (op.kind === 'sticker') {
         const sticker = ctx.source.stickers.find((s) => s.id === op.sourceId);
@@ -397,7 +459,7 @@ function expressionUpdate(op: UpdateOp, ctx: WriteContext): WriteAction {
         return {
             type: 'update-sticker',
             patch,
-            applied: projectSticker(sticker),
+            applied: settledFields(op, ['tags']),
         };
     }
     if (op.kind === 'thread') {
@@ -406,10 +468,13 @@ function expressionUpdate(op: UpdateOp, ctx: WriteContext): WriteAction {
         if (!thread || Object.keys(patch).length === 0) {
             return skip('nothing to write');
         }
+        const unwritten = op.changes
+            .map((c) => c.field)
+            .filter((field) => !THREAD_FIELDS.has(field));
         return {
             type: 'update-thread',
             patch,
-            applied: projectSourceThread(thread, ctx),
+            applied: settledFields(op, unwritten),
         };
     }
     return skip(`a ${op.kind} cannot be updated`);
@@ -420,7 +485,7 @@ function archiveAction(op: ArchiveOp, ctx: WriteContext): WriteAction {
     const { destination } = ctx;
     if (op.kind === 'role') {
         const role = destination.roles.find((r) => r.id === op.destId);
-        if (!role) return skip('the role is already gone');
+        if (!role) return { type: 'gone' };
         return {
             type: 'archive-role',
             patch: {
@@ -431,7 +496,7 @@ function archiveAction(op: ArchiveOp, ctx: WriteContext): WriteAction {
     }
     if (op.kind === 'category' || op.kind === 'channel') {
         const channel = destination.channels.find((c) => c.id === op.destId);
-        if (!channel) return skip('the channel is already gone');
+        if (!channel) return { type: 'gone' };
         const overwrites = lockOverwrites(
             channel.overwrites,
             destination.everyoneRoleId
@@ -450,7 +515,7 @@ function archiveAction(op: ArchiveOp, ctx: WriteContext): WriteAction {
     }
     if (op.kind === 'emoji') {
         const emoji = destination.emojis.find((e) => e.id === op.destId);
-        if (!emoji) return skip('the emoji is already gone');
+        if (!emoji) return { type: 'gone' };
         return {
             type: 'archive-emoji',
             name: archivedExpression(emoji.name, EMOJI_NAME_MAX),
@@ -458,7 +523,7 @@ function archiveAction(op: ArchiveOp, ctx: WriteContext): WriteAction {
     }
     if (op.kind === 'sticker') {
         const sticker = destination.stickers.find((s) => s.id === op.destId);
-        if (!sticker) return skip('the sticker is already gone');
+        if (!sticker) return { type: 'gone' };
         return {
             type: 'archive-sticker',
             name: archivedExpression(sticker.name, STICKER_NAME_MAX),

@@ -1,10 +1,12 @@
 import {
     DiscordAPIError,
+    PermissionFlagsBits,
     RESTJSONErrorCodes,
     type AnyThreadChannel,
     type Client,
     type Guild,
     type GuildEmoji,
+    type GuildMember,
     type NonThreadGuildBasedChannel,
     type PermissionOverwrites,
     type Role,
@@ -49,7 +51,17 @@ function overwrite(o: PermissionOverwrites): OverwriteSnap {
     };
 }
 
-export function discordChannel(c: NonThreadGuildBasedChannel): ChannelSnap {
+/** What a link needs: the relay reads the channel and owns a webhook. */
+const BRIDGE_BITS = [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.ManageWebhooks,
+];
+
+export function discordChannel(
+    c: NonThreadGuildBasedChannel,
+    me: GuildMember | null = null
+): ChannelSnap {
+    const bridgeable = me ? c.permissionsFor(me).has(BRIDGE_BITS) : undefined;
     return {
         id: c.id,
         type: c.type,
@@ -64,11 +76,15 @@ export function discordChannel(c: NonThreadGuildBasedChannel): ChannelSnap {
         userLimit: 'userLimit' in c ? c.userLimit : null,
         overwrites: c.permissionOverwrites.cache.map(overwrite),
         tags: 'availableTags' in c ? c.availableTags.map((t) => t.name) : [],
+        ...(bridgeable === undefined ? {} : { bridgeable }),
     };
 }
 
-/** Archived threads are read 100 at a time, up to this many pages a channel. */
-export const MAX_ARCHIVE_PAGES = 5;
+/**
+ * Archived threads are read 100 at a time, up to this many pages a channel.
+ * A channel with more is reported as a gap rather than cut off silently.
+ */
+export const MAX_ARCHIVE_PAGES = 20;
 
 function discordThread(
     t: AnyThreadChannel,
@@ -89,11 +105,14 @@ function discordThread(
     };
 }
 
-/** The archived public threads of one channel, newest first. */
+/**
+ * The archived public threads of one channel, newest first. `complete` is
+ * false when more pages remain after MAX_ARCHIVE_PAGES.
+ */
 async function archivedThreads(
     parent: NonThreadGuildBasedChannel
-): Promise<AnyThreadChannel[]> {
-    if (!('threads' in parent)) return [];
+): Promise<{ threads: AnyThreadChannel[]; complete: boolean }> {
+    if (!('threads' in parent)) return { threads: [], complete: true };
     const found: AnyThreadChannel[] = [];
     let before: AnyThreadChannel | undefined;
     for (let page = 0; page < MAX_ARCHIVE_PAGES; page++) {
@@ -103,9 +122,11 @@ async function archivedThreads(
         );
         found.push(...result.threads.values());
         before = result.threads.last();
-        if (!result.hasMore || !before) break;
+        if (!result.hasMore || !before) {
+            return { threads: found, complete: true };
+        }
     }
-    return found;
+    return { threads: found, complete: false };
 }
 
 /**
@@ -128,9 +149,9 @@ async function readThreads(
     for (const parent of channels) {
         if (!THREAD_PARENT_TYPES.has(parent.type)) continue;
         try {
-            for (const thread of await archivedThreads(parent)) {
-                all.set(thread.id, thread);
-            }
+            const archived = await archivedThreads(parent);
+            for (const thread of archived.threads) all.set(thread.id, thread);
+            if (!archived.complete) gaps.push(parent.id);
         } catch {
             gaps.push(parent.id);
         }
@@ -169,11 +190,12 @@ const discordSticker = (s: Sticker): StickerSnap => ({
 
 async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
     const force = { force: true };
-    const [channels, roles, emojis, stickers] = await Promise.all([
+    const [channels, roles, emojis, stickers, me] = await Promise.all([
         guild.channels.fetch(undefined, force),
         guild.roles.fetch(undefined, force),
         guild.emojis.fetch(undefined, force),
         guild.stickers.fetch(undefined, force),
+        guild.members.fetchMe(),
     ]);
     const listed = [...channels.values()].filter(
         (c): c is NonThreadGuildBasedChannel => c !== null
@@ -187,7 +209,7 @@ async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
         banner: guild.banner,
         everyoneRoleId: guild.id,
         roles: roles.map(discordRole),
-        channels: listed.map(discordChannel),
+        channels: listed.map((c) => discordChannel(c, me)),
         emojis: emojis.map(discordEmoji),
         stickers: stickers.map(discordSticker),
         threads,

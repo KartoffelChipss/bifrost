@@ -43,13 +43,21 @@ export class FakeStore implements GuildSyncStore {
     plans: Plan[] = [];
     audits: AuditEntry[] = [];
     lockHeld = false;
+    /** Set by a test to make the held check fail. */
+    lockLost = false;
     private mapSeq = 0;
 
-    async withLeaderLock<T>(_holder: string, fn: () => Promise<T>) {
+    async withLeaderLock<T>(
+        _holder: string,
+        fn: (held: () => Promise<boolean>) => Promise<T>
+    ) {
         if (this.lockHeld) return { ran: false as const };
         this.lockHeld = true;
         try {
-            return { ran: true as const, value: await fn() };
+            return {
+                ran: true as const,
+                value: await fn(async () => !this.lockLost),
+            };
         } finally {
             this.lockHeld = false;
         }

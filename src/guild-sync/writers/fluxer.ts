@@ -106,6 +106,8 @@ export class FluxerGuildWriter implements GuildWriter {
 
     async createRole(guildId: string, spec: RoleSpec): Promise<string> {
         const guild = await this.guild(guildId);
+        // Fluxer's create call takes no hoist or mentionable value; the
+        // apply step sends those as a follow-up once the role is owned.
         const role = await timedWrite(
             'Fluxer role create',
             guild.createRole({
@@ -114,13 +116,6 @@ export class FluxerGuildWriter implements GuildWriter {
                 permissions: spec.permissions,
             })
         );
-        // Fluxer's create call takes no hoist or mentionable value.
-        if (spec.hoist || spec.mentionable) {
-            await timedWrite(
-                'Fluxer role edit',
-                role.edit({ hoist: spec.hoist, mentionable: spec.mentionable })
-            );
-        }
         return role.id;
     }
 
@@ -322,15 +317,15 @@ export class FluxerGuildWriter implements GuildWriter {
             this.sendViaWebhook(webhook, spec.starter)
         );
         // Fluxer gives a post's first message the ID of the post itself
-        // (MessageSendService.ts). createThread checks that it is a thread.
+        // (MessageSendService.ts). No second call checks it: a failure
+        // there would leave a post with no map row.
         return sent.messageId;
     }
 
     async createThread(guildId: string, spec: ThreadSpec): Promise<string> {
         const parent = await this.channel(guildId, spec.parentId);
         if (spec.parentType === FORUM_TYPE) {
-            const id = await this.createPost(parent, spec);
-            return (await this.thread(guildId, id)).id;
+            return this.createPost(parent, spec);
         }
         const manager = (
             parent as GuildChannel & {

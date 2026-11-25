@@ -8,6 +8,13 @@ import { channelKind } from './snapshot';
  * number positions differently, but the order of mapped pairs must match.
  */
 
+/**
+ * Set in a new object's applied fields until a reorder placed it. Without
+ * it, a new object would sit wherever the platform put it, and the next
+ * diff would call that "edited on the destination".
+ */
+export const ORDER_PENDING = 'orderPending';
+
 export interface OrderPair {
     readonly sourceId: string;
     readonly destId: string;
@@ -15,6 +22,8 @@ export interface OrderPair {
     readonly destPos: number;
     /** Position in the last healthy source snapshot, or null if new. */
     readonly prevPos: number | null;
+    /** Created by the sync and not placed by a reorder yet. */
+    readonly pending?: boolean;
 }
 
 interface OrderInput {
@@ -55,8 +64,11 @@ export function diffOrder(
         (p) => p.destPos,
         (p) => p.destId
     );
-    if (wanted.join() === actual.join()) return null;
-    const known = pairs.every((pair) => pair.prevPos !== null);
+    const pending = pairs.some((pair) => pair.pending === true);
+    // A pending object in the right place still gets a reorder, so its
+    // flag clears; after that, a move on the destination is drift.
+    if (wanted.join() === actual.join() && !pending) return null;
+    const known = !pending && pairs.every((pair) => pair.prevPos !== null);
     const before = known
         ? sortedDestIds(
               pairs,
@@ -81,7 +93,8 @@ function pairsFor<T extends { id: string; position: number }>(
     sources: readonly T[],
     dests: readonly T[],
     previous: readonly T[] | null,
-    destIdOf: (item: T) => string | null
+    destIdOf: (item: T) => string | null,
+    isPending: (item: T) => boolean
 ): OrderPair[] {
     const destById = new Map(dests.map((item) => [item.id, item]));
     const prevById = new Map((previous ?? []).map((item) => [item.id, item]));
@@ -96,6 +109,7 @@ function pairsFor<T extends { id: string; position: number }>(
             sourcePos: item.position,
             destPos: dest.position,
             prevPos: prevById.get(item.id)?.position ?? null,
+            pending: isPending(item),
         });
     }
     return pairs;
@@ -140,7 +154,8 @@ export function diffOrders(input: OrderInput, map: IdMap, out: Out): void {
                 roles,
                 input.destination.roles,
                 input.previousSource?.roles ?? null,
-                (r) => map.dest('role', r.id)
+                (r) => map.dest('role', r.id),
+                (r) => map.applied('role', r.id)?.[ORDER_PENDING] === true
             )
         )
     );
@@ -151,7 +166,8 @@ export function diffOrders(input: OrderInput, map: IdMap, out: Out): void {
             channels,
             input.destination.channels,
             input.previousSource?.channels ?? null,
-            (c) => map.dest(kindOf(c), c.id)
+            (c) => map.dest(kindOf(c), c.id),
+            (c) => map.applied(kindOf(c), c.id)?.[ORDER_PENDING] === true
         );
         push(out, diffOrder('channel', scope, pairs));
     }

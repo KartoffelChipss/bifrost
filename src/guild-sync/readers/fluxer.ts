@@ -76,8 +76,11 @@ export function fluxerChannel(c: GuildChannel): ChannelSnap {
     };
 }
 
-/** Archived threads are read 100 at a time, up to this many pages a channel. */
-const MAX_ARCHIVE_PAGES = 5;
+/**
+ * Archived threads are read 100 at a time, up to this many pages a channel.
+ * A channel with more is reported as a gap rather than cut off silently.
+ */
+const MAX_ARCHIVE_PAGES = 20;
 
 function fluxerThread(
     t: ThreadChannel,
@@ -98,9 +101,12 @@ function fluxerThread(
     };
 }
 
-async function archivedThreads(parent: GuildChannel): Promise<ThreadChannel[]> {
+/** `complete` is false when more pages remain after MAX_ARCHIVE_PAGES. */
+async function archivedThreads(
+    parent: GuildChannel
+): Promise<{ threads: ThreadChannel[]; complete: boolean }> {
     const manager = (parent as GuildChannel & OptionalChannelFields).threads;
-    if (!manager) return [];
+    if (!manager) return { threads: [], complete: true };
     const found: ThreadChannel[] = [];
     let before: string | undefined;
     for (let page = 0; page < MAX_ARCHIVE_PAGES; page++) {
@@ -112,9 +118,11 @@ async function archivedThreads(parent: GuildChannel): Promise<ThreadChannel[]> {
         found.push(...result.threads);
         const last = result.threads[result.threads.length - 1];
         before = last?.archiveTimestamp ?? undefined;
-        if (!result.hasMore || !before) break;
+        if (!result.hasMore || !before) {
+            return { threads: found, complete: true };
+        }
     }
-    return found;
+    return { threads: found, complete: false };
 }
 
 /** Lists active and archived threads. An unreadable archive is a gap. */
@@ -135,9 +143,9 @@ async function readThreads(
     for (const parent of channels) {
         if (!THREAD_PARENT_TYPES.has(Number(parent.type))) continue;
         try {
-            for (const thread of await archivedThreads(parent)) {
-                all.set(thread.id, thread);
-            }
+            const archived = await archivedThreads(parent);
+            for (const thread of archived.threads) all.set(thread.id, thread);
+            if (!archived.complete) gaps.push(parent.id);
         } catch {
             gaps.push(parent.id);
         }

@@ -55,10 +55,21 @@ export interface ChannelSnap {
     readonly overwrites: readonly OverwriteSnap[];
     /** Names of the tags a forum offers, in order. Empty for other kinds. */
     readonly tags: readonly string[];
+    /**
+     * False when the reading bot cannot bridge this channel: it lacks View
+     * Channel or Manage Webhooks there. Undefined when not checked.
+     */
+    readonly bridgeable?: boolean;
 }
 
 /** Channel types that can hold threads or posts: text, announcement, forum. */
 export const THREAD_PARENT_TYPES: ReadonlySet<number> = new Set([0, 5, 15]);
+
+/**
+ * Channel types the relay bridges: text, voice (its text chat),
+ * announcement, and forum (whose webhook starts posts).
+ */
+export const LINKED_CHANNEL_TYPES: ReadonlySet<number> = new Set([0, 2, 5, 15]);
 
 /** Thread types that are synced: announcement and public. Never private. */
 export const SYNCED_THREAD_TYPES: ReadonlySet<number> = new Set([10, 11]);
@@ -108,9 +119,10 @@ export interface GuildSnapshot {
     readonly stickers: readonly StickerSnap[];
     readonly threads: readonly ThreadSnap[];
     /**
-     * Channels whose threads could not be listed, for example for a missing
-     * Read Message History permission. While this is not empty, the thread
-     * list is incomplete and no thread counts as missing.
+     * Channels whose thread list is incomplete: unreadable (for example
+     * without Read Message History) or with more archived threads than a
+     * read pages through. While this is not empty, no thread counts as
+     * missing, so nothing is removed on an incomplete list.
      */
     readonly threadGaps: readonly string[];
     readonly bot: BotSnap | null;

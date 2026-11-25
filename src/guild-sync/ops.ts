@@ -37,6 +37,13 @@ export type PlanOp =
           readonly destId: string;
           readonly changes: readonly FieldChange[];
           /**
+           * The fields that match the source once this update is written:
+           * the changes plus fields that were already equal at plan time.
+           * Drifted fields are left out, so their base stays as it was.
+           * Plans saved before this field fall back to the changes alone.
+           */
+          readonly settled?: { readonly [field: string]: JsonValue };
+          /**
            * First sync of @everyone or the server itself: the destination
            * was never written, so every difference follows the source.
            */

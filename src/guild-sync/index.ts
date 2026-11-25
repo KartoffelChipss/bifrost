@@ -6,6 +6,7 @@ import type { Sequelize } from 'sequelize';
 import type { Addon, AddonContext } from '../addons/host';
 import { DiscordAssetSource } from './assets';
 import { runCycle, type CycleDeps, type LinkedGuild } from './cycle';
+import { MemoryFailureLedger } from './failures';
 import type { ChannelLinker, ThreadSource } from './links';
 import { NoticeBoard } from './notices';
 import { discordNoticeSender } from './notifier';
@@ -81,7 +82,7 @@ async function runAll(
     holder: string
 ): Promise<boolean> {
     let more = false;
-    const result = await store.withLeaderLock(holder, async () => {
+    const result = await store.withLeaderLock(holder, async (held) => {
         const links = await deps.listGuildLinks();
         if (links.length > MAX_LINKS_PER_RUN) {
             cycleDeps.logger.warn(
@@ -89,7 +90,10 @@ async function runAll(
             );
         }
         for (const link of links.slice(0, MAX_LINKS_PER_RUN)) {
-            const outcome = await runCycle(link, cycleDeps);
+            const outcome = await runCycle(link, {
+                ...cycleDeps,
+                stillLeader: held,
+            });
             if (outcome.status === 'planned' && outcome.more) more = true;
         }
         await store.pruneSnapshots(
@@ -158,6 +162,8 @@ function buildCycleDeps(
         logger: context.logger,
         now: () => new Date(),
         newId: randomUUID,
+        failures: new MemoryFailureLedger(),
+        lookups: new Map(),
     };
 }
 

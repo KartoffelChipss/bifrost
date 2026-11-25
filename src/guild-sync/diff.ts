@@ -25,7 +25,7 @@ import type {
     RoleSnap,
     ThreadSnap,
 } from './snapshot';
-import { THREAD_PARENT_TYPES, channelKind } from './snapshot';
+import { LINKED_CHANNEL_TYPES, channelKind } from './snapshot';
 
 /** Fluxer refuses a 51st channel in one category (ChannelHelpers.ts). */
 export const MAX_CHANNELS_PER_CATEGORY = 50;
@@ -85,17 +85,24 @@ export function compareFields(
     actual: Fields,
     previous: Fields | null,
     firstSync = false
-): { changes: FieldChange[]; drifted: string[] } {
+): { changes: FieldChange[]; drifted: string[]; settled: Fields } {
     const changes: FieldChange[] = [];
     const drifted: string[] = [];
+    const settled: Record<string, Fields[string]> = {};
     for (const [field, to] of Object.entries(desired)) {
-        if (!(field in actual) || same(to, actual[field])) continue;
+        if (!(field in actual)) continue;
+        if (same(to, actual[field])) {
+            settled[field] = to;
+            continue;
+        }
         const moved =
             firstSync || (previous !== null && !same(previous[field], to));
-        if (moved) changes.push({ field, from: actual[field], to });
-        else drifted.push(field);
+        if (moved) {
+            changes.push({ field, from: actual[field], to });
+            settled[field] = to;
+        } else drifted.push(field);
     }
-    return { changes, drifted };
+    return { changes, drifted, settled };
 }
 
 interface ObjectSpec<T extends { readonly id: string; readonly name: string }> {
@@ -116,12 +123,17 @@ function createOp<T extends { readonly id: string; readonly name: string }>(
     map: IdMap,
     item: T
 ): PlanOp {
-    const existing = spec.dests.find(
-        (dest) =>
-            !map.mayUpdate(spec.kind, dest.id) &&
-            dest.name === item.name &&
-            spec.sameType(item, dest)
-    );
+    // Thread names repeat freely, so an unowned post with the same name is
+    // someone else's post, never a copy to adopt.
+    const existing =
+        spec.kind === 'thread'
+            ? undefined
+            : spec.dests.find(
+                  (dest) =>
+                      !map.mayUpdate(spec.kind, dest.id) &&
+                      dest.name === item.name &&
+                      spec.sameType(item, dest)
+              );
     return {
         op: 'create',
         kind: spec.kind,
@@ -182,7 +194,7 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
             });
             continue;
         }
-        const { changes, drifted, firstSync } = compareMapped(
+        const { changes, drifted, settled, firstSync } = compareMapped(
             spec,
             map,
             item,
@@ -196,6 +208,7 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
                 sourceId: item.id,
                 destId,
                 changes,
+                settled,
                 ...(firstSync ? { baseline: true as const } : {}),
             });
         }
@@ -299,7 +312,7 @@ function diffGuild(input: DiffInput, map: IdMap, out: Out) {
     const { source, destination, previousSource } = input;
     const prevName = previousSource ? { name: previousSource.name } : null;
     const firstSync = !map.hasRow('guild', source.guildId);
-    const { changes, drifted } = compareFields(
+    const { changes, drifted, settled } = compareFields(
         { name: source.name },
         { name: destination.name },
         map.applied('guild', source.guildId) ?? prevName,
@@ -314,6 +327,7 @@ function diffGuild(input: DiffInput, map: IdMap, out: Out) {
             sourceId: source.guildId,
             destId,
             changes,
+            settled,
             ...(firstSync ? { baseline: true as const } : {}),
         });
     }
@@ -402,15 +416,25 @@ function reportBotPermissions(input: DiffInput, out: Out) {
     });
 }
 
-/** One link op for each mapped text, announcement or forum channel. */
+/** One link op for each mapped text, voice, announcement or forum channel. */
 function diffLinks(input: DiffInput, map: IdMap, out: Out) {
     if (!input.links) return;
     const present = new Set(input.destination.channels.map((c) => c.id));
     for (const channel of input.source.channels) {
-        if (!THREAD_PARENT_TYPES.has(channel.type)) continue;
+        if (!LINKED_CHANNEL_TYPES.has(channel.type)) continue;
         if (input.links.linked.has(channel.id)) continue;
         if (input.links.never.has(channel.id)) continue;
         if (input.excluded?.has(channel.id)) continue;
+        if (channel.bridgeable === false) {
+            // A link would fail with 403 every cycle.
+            out.findings.push({
+                type: 'skipped',
+                kind: 'channel',
+                id: channel.id,
+                detail: 'not bridged: the bot lacks View Channel or Manage Webhooks here',
+            });
+            continue;
+        }
         const ready = input.links.historyReady;
         if (
             ready &&
@@ -438,13 +462,12 @@ function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
             type: 'skipped',
             kind: 'thread',
             id: parentId,
-            detail: 'threads in this channel could not be listed; the bot may lack Read Message History',
+            detail: 'the thread list here is incomplete (unreadable, or more archived threads than one read pages through); no thread is removed until it is complete',
         });
     }
-    // An incomplete list must not create, change or remove anything.
-    if (source.threadGaps.length > 0 || destination.threadGaps.length > 0) {
-        return;
-    }
+    // Creates and updates follow the object map, so an incomplete list
+    // cannot duplicate anything. Removals wait instead: trackMissing counts
+    // no thread as missing while any list has a gap.
     const mapped = (t: ThreadSnap) => ctx.map.dest('channel', t.parentId);
     const included = (t: ThreadSnap) => !input.excluded?.has(t.id);
     diffObjects(

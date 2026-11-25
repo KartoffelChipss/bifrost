@@ -5,10 +5,14 @@ import { PermissionFlagsBits } from 'discord.js';
 import type { AddonMode } from '../../src/addons/config';
 import {
     EXPRESSION_WRITE_MS,
-    MAX_FAILURES_PER_CYCLE,
+    MAX_FAILURES_PER_KIND,
     SLOW_WRITE_MS,
 } from '../../src/guild-sync/apply';
 import { runCycle, type CycleDeps } from '../../src/guild-sync/cycle';
+import {
+    FAILURES_BEFORE_BACKOFF,
+    MemoryFailureLedger,
+} from '../../src/guild-sync/failures';
 import { isRemoval } from '../../src/guild-sync/ops';
 import type { Plan } from '../../src/guild-sync/plan';
 import type { GuildSnapshot } from '../../src/guild-sync/snapshot';
@@ -127,6 +131,8 @@ function setup(source: GuildSnapshot, mode: AddonMode = 'dry-run') {
         state,
         cycle,
         wait,
+        /** The cycle deps, for a test that overrides one of them. */
+        depsFor: deps,
     };
 }
 
@@ -216,12 +222,16 @@ describe('applying a plan', () => {
         );
         for (const name of names) guild.failCreates.add(name);
         const { applied } = await cycle();
-        assert.equal(applied?.failed, MAX_FAILURES_PER_CYCLE);
-        assert.match(applied?.stopped ?? '', /writes failed/);
+        assert.equal(applied?.failed, MAX_FAILURES_PER_KIND);
+        assert.equal(
+            applied?.skipped.filter((s) => /role writes failed/.test(s.reason))
+                .length,
+            names.length - MAX_FAILURES_PER_KIND
+        );
         assert.equal(store.plans[0].status, 'aborted');
         assert.equal(
             store.audits.filter((a) => a.result === 'failed').length,
-            MAX_FAILURES_PER_CYCLE
+            MAX_FAILURES_PER_KIND
         );
     });
 });
@@ -560,6 +570,19 @@ describe('approval', () => {
         assert.equal(s.store.settings.approvedPlanId, null);
     });
 
+    it('keeps an approval through a failed read', async () => {
+        const s = await overBudget();
+        const pending = await s.cycle();
+        await s.store.setApprovedPlan(LINK.id, pending.plan.id);
+        const good = s.discord.result;
+        s.discord.result = { ok: false, reason: 'error', detail: '503' };
+        await s.cycle();
+        assert.equal(s.store.settings.approvedPlanId, pending.plan.id);
+        s.discord.result = good;
+        const { applied } = await s.cycle();
+        assert.equal(applied?.applied, 4);
+    });
+
     it('does not carry an approval over to a different plan', async () => {
         const s = await overBudget();
         s.store.settings = { ...s.store.settings, deleteBudgetPerCycle: 1 };
@@ -659,14 +682,14 @@ describe('channel links, forum tags and threads', () => {
         assert.fail('the sync did not settle');
     }
 
-    it('bridges text and forum channels, never voice or the admin channel', async () => {
+    it('bridges forum and voice channels, never the admin channel', async () => {
         const s = setup(forumGuild({ threads: [] }));
         s.useLinks();
         s.store.settings = { ...s.store.settings, adminChannelId: 'text' };
         await settle(s);
         assert.deepEqual(
             s.linker.links.map((l) => l.discordChannelId),
-            ['forum']
+            ['forum', 'voice']
         );
         assert.equal(
             s.linker.links[0].fluxerChannelId,
@@ -742,16 +765,53 @@ describe('channel links, forum tags and threads', () => {
         assert.deepEqual(post?.tags, ['help']);
     });
 
-    it('plans nothing for threads while a thread list is incomplete', async () => {
+    it('copies listed posts but removes none while a thread list is incomplete', async () => {
         const s = setup(forumGuild({ threadGaps: ['forum'] }));
         s.useLinks();
         await settle(s);
-        assert.equal(s.guild.posts.length, 0);
+        assert.equal(s.guild.posts.length, 3);
         const { plan } = await s.cycle();
         assert.ok(
             plan.body.findings.some(
-                (f) =>
-                    f.kind === 'thread' && /could not be listed/.test(f.detail)
+                (f) => f.kind === 'thread' && /incomplete/.test(f.detail)
+            )
+        );
+        // A listed post disappears while the gap remains: no removal.
+        const source = forumGuild({ threadGaps: ['forum'] });
+        s.discord.result = {
+            ok: true,
+            snapshot: {
+                ...source,
+                threads: source.threads.filter((t) => t.id !== 'post1'),
+            },
+        };
+        s.discord.gone = new Set(['post1']);
+        for (let i = 0; i < 4; i++) {
+            const next = await s.cycle();
+            assert.ok(next.plan.body.ops.every((op) => !isRemoval(op)));
+            s.wait(20);
+        }
+    });
+
+    it('never plans a link the bot cannot make', async () => {
+        const base = forumGuild({ threads: [] });
+        const s = setup({
+            ...base,
+            channels: base.channels.map((c) =>
+                c.id === 'voice' ? { ...c, bridgeable: false } : c
+            ),
+        });
+        s.useLinks();
+        s.store.settings = { ...s.store.settings, adminChannelId: 'text' };
+        await settle(s);
+        assert.deepEqual(
+            s.linker.links.map((l) => l.discordChannelId),
+            ['forum']
+        );
+        const { plan } = await s.cycle();
+        assert.ok(
+            plan.body.findings.some(
+                (f) => f.id === 'voice' && /Manage Webhooks/.test(f.detail)
             )
         );
     });
@@ -892,5 +952,204 @@ describe('excluded channels', () => {
         assert.equal(named(s.guild, 'admins-only')?.id, copy.id);
         const row = s.store.rows.find((r) => r.fluxerId === copy.id);
         assert.equal(row?.state, 'active');
+    });
+});
+
+describe('recovering from partial and failed writes', () => {
+    it('owns a new role before its follow-up, and retries the follow-up', async () => {
+        const source = discordGuild({
+            roles: [role(D_GUILD), role('r1', { name: 'Mods', hoist: true })],
+        });
+        const s = setup(source);
+        // The follow-up write fails the first time.
+        const originalCreate = s.guild.createRole.bind(s.guild);
+        s.guild.createRole = async (guildId, spec) => {
+            const id = await originalCreate(guildId, spec);
+            s.guild.failUpdates.add(id);
+            return id;
+        };
+        const first = await s.cycle();
+        assert.equal(first.applied?.failed, 1);
+        const mods = s.guild.snapshot.roles.find((r) => r.name === 'Mods');
+        assert.ok(mods);
+        assert.equal(mods.hoist, false);
+        assert.ok(s.store.rows.some((r) => r.fluxerId === mods.id));
+        s.guild.failUpdates.clear();
+        const second = await s.cycle();
+        const update = second.plan.body.ops.find((op) => op.op === 'update');
+        assert.equal(
+            update?.op === 'update' && update.changes[0].field,
+            'hoist'
+        );
+        assert.equal(
+            s.guild.snapshot.roles.find((r) => r.id === mods.id)?.hoist,
+            true
+        );
+        // Exactly one Mods role: nothing was created twice.
+        assert.equal(
+            s.guild.snapshot.roles.filter((r) => r.name === 'Mods').length,
+            1
+        );
+    });
+
+    it('keeps other kinds going when one kind keeps failing', async () => {
+        const names = ['a', 'b', 'c', 'd'];
+        const s = setup(
+            discordGuild({
+                roles: [
+                    role(D_GUILD),
+                    ...names.map((n) => role(n, { name: n })),
+                ],
+                channels: [channel('c1', { name: 'general' })],
+            })
+        );
+        for (const name of names) s.guild.failCreates.add(name);
+        const { applied } = await s.cycle();
+        assert.equal(applied?.failed, MAX_FAILURES_PER_KIND);
+        assert.ok(named(s.guild, 'general'));
+    });
+
+    it('waits out a backoff for an op that keeps failing', async () => {
+        const s = setup(
+            discordGuild({ roles: [role(D_GUILD), role('a', { name: 'a' })] })
+        );
+        s.guild.failCreates.add('a');
+        const deps = { failures: new MemoryFailureLedger() };
+        const run = async () =>
+            (await runCycle(LINK, { ...s.depsFor(), ...deps })) as Extract<
+                Awaited<ReturnType<typeof runCycle>>,
+                { status: 'planned' }
+            >;
+        for (let i = 0; i < FAILURES_BEFORE_BACKOFF; i++) {
+            assert.equal((await run()).applied?.failed, 1);
+        }
+        const held = await run();
+        assert.equal(held.applied?.failed, 0);
+        assert.match(held.applied?.skipped[0]?.reason ?? '', /backoff/);
+    });
+
+    it('stops writing once the leader lock is lost', async () => {
+        const s = setup(sourceGuild());
+        const outcome = await runCycle(LINK, {
+            ...s.depsFor(),
+            stillLeader: async () => false,
+        });
+        assert.ok(outcome.status === 'planned');
+        assert.match(outcome.applied?.stopped ?? '', /leader lock/);
+        assert.deepEqual(s.guild.calls, []);
+    });
+
+    it('tombstones a removed object someone already deleted by hand', async () => {
+        const source = sourceGuild();
+        const s = setup(source);
+        await s.cycle();
+        const chat = named(s.guild, 'mod-chat');
+        assert.ok(chat);
+        s.discord.result = {
+            ok: true,
+            snapshot: {
+                ...source,
+                channels: source.channels.filter((c) => c.id !== 'c1'),
+            },
+        };
+        s.discord.gone = new Set(['c1']);
+        // A Fluxer admin deletes the copy before the sync archives it.
+        s.guild.snapshot = {
+            ...s.guild.snapshot,
+            channels: s.guild.snapshot.channels.filter((c) => c.id !== chat.id),
+        };
+        await s.cycle();
+        s.wait(20);
+        await s.cycle();
+        s.wait(20);
+        const { applied } = await s.cycle();
+        assert.equal(applied?.failed, 0);
+        const row = s.store.rows.find((r) => r.fluxerId === chat.id);
+        assert.equal(row?.state, 'tombstoned');
+    });
+
+    it('finishes a hard delete when the object is already gone', async () => {
+        const source = sourceGuild();
+        const s = setup(source);
+        await s.cycle();
+        const mods = s.guild.snapshot.roles.find((r) => r.name === 'Mods');
+        assert.ok(mods);
+        s.discord.result = {
+            ok: true,
+            snapshot: { ...source, roles: [role(D_GUILD)] },
+        };
+        s.discord.gone = new Set(['r1']);
+        await s.cycle();
+        s.wait(20);
+        await s.cycle();
+        s.wait(20);
+        await s.cycle();
+        // Deleted by hand during the grace period.
+        s.guild.snapshot = {
+            ...s.guild.snapshot,
+            roles: s.guild.snapshot.roles.filter((r) => r.id !== mods.id),
+        };
+        s.wait(15 * 24 * 60);
+        const { applied } = await s.cycle();
+        assert.equal(applied?.failed, 0);
+        const row = s.store.rows.find((r) => r.fluxerId === mods.id);
+        assert.equal(row?.state, 'tombstoned');
+    });
+});
+
+describe('order of new objects', () => {
+    it('moves new roles into the source order, then reports later moves as drift', async () => {
+        const source = discordGuild({
+            roles: [
+                role(D_GUILD),
+                role('low', { name: 'low', position: 1 }),
+                role('high', { name: 'high', position: 2 }),
+            ],
+        });
+        const s = setup(source);
+        // Fluxer puts each new role at the bottom, so creates invert them.
+        s.guild.createRole = (() => {
+            const create = FakeGuild.prototype.createRole.bind(s.guild);
+            return async (guildId, spec) => {
+                const id = await create(guildId, spec);
+                s.guild.snapshot = {
+                    ...s.guild.snapshot,
+                    roles: s.guild.snapshot.roles.map((r) =>
+                        r.id === id
+                            ? { ...r, position: 1 }
+                            : r.id === F_GUILD
+                              ? r
+                              : { ...r, position: r.position + 1 }
+                    ),
+                };
+                return id;
+            };
+        })();
+        await s.cycle();
+        const second = await s.cycle();
+        assert.ok(second.plan.body.ops.some((op) => op.op === 'reorder'));
+        const byName = (n: string) =>
+            s.guild.snapshot.roles.find((r) => r.name === n)?.position ?? 0;
+        assert.ok(byName('high') > byName('low'));
+        const third = await s.cycle();
+        assert.equal(opCount(third.plan), 0);
+        // A hand move on Fluxer now counts as drift.
+        s.guild.snapshot = {
+            ...s.guild.snapshot,
+            roles: s.guild.snapshot.roles.map((r) =>
+                r.name === 'high'
+                    ? { ...r, position: 0 }
+                    : r.name === 'low'
+                      ? { ...r, position: 9 }
+                      : r
+            ),
+        };
+        const fourth = await s.cycle();
+        assert.equal(opCount(fourth.plan), 0);
+        assert.ok(
+            fourth.plan.body.findings.some(
+                (f) => f.type === 'drift' && f.kind === 'role'
+            )
+        );
     });
 });

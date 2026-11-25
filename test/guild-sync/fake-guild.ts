@@ -32,6 +32,8 @@ export class FakeGuild implements GuildReader, GuildWriter {
     readonly calls: string[] = [];
     /** Object names whose create fails while they are in this set. */
     readonly failCreates = new Set<string>();
+    /** Object IDs whose updates fail while they are in this set. */
+    readonly failUpdates = new Set<string>();
     /** What each created thread or post was given. */
     readonly posts: ThreadSpec[] = [];
     private seq = 0;
@@ -50,14 +52,24 @@ export class FakeGuild implements GuildReader, GuildWriter {
         this.snapshot = { ...this.snapshot, ...next };
     }
 
+    /** Throws a 404 like both platforms when the object is not there. */
+    private mustHave(items: readonly { id: string }[], id: string) {
+        if (!items.some((item) => item.id === id)) {
+            throw Object.assign(new Error('Unknown'), { statusCode: 404 });
+        }
+    }
+
     private nextPosition(items: readonly { position: number }[]) {
         return items.reduce((max, i) => Math.max(max, i.position), 0) + 1;
     }
 
     async createRole(_guild: string, spec: RoleSpec): Promise<string> {
         if (this.failCreates.has(spec.name)) throw new Error('create refused');
+        // Like Fluxer, the create call sets neither hoist nor mentionable.
         const role: RoleSnap = {
             ...spec,
+            hoist: false,
+            mentionable: false,
             id: `f-role-${++this.seq}`,
             position: this.nextPosition(this.snapshot.roles),
             managed: false,
@@ -68,6 +80,7 @@ export class FakeGuild implements GuildReader, GuildWriter {
     }
 
     async updateRole(_guild: string, roleId: string, patch: RolePatch) {
+        if (this.failUpdates.has(roleId)) throw new Error('update refused');
         this.patch({
             roles: this.snapshot.roles.map((r) =>
                 r.id === roleId ? { ...r, ...patch } : r
@@ -187,11 +200,13 @@ export class FakeGuild implements GuildReader, GuildWriter {
     }
 
     async deleteRole(_guild: string, id: string) {
+        this.mustHave(this.snapshot.roles, id);
         this.patch({ roles: this.snapshot.roles.filter((r) => r.id !== id) });
         this.calls.push(`delete role ${id}`);
     }
 
     async deleteChannel(_guild: string, id: string) {
+        this.mustHave(this.snapshot.channels, id);
         this.patch({
             channels: this.snapshot.channels.filter((c) => c.id !== id),
         });
@@ -199,11 +214,13 @@ export class FakeGuild implements GuildReader, GuildWriter {
     }
 
     async deleteEmoji(_guild: string, id: string) {
+        this.mustHave(this.snapshot.emojis, id);
         this.patch({ emojis: this.snapshot.emojis.filter((e) => e.id !== id) });
         this.calls.push(`delete emoji ${id}`);
     }
 
     async deleteSticker(_guild: string, id: string) {
+        this.mustHave(this.snapshot.stickers, id);
         this.patch({
             stickers: this.snapshot.stickers.filter((s) => s.id !== id),
         });
@@ -234,6 +251,7 @@ export class FakeGuild implements GuildReader, GuildWriter {
     }
 
     async updateThread(_guild: string, id: string, patch: ThreadPatch) {
+        if (this.failUpdates.has(id)) throw new Error('update refused');
         const { tags, ...fields } = patch;
         this.patch({
             threads: this.snapshot.threads.map((t) =>

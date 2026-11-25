@@ -1,11 +1,13 @@
 import type { ObjectState, SyncDirection } from '../addons/db/schema';
+import type { FailureLedger } from './failures';
 import type { AddonLogger } from '../addons/isolation';
 import type { AssetSource } from './assets';
 import { IdMap } from './idmap';
 import type { ChannelLinker, ThreadSource } from './links';
 import type { JsonValue, MapRow, PlanOp } from './ops';
-import { destIdOf } from './ops';
+import { destIdOf, isRemoval } from './ops';
 import type { Plan } from './plan';
+import { ORDER_PENDING } from './order';
 import { projectSourceRole, type Fields } from './project';
 import type { GuildSnapshot } from './snapshot';
 import type { GuildSyncStore } from './store';
@@ -13,6 +15,7 @@ import {
     ARCHIVE_CATEGORY,
     LOCK_BITS,
     writeFor,
+    type FollowUp,
     type WriteAction,
     type WriteContext,
 } from './writes';
@@ -28,7 +31,7 @@ export const SLOW_WRITE_MS = 6_500;
 export const EXPRESSION_WRITE_MS = 3_200;
 export const UPDATE_WRITE_MS = 1_000;
 
-type Write = Exclude<WriteAction, { type: 'skip' }>;
+type Write = Exclude<WriteAction, { type: 'skip' } | { type: 'gone' }>;
 
 /** The pause one write needs before the next. */
 export function pauseAfter(action: Write, kind: PlanOp['kind']): number {
@@ -51,8 +54,14 @@ export function pauseAfter(action: Write, kind: PlanOp['kind']): number {
     }
 }
 
-/** A cycle stops applying after this many failed writes. */
-export const MAX_FAILURES_PER_CYCLE = 3;
+/** A cycle stops applying after this many failed writes in all. */
+export const MAX_FAILURES_PER_CYCLE = 10;
+
+/**
+ * One kind stops after this many failed writes in a cycle, so a failing
+ * kind (say, links the bot may not make) does not hold up the others.
+ */
+export const MAX_FAILURES_PER_KIND = 3;
 
 export interface ApplyInput {
     readonly plan: Plan;
@@ -73,6 +82,10 @@ export interface ApplyDeps {
     readonly threads: ThreadSource | null;
     /** Checked before every write (guards 9, 10 and 15). */
     readonly canWrite: () => boolean;
+    /** Checked before every write: false once the leader lock is lost. */
+    readonly stillLeader?: () => Promise<boolean>;
+    /** Ops that keep failing wait out a backoff instead of every cycle. */
+    readonly failures?: FailureLedger;
     readonly pause: (ms: number) => Promise<void>;
     readonly now: () => Date;
     readonly logger: AddonLogger;
@@ -82,6 +95,8 @@ export interface ApplyResult {
     readonly applied: number;
     readonly failed: number;
     readonly skipped: readonly { op: PlanOp; reason: string }[];
+    /** Ops held back for the next cycle, which should come soon. */
+    readonly postponed: number;
     /** Why the run ended before the last op, or null. */
     readonly stopped: string | null;
 }
@@ -94,7 +109,11 @@ interface RunState {
     map: IdMap;
     applied: number;
     failed: number;
+    readonly failedByKind: Map<PlanOp['kind'], number>;
     readonly skipped: { op: PlanOp; reason: string }[];
+    postponed: number;
+    /** Kinds of position-holding objects this run created. */
+    readonly created: Set<'role' | 'channel'>;
     /** The archive category, once found or created in this run. */
     archiveCategoryId: string | null;
 }
@@ -179,7 +198,7 @@ async function createThread(
         webhook = toFluxer ? link.fluxerWebhook : link.discordWebhook;
         starter = await threads.starter(source.guildId, sourceId);
     }
-    const id = await writer.createThread(destination.guildId, {
+    return writer.createThread(destination.guildId, {
         parentId: action.parentId,
         parentType: action.parentType,
         name: action.name,
@@ -187,13 +206,6 @@ async function createThread(
         starter,
         webhook,
     });
-    if (action.archived || action.locked) {
-        await writer.updateThread(destination.guildId, id, {
-            archived: action.archived,
-            locked: action.locked,
-        });
-    }
-    return id;
 }
 
 /** Hard delete (guard 6). A channel loses its relay link first. */
@@ -309,10 +321,16 @@ async function perform(
 }
 
 /** After a removal, the row records how far the object has gone. */
-async function recordRemoval(state: RunState, op: PlanOp): Promise<void> {
+async function recordRemoval(
+    state: RunState,
+    op: PlanOp,
+    gone = false
+): Promise<void> {
     if (op.op !== 'archive' && op.op !== 'hard-delete') return;
     const { plan } = state.input;
-    const next: ObjectState = op.op === 'archive' ? 'archived' : 'tombstoned';
+    // An object found already deleted needs no grace period.
+    const next: ObjectState =
+        op.op === 'archive' && !gone ? 'archived' : 'tombstoned';
     const row = state.rows.find(
         (r) => r.kind === op.kind && destIdOf(r, plan.direction) === op.destId
     );
@@ -324,6 +342,39 @@ async function recordRemoval(state: RunState, op: PlanOp): Promise<void> {
     );
     state.map = buildMap(state);
 }
+
+/** Merges fields into a mapped object's base. Returns false without a row. */
+async function saveFields(
+    state: RunState,
+    kind: PlanOp['kind'],
+    destId: string,
+    fields: Fields,
+    drop: readonly string[] = []
+): Promise<boolean> {
+    const { direction } = state.input.plan;
+    const row = state.rows.find(
+        (r) => r.kind === kind && destIdOf(r, direction) === destId
+    );
+    if (!row) return false;
+    const merged: Record<string, JsonValue> = {
+        ...(row.appliedFields ?? {}),
+        ...fields,
+    };
+    for (const field of drop) delete merged[field];
+    await state.deps.store.saveApplied(row.id, merged, state.deps.now());
+    state.rows = state.rows.map((r) =>
+        r.id === row.id ? { ...r, appliedFields: merged } : r
+    );
+    state.map = buildMap(state);
+    return true;
+}
+
+/** Kinds whose new objects still need a place in the order. */
+const ORDERED_KINDS: ReadonlySet<string> = new Set([
+    'role',
+    'category',
+    'channel',
+]);
 
 /** Records ownership and the written fields after a successful write. */
 async function record(
@@ -337,29 +388,42 @@ async function record(
     if (op.op !== 'create' && op.op !== 'update') return;
     const destId = op.op === 'create' ? newId : op.destId;
     if (!destId) throw new Error(`create ${op.kind} returned no ID`);
-    const row = state.rows.find(
-        (r) => r.kind === op.kind && destIdOf(r, plan.direction) === destId
+    if (await saveFields(state, op.kind, destId, applied)) return;
+    // A new object lands wherever the platform puts it. The flag makes the
+    // next order diff move it, rather than call the mismatch drift.
+    const pending = op.op === 'create' && ORDERED_KINDS.has(op.kind);
+    const created = await store.insertMapping(
+        {
+            guildLinkId: plan.guildLinkId,
+            kind: op.kind,
+            ...pair(plan.direction, op.sourceId, destId),
+            createdBySync: op.op === 'create',
+            appliedFields: pending
+                ? { ...applied, [ORDER_PENDING]: true }
+                : applied,
+        },
+        now()
     );
-    if (row) {
-        const fields = { ...(row.appliedFields ?? {}), ...applied };
-        await store.saveApplied(row.id, fields, now());
-        state.rows = state.rows.map((r) =>
-            r.id === row.id ? { ...r, appliedFields: fields } : r
-        );
-    } else {
-        const created = await store.insertMapping(
-            {
-                guildLinkId: plan.guildLinkId,
-                kind: op.kind,
-                ...pair(plan.direction, op.sourceId, destId),
-                createdBySync: op.op === 'create',
-                appliedFields: applied,
-            },
-            now()
-        );
-        state.rows = [...state.rows, created];
-    }
+    state.rows = [...state.rows, created];
     state.map = buildMap(state);
+    if (pending) state.created.add(op.kind === 'role' ? 'role' : 'channel');
+}
+
+/** After a reorder, the objects it placed are no longer pending. */
+async function settleOrder(state: RunState, op: PlanOp): Promise<void> {
+    if (op.op !== 'reorder') return;
+    const kinds = op.kind === 'role' ? ['role'] : ['category', 'channel'];
+    for (const destId of op.destIds) {
+        const row = state.rows.find(
+            (r) =>
+                kinds.includes(r.kind) &&
+                destIdOf(r, state.input.plan.direction) === destId
+        );
+        if (!row?.appliedFields?.[ORDER_PENDING]) continue;
+        await saveFields(state, row.kind as PlanOp['kind'], destId, {}, [
+            ORDER_PENDING,
+        ]);
+    }
 }
 
 function auditFields(op: PlanOp, action: WriteAction): JsonValue {
@@ -367,6 +431,7 @@ function auditFields(op: PlanOp, action: WriteAction): JsonValue {
         return Object.fromEntries(op.changes.map((c) => [c.field, c.to]));
     }
     if (op.op === 'reorder') return [...op.destIds];
+    if (action.type === 'gone') return { gone: true };
     return 'applied' in action ? action.applied : null;
 }
 
@@ -385,13 +450,147 @@ function auditBase(plan: Plan, op: PlanOp) {
     };
 }
 
+/** Fluxer and Discord both answer 404 for an object that is gone. */
+export function isNotFound(error: unknown): boolean {
+    if (typeof error !== 'object' || error === null) return false;
+    const { status, statusCode } = error as {
+        status?: unknown;
+        statusCode?: unknown;
+    };
+    return status === 404 || statusCode === 404;
+}
+
+/** The ledger key for one op: the same op on the same object. */
+function opKey(plan: Plan, op: PlanOp): string {
+    const target = 'sourceId' in op ? op.sourceId : op.scope;
+    return `${plan.guildLinkId}:${op.op}:${op.kind}:${target}`;
+}
+
+/** Why an op waits for a later cycle, or null. */
+function holdReason(state: RunState, op: PlanOp): string | null {
+    const { failures, now } = state.deps;
+    if (failures?.blocked(opKey(state.input.plan, op), now())) {
+        return 'failed repeatedly; retried after a backoff';
+    }
+    // Positions read before this run's creates are stale once Fluxer moved
+    // objects to make room. The next cycle reads them fresh.
+    if (op.op === 'reorder' && state.created.has(op.kind)) {
+        state.postponed += 1;
+        return 'objects were created this run; reordered next cycle';
+    }
+    return null;
+}
+
+type Attempt =
+    | { readonly ok: true; readonly newId: string | null; gone: boolean }
+    | { readonly ok: false; readonly detail: string; notReady: boolean };
+
+/** Runs the write. A removal of an object already gone counts as done. */
+async function attempt(
+    state: RunState,
+    action: Write,
+    op: PlanOp
+): Promise<Attempt> {
+    try {
+        return {
+            ok: true,
+            newId: await perform(state, action, op),
+            gone: false,
+        };
+    } catch (error) {
+        if (isRemoval(op) && isNotFound(error)) {
+            return { ok: true, newId: null, gone: true };
+        }
+        return {
+            ok: false,
+            detail: error instanceof Error ? error.message : String(error),
+            notReady: error instanceof NotReadyError,
+        };
+    }
+}
+
+async function auditFailure(
+    state: RunState,
+    op: PlanOp,
+    detail: string
+): Promise<void> {
+    const { plan } = state.input;
+    const { store, now, logger, failures } = state.deps;
+    logger.warn(`[guild-sync] ${op.op} ${op.kind} failed: ${detail}`);
+    failures?.failed(opKey(plan, op), now());
+    await store.audit(
+        {
+            ...auditBase(plan, op),
+            destId: 'destId' in op ? op.destId : null,
+            after: { error: detail },
+            result: 'failed',
+        },
+        now()
+    );
+}
+
+/** Sends a create's second write. Its fields join the base on success. */
+async function followUp(
+    state: RunState,
+    op: PlanOp,
+    next: FollowUp,
+    destId: string
+): Promise<boolean> {
+    const { writer } = state.deps;
+    const guildId = state.input.destination.guildId;
+    try {
+        if (next.type === 'role') {
+            await writer.updateRole(guildId, destId, next.patch);
+        } else await writer.updateThread(guildId, destId, next.patch);
+    } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        await auditFailure(state, op, `follow-up: ${detail}`);
+        return false;
+    }
+    await saveFields(state, op.kind, destId, next.fields);
+    return true;
+}
+
+/** Records a successful write: audit, ownership, removal state, follow-up. */
+async function recordWrite(
+    state: RunState,
+    op: PlanOp,
+    action: Exclude<WriteAction, { type: 'skip' }>,
+    result: Extract<Attempt, { ok: true }>
+): Promise<'written' | 'failed'> {
+    const { plan } = state.input;
+    const { store, now, failures } = state.deps;
+    failures?.succeeded(opKey(plan, op));
+    // A database error from here on is not caught: the write happened but
+    // ownership was not recorded, so the add-ons must stop (guard 15).
+    await store.audit(
+        {
+            ...auditBase(plan, op),
+            destId: 'destId' in op ? op.destId : result.newId,
+            after: result.gone ? { gone: true } : auditFields(op, action),
+            result: 'ok',
+        },
+        now()
+    );
+    if ('applied' in action) {
+        await record(state, op, action.applied, result.newId);
+    }
+    await recordRemoval(state, op, result.gone || action.type === 'gone');
+    await settleOrder(state, op);
+    const next = 'followUp' in action ? action.followUp : null;
+    if (next && result.newId) {
+        await state.deps.pause(UPDATE_WRITE_MS);
+        if (!(await followUp(state, op, next, result.newId))) return 'failed';
+    }
+    return 'written';
+}
+
 /** Applies one op and reports what became of it. */
 async function applyOp(
     state: RunState,
     op: PlanOp
 ): Promise<'written' | 'skipped' | 'failed'> {
     const { plan, source, destination } = state.input;
-    const { store, now, logger } = state.deps;
     const ctx: WriteContext = {
         source,
         destination,
@@ -399,47 +598,30 @@ async function applyOp(
         direction: plan.direction,
     };
     const action = writeFor(op, ctx);
-    if (action.type === 'skip') {
-        state.skipped.push({ op, reason: action.reason });
+    const held = action.type === 'skip' ? action.reason : holdReason(state, op);
+    if (held !== null || action.type === 'skip') {
+        state.skipped.push({ op, reason: held ?? 'skipped' });
         return 'skipped';
     }
-    const entry = auditBase(plan, op);
-    let newId: string | null;
-    try {
-        newId = await perform(state, action, op);
-    } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        if (error instanceof NotReadyError) {
-            state.skipped.push({ op, reason: detail });
+    if (action.type === 'gone') {
+        return recordWrite(state, op, action, {
+            ok: true,
+            newId: null,
+            gone: true,
+        });
+    }
+    const result = await attempt(state, action, op);
+    if (!result.ok) {
+        if (result.notReady) {
+            state.skipped.push({ op, reason: result.detail });
             return 'skipped';
         }
-        logger.warn(`[guild-sync] ${op.op} ${op.kind} failed: ${detail}`);
-        await store.audit(
-            {
-                ...entry,
-                destId: 'destId' in op ? op.destId : null,
-                after: { error: detail },
-                result: 'failed',
-            },
-            now()
-        );
+        await auditFailure(state, op, result.detail);
         return 'failed';
     }
-    // A database error from here on is not caught: the write happened but
-    // ownership was not recorded, so the add-ons must stop (guard 15).
-    await store.audit(
-        {
-            ...entry,
-            destId: 'destId' in op ? op.destId : newId,
-            after: auditFields(op, action),
-            result: 'ok',
-        },
-        now()
-    );
-    if ('applied' in action) await record(state, op, action.applied, newId);
-    await recordRemoval(state, op);
+    const outcome = await recordWrite(state, op, action, result);
     await state.deps.pause(pauseAfter(action, op.kind));
-    return 'written';
+    return outcome;
 }
 
 /**
@@ -480,16 +662,21 @@ async function recordBaselines(state: RunState): Promise<void> {
     }
 }
 
-/**
- * Applies a plan's ops in order (design: Cycle step 7). A failed write is
- * recorded and the run goes on, up to MAX_FAILURES_PER_CYCLE. The next
- * cycle plans again from fresh snapshots, so nothing is retried blindly.
- */
-export async function applyPlan(
-    input: ApplyInput,
-    deps: ApplyDeps
-): Promise<ApplyResult> {
-    const state: RunState = {
+/** Why the run must stop before the next op, or null. */
+async function stopReason(state: RunState): Promise<string | null> {
+    if (!state.deps.canWrite()) return 'writes were switched off';
+    if (state.failed >= MAX_FAILURES_PER_CYCLE) {
+        return `${state.failed} writes failed`;
+    }
+    const { stillLeader } = state.deps;
+    if (stillLeader && !(await stillLeader())) {
+        return 'the leader lock was lost';
+    }
+    return null;
+}
+
+function newState(input: ApplyInput, deps: ApplyDeps): RunState {
+    return {
         input,
         deps,
         rows: [...input.rows],
@@ -501,28 +688,50 @@ export async function applyPlan(
         ),
         applied: 0,
         failed: 0,
+        failedByKind: new Map(),
         skipped: [],
+        postponed: 0,
+        created: new Set(),
         archiveCategoryId: null,
     };
+}
+
+/**
+ * Applies a plan's ops in order (design: Cycle step 7). A failed write is
+ * recorded and the run goes on, up to MAX_FAILURES_PER_KIND for one kind
+ * and MAX_FAILURES_PER_CYCLE in all. The next cycle plans again from fresh
+ * snapshots, and an op that keeps failing waits out a backoff.
+ */
+export async function applyPlan(
+    input: ApplyInput,
+    deps: ApplyDeps
+): Promise<ApplyResult> {
+    const state = newState(input, deps);
     let stopped: string | null = null;
     for (const op of input.plan.body.ops) {
-        if (!deps.canWrite()) {
-            stopped = 'writes were switched off';
-            break;
-        }
-        if (state.failed >= MAX_FAILURES_PER_CYCLE) {
-            stopped = `${state.failed} writes failed`;
-            break;
+        stopped = await stopReason(state);
+        if (stopped !== null) break;
+        const kindFailures = state.failedByKind.get(op.kind) ?? 0;
+        if (kindFailures >= MAX_FAILURES_PER_KIND) {
+            state.skipped.push({
+                op,
+                reason: `${kindFailures} ${op.kind} writes failed this cycle`,
+            });
+            continue;
         }
         const outcome = await applyOp(state, op);
         if (outcome === 'written') state.applied += 1;
-        else if (outcome === 'failed') state.failed += 1;
+        else if (outcome === 'failed') {
+            state.failed += 1;
+            state.failedByKind.set(op.kind, kindFailures + 1);
+        }
     }
     if (stopped === null && state.failed === 0) await recordBaselines(state);
     return {
         applied: state.applied,
         failed: state.failed,
         skipped: state.skipped,
+        postponed: state.postponed,
         stopped,
     };
 }
