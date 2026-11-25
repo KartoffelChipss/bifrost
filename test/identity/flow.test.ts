@@ -7,6 +7,7 @@ import {
     handleDm,
     hashCode,
     generateCode,
+    describeUser,
     type DmInput,
     type FlowDeps,
 } from '../../src/identity/flow';
@@ -35,8 +36,17 @@ class FakeIdentityStore implements IdentityStore {
         const key = side === 'discord' ? 'discordUserId' : 'fluxerUserId';
         return this.pairs.find((p) => p[key] === userId) ?? null;
     }
+    /** Set to make the next savePair lose a race. */
+    conflictOnSave = false;
+    purged: { now: Date; failuresBefore: Date }[] = [];
+
     async savePair(pair: AccountPair) {
+        if (this.conflictOnSave) return false;
         this.pairs.push(pair);
+        return true;
+    }
+    async purgeExpired(now: Date, failuresBefore: Date) {
+        this.purged.push({ now, failuresBefore });
     }
     async deletePair(side: Side, userId: string) {
         const pair = await this.pairFor(side, userId);
@@ -199,6 +209,19 @@ describe('account linking', () => {
         assert.match(generateCode(), /^[A-HJ-NP-Z2-9]{8}$/);
     });
 
+    it('reports a link that lost a race instead of failing', async () => {
+        const s = setup();
+        await s.dm('discord', 'd1', 'link');
+        await s.dm('fluxer', 'f1', 'link ABCD2345');
+        s.store.conflictOnSave = true;
+        const done = await s.dm('discord', 'd1', 'yes');
+        assert.equal(done.length, 2);
+        for (const reply of done)
+            assert.match(reply.text, /linked in the meantime/);
+        assert.deepEqual(s.store.pairs, []);
+        assert.deepEqual(s.linked, []);
+    });
+
     it('answers anything else with the command list', async () => {
         const s = setup();
         const [help] = await s.dm('discord', 'd1', 'hello?');
@@ -245,5 +268,30 @@ describe('history requests by DM', () => {
             'delete import-f10 555555',
         ]);
         assert.deepEqual(s.history.messages, []);
+    });
+});
+
+describe('describeUser', () => {
+    it('shows the username and ID before the display name', () => {
+        assert.equal(
+            describeUser({ id: '42', username: 'ada', displayName: 'Ada L' }),
+            '@ada (ID 42), display name "Ada L"'
+        );
+        assert.equal(
+            describeUser({ id: '42', username: 'ada', displayName: null }),
+            '@ada (ID 42)'
+        );
+    });
+
+    it('escapes Markdown so a name cannot restyle the question', () => {
+        const text = describeUser({
+            id: '7',
+            username: 'eve_x',
+            displayName: '**[admin](https://x)**\nline',
+        });
+        assert.ok(!/(^|[^\\])\*\*/.test(text), text);
+        assert.match(text, /eve\\_x/);
+        assert.match(text, /\\\[admin\\\]/);
+        assert.ok(!text.includes('\n'));
     });
 });

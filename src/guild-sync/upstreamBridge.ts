@@ -11,7 +11,7 @@ import {
     type Client as DiscordClient,
 } from 'discord.js';
 import type { HistoryPorts, SendTarget, SourceMessage } from '../history/types';
-import type { IdentityPorts } from '../identity';
+import type { IdentityPorts, MemberState, UserInfo } from '../identity';
 import type { Side } from '../identity/store';
 import type { SnapshotSide } from '../addons/db/schema';
 import type { ChannelLink } from '../db/entities/ChannelLink';
@@ -499,28 +499,43 @@ export class UpstreamBridge
         await user.send({ content: text });
     }
 
-    async userName(side: Side, userId: string): Promise<string> {
+    async userInfo(side: Side, userId: string): Promise<UserInfo> {
         if (side === 'discord') {
             const user = await this.up.discordClient.users.fetch(userId);
-            return user.globalName ?? user.username;
+            return {
+                id: user.id,
+                username: user.username,
+                displayName: user.globalName,
+            };
         }
         const user = await this.fluxer().users.fetch(userId);
-        return user.globalName ?? user.username;
+        // Fluxer keeps legacy discriminators; all zeros means none.
+        const tag = /^0*$/.test(user.discriminator)
+            ? ''
+            : `#${user.discriminator}`;
+        return {
+            id: user.id,
+            username: `${user.username}${tag}`,
+            displayName: user.globalName,
+        };
     }
 
-    async discordMemberRoles(
+    async discordMember(
         guildId: string,
         userId: string
-    ): Promise<string[] | null> {
+    ): Promise<MemberState | null> {
         const guild = await this.up.discordClient.guilds.fetch(guildId);
         try {
             const member = await guild.members.fetch({
                 user: userId,
                 force: true,
             });
-            return [...member.roles.cache.keys()].filter(
-                (id) => id !== guildId
-            );
+            return {
+                roleIds: [...member.roles.cache.keys()].filter(
+                    (id) => id !== guildId
+                ),
+                nick: member.nickname,
+            };
         } catch (error) {
             const unknown =
                 error instanceof DiscordAPIError &&
@@ -531,14 +546,14 @@ export class UpstreamBridge
         }
     }
 
-    async fluxerMemberRoles(
+    async fluxerMember(
         guildId: string,
         userId: string
-    ): Promise<string[] | null> {
+    ): Promise<MemberState | null> {
         const guild = await this.fluxer().guilds.fetch(guildId);
         try {
             const member = await guild.fetchMember(userId);
-            return [...member.roles.roleIds];
+            return { roleIds: [...member.roles.roleIds], nick: member.nick };
         } catch (error) {
             if ((error as { statusCode?: unknown }).statusCode === 404) {
                 return null;
@@ -555,5 +570,15 @@ export class UpstreamBridge
         const guild = await this.fluxer().guilds.fetch(guildId);
         const member = await guild.fetchMember(userId);
         await member.roles.set(roleIds);
+    }
+
+    async setFluxerMemberNick(
+        guildId: string,
+        userId: string,
+        nick: string | null
+    ): Promise<void> {
+        const guild = await this.fluxer().guilds.fetch(guildId);
+        const member = await guild.fetchMember(userId);
+        await member.edit({ nick });
     }
 }

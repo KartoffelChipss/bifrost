@@ -22,6 +22,11 @@ export interface AddonConfig {
      * add-ons never copy, bridge or import. A category covers its channels.
      */
     readonly excludedChannels: ReadonlySet<string>;
+    /**
+     * Problems found in add-on settings while add-ons are off. They do not
+     * stop startup; the host logs them as warnings.
+     */
+    readonly warnings: readonly string[];
 }
 
 export type AddonConfigResult =
@@ -90,17 +95,23 @@ function parseIdList(
 }
 
 const BOOL_KEYS = {
-    enabled: 'BF_ADDONS_ENABLED',
     guildSync: 'BF_ADDON_GUILD_SYNC',
     history: 'BF_ADDON_HISTORY',
     identity: 'BF_ADDON_IDENTITY',
     allowApply: 'BF_ADDONS_ALLOW_APPLY',
 } as const;
 
-/** Parses add-on settings from an environment map without side effects. */
-export function parseAddonConfig(env: Env): AddonConfigResult {
-    const flags: Record<keyof typeof BOOL_KEYS, boolean> = {
-        enabled: false,
+type Flags = Record<keyof typeof BOOL_KEYS, boolean>;
+
+/** Every setting except the master switch. Collects each problem found. */
+function parseSettings(env: Env): {
+    flags: Flags;
+    mode: AddonConfig['initialMode'];
+    excluded: ReadonlySet<string>;
+    errors: string[];
+} {
+    const errors: string[] = [];
+    const flags: Flags = {
         guildSync: false,
         history: false,
         identity: false,
@@ -108,40 +119,73 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
     };
     for (const [field, envName] of Object.entries(BOOL_KEYS)) {
         const parsed = parseStrictBool(envName, env[envName]);
-        if (!parsed.ok) return { ok: false, error: parsed.error };
-        flags[field as keyof typeof BOOL_KEYS] = parsed.value;
+        if (parsed.ok) flags[field as keyof Flags] = parsed.value;
+        else errors.push(parsed.error);
     }
-
     const mode = parseMode(env.BF_ADDONS_MODE);
-    if (!mode.ok) return { ok: false, error: mode.error };
-
+    if (!mode.ok) errors.push(mode.error);
     const excluded = parseIdList(
         'BF_ADDONS_EXCLUDE_CHANNELS',
         env.BF_ADDONS_EXCLUDE_CHANNELS
     );
-    if (!excluded.ok) return { ok: false, error: excluded.error };
+    if (!excluded.ok) errors.push(excluded.error);
+    return {
+        flags,
+        mode: mode.ok ? mode.value : 'dry-run',
+        excluded: excluded.ok ? excluded.value : new Set(),
+        errors,
+    };
+}
+
+/** Add-ons off. Bad sub-settings become warnings, so the relay still starts. */
+function disabledConfig(errors: readonly string[]): AddonConfig {
+    return {
+        enabled: false,
+        guildSync: false,
+        history: false,
+        identity: false,
+        initialMode: 'dry-run',
+        allowApply: false,
+        excludedChannels: new Set(),
+        warnings: errors.map(
+            (error) => `${error} (ignored: BF_ADDONS_ENABLED is off)`
+        ),
+    };
+}
+
+/**
+ * Parses add-on settings from an environment map without side effects.
+ * A bad BF_ADDONS_ENABLED is always an error. While add-ons are off, any
+ * other bad setting is only a warning; while they are on, it is an error.
+ */
+export function parseAddonConfig(env: Env): AddonConfigResult {
+    const enabled = parseStrictBool('BF_ADDONS_ENABLED', env.BF_ADDONS_ENABLED);
+    if (!enabled.ok) return { ok: false, error: enabled.error };
+    const settings = parseSettings(env);
+    if (!enabled.value)
+        return { ok: true, config: disabledConfig(settings.errors) };
+    if (settings.errors.length > 0)
+        return { ok: false, error: settings.errors.join('; ') };
 
     // Read exactly as upstream does (src/utils/env.ts, src/db/sequelize.ts):
     // only the literal 'postgres' selects Postgres. The add-on tables use
     // JSONB and an advisory lock, so add-ons refuse to start without it.
     const dialect = env.BF_DB_DIALECT || 'sqlite';
-    if (flags.enabled && dialect !== 'postgres') {
+    if (dialect !== 'postgres') {
         return {
             ok: false,
             error: `BF_ADDONS_ENABLED needs BF_DB_DIALECT=postgres, got ${dialect}`,
         };
     }
-
+    const { flags } = settings;
     return {
         ok: true,
         config: {
-            enabled: flags.enabled,
-            guildSync: flags.enabled && flags.guildSync,
-            history: flags.enabled && flags.history,
-            identity: flags.enabled && flags.identity,
-            initialMode: mode.value,
-            allowApply: flags.enabled && flags.allowApply,
-            excludedChannels: excluded.value,
+            enabled: true,
+            ...flags,
+            initialMode: settings.mode,
+            excludedChannels: settings.excluded,
+            warnings: [],
         },
     };
 }
@@ -153,7 +197,10 @@ export class AddonConfigError extends Error {
     }
 }
 
-/** Parses add-on settings, throwing so startup fails on a bad value. */
+/**
+ * Parses add-on settings, throwing so startup fails on a bad value. While
+ * add-ons are off, only a bad BF_ADDONS_ENABLED throws.
+ */
 export function requireAddonConfig(env: Env): AddonConfig {
     const result = parseAddonConfig(env);
     if (!result.ok) throw new AddonConfigError(result.error);

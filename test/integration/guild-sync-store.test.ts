@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
-import { DataTypes, Sequelize } from 'sequelize';
+import { DataTypes, QueryTypes, Sequelize } from 'sequelize';
 import { runAddonMigrations } from '../../src/addons/db/migrator';
 import { TABLES } from '../../src/addons/db/schema';
 import { EMPTY_BODY } from '../../src/guild-sync/plan';
@@ -363,12 +363,19 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         assert.equal(await identity.takePending('fluxer', 'f1', now), null);
         const pending = await identity.takePending('discord', 'd1', now);
         assert.equal(pending?.fluxerUserId, 'f1');
-        await identity.savePair(
-            { discordUserId: 'd1', fluxerUserId: 'f1' },
-            now
+        assert.equal(
+            await identity.savePair(
+                { discordUserId: 'd1', fluxerUserId: 'f1' },
+                now
+            ),
+            true
         );
-        await assert.rejects(
-            identity.savePair({ discordUserId: 'd2', fluxerUserId: 'f1' }, now)
+        assert.equal(
+            await identity.savePair(
+                { discordUserId: 'd2', fluxerUserId: 'f1' },
+                now
+            ),
+            false
         );
         assert.deepEqual(await identity.pairFor('fluxer', 'f1'), {
             discordUserId: 'd1',
@@ -384,6 +391,40 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
             2
         );
         assert.equal(await identity.failuresSince('fluxer', 'f1', later), 0);
+    });
+
+    it('purges used and expired codes, pending links and old failures', async () => {
+        const identity = new PostgresIdentityStore(db);
+        const now = new Date();
+        const past = new Date(now.getTime() - 60_000);
+        const later = new Date(now.getTime() + 60_000);
+        await identity.saveCode('old', 'discord', 'p1', past);
+        await identity.saveCode('used', 'discord', 'p2', later);
+        await identity.takeCode('used', 'discord', now);
+        await identity.saveCode('live', 'discord', 'p3', later);
+        await identity.savePending({
+            discordUserId: 'p1',
+            fluxerUserId: 'q1',
+            confirmSide: 'discord',
+            confirmUserId: 'p1',
+            expiresAt: past,
+        });
+        await identity.recordFailure('discord', 'p1', past);
+        await identity.recordFailure('discord', 'p1', later);
+        await identity.purgeExpired(now, now);
+        const codes = await db.query<{ codeHash: string }>(
+            `SELECT "codeHash" FROM ${TABLES.identityCodes} WHERE "userId" LIKE 'p%'`,
+            { type: QueryTypes.SELECT }
+        );
+        assert.deepEqual(
+            codes.map((row) => row.codeHash),
+            ['live']
+        );
+        assert.equal(await identity.takePending('discord', 'p1', past), null);
+        assert.equal(
+            await identity.failuresSince('discord', 'p1', new Date(0)),
+            1
+        );
     });
 
     it('takes a separate lock per add-on loop', async () => {

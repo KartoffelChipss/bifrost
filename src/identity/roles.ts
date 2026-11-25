@@ -8,11 +8,50 @@ import type { GuildSnapshot } from '../guild-sync/snapshot';
  * an account can never hand out moderator rights.
  */
 
-/** Administrator, Manage Server, Manage Roles, Manage Channels, Ban, Kick, Moderate. */
-export const PRIVILEGED_BITS = [3, 5, 28, 4, 2, 1, 40].reduce(
+/**
+ * Bits that give moderator or admin rights. A role with any of them, on the
+ * server or in a channel overwrite, never follows a member.
+ */
+export const PRIVILEGED_BIT_NUMBERS = [
+    1, // KickMembers
+    2, // BanMembers
+    3, // Administrator
+    4, // ManageChannels
+    5, // ManageGuild
+    7, // ViewAuditLog
+    13, // ManageMessages
+    17, // MentionEveryone
+    22, // MuteMembers
+    23, // DeafenMembers
+    24, // MoveMembers
+    27, // ManageNicknames
+    28, // ManageRoles
+    29, // ManageWebhooks
+    30, // ManageGuildExpressions
+    33, // ManageEvents
+    34, // ManageThreads
+    40, // ModerateMembers
+] as const;
+
+export const PRIVILEGED_BITS = PRIVILEGED_BIT_NUMBERS.reduce(
     (bits, bit) => bits | bitOf(bit),
     NO_BITS
 );
+
+const isPrivileged = (permissions: string) =>
+    (BigInt(permissions) & PRIVILEGED_BITS) !== NO_BITS;
+
+/** Roles that a channel overwrite grants a privileged bit to. */
+function rolesWithPrivilegedOverwrites(source: GuildSnapshot): Set<string> {
+    const roles = new Set<string>();
+    for (const channel of source.channels) {
+        for (const overwrite of channel.overwrites) {
+            if (overwrite.type === 0 && isPrivileged(overwrite.allow))
+                roles.add(overwrite.id);
+        }
+    }
+    return roles;
+}
 
 /** Discord role ID to Fluxer role ID, for every role that may follow a member. */
 export function syncableRoles(
@@ -25,12 +64,14 @@ export function syncableRoles(
         if (row.discordId && row.fluxerId)
             mapped.set(row.discordId, row.fluxerId);
     }
+    const overwritten = rolesWithPrivilegedOverwrites(source);
     const roles = new Map<string, string>();
     for (const role of source.roles) {
         const dest = mapped.get(role.id);
         if (!dest || role.managed || role.id === source.everyoneRoleId)
             continue;
-        if ((BigInt(role.permissions) & PRIVILEGED_BITS) !== NO_BITS) continue;
+        if (isPrivileged(role.permissions) || overwritten.has(role.id))
+            continue;
         roles.set(role.id, dest);
     }
     return roles;

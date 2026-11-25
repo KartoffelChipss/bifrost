@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import type { AddonConfig } from '../../src/addons/config';
 import { AddonHost, selectAddons, type Addon } from '../../src/addons/host';
-import { startAddons } from '../../src/addons/index';
+import { Sequelize } from 'sequelize';
+import { initAddonDatabase, startAddons } from '../../src/addons/index';
 import { IsolationBoundary } from '../../src/addons/isolation';
 import { AddonModeController } from '../../src/addons/mode';
 import { createRecordingLogger } from './fakes';
@@ -15,6 +16,7 @@ const ALL_ON: AddonConfig = {
     initialMode: 'dry-run',
     allowApply: false,
     excludedChannels: new Set(),
+    warnings: [],
 };
 
 function fakeAddon(
@@ -131,5 +133,43 @@ describe('startAddons', () => {
         assert.ok(handle);
         await handle.stop();
         assert.deepEqual(addon.calls, ['start', 'stop']);
+    });
+});
+
+describe('startAddons after startup problems', () => {
+    const sqlite = new Sequelize('sqlite::memory:', { logging: false });
+    after(() => sqlite.close());
+
+    it('logs config warnings while add-ons are off', async () => {
+        const logger = createRecordingLogger();
+        const handle = await startAddons(
+            { ...ALL_ON, enabled: false, warnings: ['BF_ADDON_X is bad'] },
+            logger,
+            {}
+        );
+        assert.equal(handle, null);
+        assert.ok(
+            logger.entries.some(
+                (e) => e.level === 'warn' && e.message.includes('BF_ADDON_X')
+            )
+        );
+    });
+
+    it('keeps add-ons off after a failed migration', async () => {
+        const logger = createRecordingLogger();
+        // SQLite makes the add-on migrations fail.
+        const state = await initAddonDatabase(ALL_ON, sqlite, logger);
+        assert.equal(state, 'failed');
+        const addon = fakeAddon('guild-sync');
+        const handle = await startAddons(ALL_ON, logger, {
+            guildSync: () => addon,
+        });
+        assert.equal(handle, null);
+        assert.deepEqual(addon.calls, []);
+        assert.ok(
+            logger.entries.some((e) => /migrations failed/.test(e.message))
+        );
+        // Reset the module state for other tests in this file.
+        await initAddonDatabase({ ...ALL_ON, enabled: false }, sqlite, logger);
     });
 });
