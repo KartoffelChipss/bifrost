@@ -570,4 +570,12 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         assert.ok(await store.getPlan(stale[stale.length - 1]));
         await store.setApprovedPlan(link, null, new Date());
     });
+
+    it('turns drift enforcement on and off', async () => {
+        assert.equal((await store.loadSettings(linkId)).enforceDrift, false);
+        await store.setEnforceDrift(linkId, true, new Date());
+        assert.equal((await store.loadSettings(linkId)).enforceDrift, true);
+        await store.setEnforceDrift(linkId, false, new Date());
+        assert.equal((await store.loadSettings(linkId)).enforceDrift, false);
+    });
 });

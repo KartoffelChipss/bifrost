@@ -13,6 +13,7 @@ export type SyncCommand =
     | { readonly type: 'status' }
     | { readonly type: 'mode'; readonly mode: SyncMode }
     | { readonly type: 'kill'; readonly on: boolean }
+    | { readonly type: 'enforce'; readonly on: boolean }
     | { readonly type: 'channel'; readonly here: boolean }
     | { readonly type: 'approve'; readonly planId: string }
     | { readonly type: 'reject'; readonly planId: string }
@@ -23,6 +24,7 @@ export const SYNC_USAGE = [
     '`sync status`',
     '`sync mode <dry-run|apply|read-only>`',
     '`sync kill <on|off>`',
+    '`sync enforce <on|off>`',
     '`sync channel <here|off>`',
     '`sync approve <plan-id>`',
     '`sync reject <plan-id>`',
@@ -42,6 +44,10 @@ export function parseSyncCommand(args: readonly string[]): SyncCommand {
     if (verb === 'kill' && args.length === 2) {
         if (value === 'on') return { type: 'kill', on: true };
         if (value === 'off') return { type: 'kill', on: false };
+    }
+    if (verb === 'enforce' && args.length === 2) {
+        if (value === 'on') return { type: 'enforce', on: true };
+        if (value === 'off') return { type: 'enforce', on: false };
     }
     if (verb === 'channel' && args.length === 2) {
         if (value === 'here') return { type: 'channel', here: true };
@@ -65,6 +71,9 @@ export function describeStatus(
     const lines = [
         `Mode: **${settings.mode}**, direction ${settings.direction}`,
         `Kill switch: **${settings.killSwitch ? 'on' : 'off'}**`,
+        settings.enforceDrift
+            ? 'Drift: **enforced**. Fluxer edits to synced fields are reverted.'
+            : 'Drift: **reported**. Fluxer edits to synced fields are kept.',
         settings.adminChannelId
             ? `Admin channel: <#${settings.adminChannelId}>`
             : 'Admin channel: not set. Plans are only logged.',
@@ -87,6 +96,7 @@ export interface SyncCommandContext {
         | 'loadSettings'
         | 'setMode'
         | 'setKillSwitch'
+        | 'setEnforceDrift'
         | 'setAdminChannel'
         | 'setApprovedPlan'
         | 'setPlanStatus'
@@ -136,6 +146,9 @@ export async function runSyncCommand(
             return null;
         case 'kill':
             await store.setKillSwitch(link.id, command.on, now());
+            return null;
+        case 'enforce':
+            await store.setEnforceDrift(link.id, command.on, now());
             return null;
         case 'channel':
             if (command.here && (await ctx.isChannelLinked(channelId))) {

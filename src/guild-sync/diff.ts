@@ -68,6 +68,12 @@ export interface DiffInput {
          */
         readonly historyReady?: ReadonlySet<string>;
     };
+    /**
+     * Revert destination edits to managed fields (`sync enforce on`): a
+     * drifted field counts as a change. Unmanaged objects and bits stay
+     * out of reach as always: the projections and ownership see to that.
+     */
+    readonly enforceDrift?: boolean;
 }
 
 export interface DiffResult {
@@ -203,7 +209,14 @@ function createOp<T extends { readonly id: string; readonly name: string }>(
 /** Compares one mapped pair against its base (see compareFields). */
 function compareMapped<
     T extends { readonly id: string; readonly name: string },
->(spec: ObjectSpec<T>, map: IdMap, item: T, dest: T, prev: T | undefined) {
+>(
+    spec: ObjectSpec<T>,
+    map: IdMap,
+    item: T,
+    dest: T,
+    prev: T | undefined,
+    enforce: boolean
+) {
     const firstSync =
         spec.implicit?.(item) === true && !map.hasRow(spec.kind, item.id);
     const base =
@@ -213,7 +226,7 @@ function compareMapped<
         spec.projectSource(item),
         spec.projectDest(dest),
         base,
-        firstSync
+        firstSync || enforce
     );
     const opaque = opaqueChanges(
         spec.projectOpaque?.(item) ?? {},
@@ -230,7 +243,8 @@ function compareMapped<
 function diffObjects<T extends { readonly id: string; readonly name: string }>(
     spec: ObjectSpec<T>,
     map: IdMap,
-    out: Out
+    out: Out,
+    enforce = false
 ): void {
     const destById = new Map(spec.dests.map((item) => [item.id, item]));
     const prevById = new Map((spec.previous ?? []).map((i) => [i.id, i]));
@@ -271,7 +285,8 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
             map,
             item,
             dest,
-            prevById.get(item.id)
+            prevById.get(item.id),
+            enforce
         );
         if (changes.length > 0) {
             out.ops.push({
@@ -310,6 +325,7 @@ const notCategory = (c: ChannelSnap) => !isCategory(c);
 
 function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
     const { source, destination, previousSource } = input;
+    const enforce = input.enforceDrift === true;
     const present = new Set(destination.channels.map((c) => c.id));
     // Creates run in source order, so new channels land in that order.
     const channelSpec = (
@@ -348,10 +364,11 @@ function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
             projectOpaque: projectOpaqueRole,
         },
         ctx.map,
-        out
+        out,
+        enforce
     );
-    diffObjects(channelSpec(isCategory, 'category'), ctx.map, out);
-    diffObjects(channelSpec(notCategory, 'channel'), ctx.map, out);
+    diffObjects(channelSpec(isCategory, 'category'), ctx.map, out, enforce);
+    diffObjects(channelSpec(notCategory, 'channel'), ctx.map, out, enforce);
 }
 
 function diffExpressions(input: DiffInput, map: IdMap, out: Out) {
@@ -368,7 +385,8 @@ function diffExpressions(input: DiffInput, map: IdMap, out: Out) {
             skipReason: () => null,
         },
         map,
-        out
+        out,
+        input.enforceDrift === true
     );
     diffObjects(
         {
@@ -382,7 +400,8 @@ function diffExpressions(input: DiffInput, map: IdMap, out: Out) {
             skipReason: () => null,
         },
         map,
-        out
+        out,
+        input.enforceDrift === true
     );
 }
 
@@ -405,7 +424,7 @@ function diffGuild(input: DiffInput, ctx: ProjectionContext, out: Out) {
         guildFields(source, ctx),
         guildFields(destination, null),
         map.applied('guild', source.guildId) ?? prev,
-        firstSync
+        firstSync || input.enforceDrift === true
     );
     // The server icon and banner are not synced. Each server keeps its own.
     const destId = destination.guildId;
@@ -602,7 +621,8 @@ function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
             missingParent: (t) => goneParent(mapped(t), present),
         },
         ctx.map,
-        out
+        out,
+        input.enforceDrift === true
     );
 }
 
@@ -637,7 +657,7 @@ export function diff(input: DiffInput): DiffResult {
     diffThreads(input, ctx, out);
     diffGuild(input, ctx, out);
     reportMemberOverwrites(input, out);
-    diffOrders(input, map, out);
+    diffOrders({ ...input, enforce: input.enforceDrift === true }, map, out);
     reportPermissions(input, out);
     reportFullCategories(input.source, out);
     reportBotPermissions(input, out);

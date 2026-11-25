@@ -31,6 +31,8 @@ export interface SyncSettings extends GuardSettings, ShrinkLimits {
     readonly adminChannelId: string | null;
     /** The pending plan an admin approved. Used once, then cleared. */
     readonly approvedPlanId: string | null;
+    /** Revert Fluxer edits to managed fields instead of reporting drift. */
+    readonly enforceDrift: boolean;
 }
 
 type AppliedFields = Readonly<Record<string, JsonValue>>;
@@ -153,6 +155,7 @@ export interface GuildSyncStore {
     ): Promise<void>;
     setMode(guildLinkId: string, mode: SyncMode, now: Date): Promise<void>;
     setKillSwitch(guildLinkId: string, on: boolean, now: Date): Promise<void>;
+    setEnforceDrift(guildLinkId: string, on: boolean, now: Date): Promise<void>;
     setAdminChannel(
         guildLinkId: string,
         channelId: string | null,
@@ -217,10 +220,14 @@ export function parseSettings(row: Row): SyncSettings {
     if (typeof row.killSwitch !== 'boolean') {
         throw new StoreDataError('killSwitch is not a boolean');
     }
+    if (typeof row.enforceDrift !== 'boolean') {
+        throw new StoreDataError('enforceDrift is not a boolean');
+    }
     return {
         mode: oneOf(SYNC_MODES, row.mode, 'mode'),
         direction: oneOf(SYNC_DIRECTIONS, row.direction, 'direction'),
         killSwitch: row.killSwitch,
+        enforceDrift: row.enforceDrift,
         adminChannelId: optionalId(
             row.adminChannelId ?? null,
             'adminChannelId'
@@ -700,6 +707,18 @@ export class PostgresGuildSyncStore
         await this.loadSettings(guildLinkId);
         await this.db.query(
             `UPDATE ${TABLES.settings} SET "killSwitch" = $2, "updatedAt" = $3 WHERE "guildLinkId" = $1`,
+            { bind: [guildLinkId, on, now] }
+        );
+    }
+
+    async setEnforceDrift(
+        guildLinkId: string,
+        on: boolean,
+        now: Date
+    ): Promise<void> {
+        await this.loadSettings(guildLinkId);
+        await this.db.query(
+            `UPDATE ${TABLES.settings} SET "enforceDrift" = $2, "updatedAt" = $3 WHERE "guildLinkId" = $1`,
             { bind: [guildLinkId, on, now] }
         );
     }

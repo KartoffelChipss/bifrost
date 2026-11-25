@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: SyncSettings = {
     mode: 'dry-run',
     direction: 'discord-to-fluxer',
     killSwitch: false,
+    enforceDrift: false,
     adminChannelId: null,
     approvedPlanId: null,
     shrinkPercent: 10,
@@ -189,6 +190,10 @@ export class FakeStore implements GuildSyncStore {
 
     async setKillSwitch(_link: string, on: boolean) {
         this.settings = { ...this.settings, killSwitch: on };
+    }
+
+    async setEnforceDrift(_link: string, on: boolean) {
+        this.settings = { ...this.settings, enforceDrift: on };
     }
 
     async setAdminChannel(_link: string, adminChannelId: string | null) {

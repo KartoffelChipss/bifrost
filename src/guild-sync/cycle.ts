@@ -377,6 +377,7 @@ async function buildBody(
         excluded,
         members,
         links,
+        enforceDrift: settings.enforceDrift,
     });
     const historyLocked = historyLocks(source.channels, {
         ready: links?.historyReady,

@@ -9,6 +9,7 @@ import * as threads from './migrations/00004-threads';
 import * as historyIdentity from './migrations/00005-history-identity';
 import * as parkedMessages from './migrations/00006-parked-messages';
 import * as historyResilience from './migrations/00007-history-resilience';
+import * as enforceDrift from './migrations/00008-settings-enforce-drift';
 import { MIGRATIONS_MODEL, MIGRATIONS_TABLE } from './schema';
 
 /**
@@ -43,6 +44,11 @@ const MIGRATIONS: RunnableMigration<QueryInterface>[] = [
         name: '00007-history-resilience',
         up: historyResilience.up,
         down: historyResilience.down,
+    },
+    {
+        name: '00008-settings-enforce-drift',
+        up: enforceDrift.up,
+        down: enforceDrift.down,
     },
 ];
 

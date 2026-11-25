@@ -47,6 +47,8 @@ interface OrderInput {
     readonly source: GuildSnapshot;
     readonly destination: GuildSnapshot;
     readonly previousSource: GuildSnapshot | null;
+    /** Restore the source order even when the destination was moved. */
+    readonly enforce?: boolean;
 }
 
 interface Out {
@@ -73,7 +75,8 @@ function sortedDestIds(
 export function diffOrder(
     kind: 'role' | 'channel',
     scope: string,
-    pairs: readonly OrderPair[]
+    pairs: readonly OrderPair[],
+    enforce = false
 ): { op: PlanOp } | { drift: Finding } | null {
     if (pairs.length < 2) return null;
     const wanted = sortedDestIds(
@@ -90,7 +93,8 @@ export function diffOrder(
     // A pending object in the right place still gets a reorder, so its
     // flag clears; after that, a move on the destination is drift.
     if (wanted.join() === actual.join() && !pending) return null;
-    const known = !pending && pairs.every((pair) => pair.prevPos !== null);
+    const known =
+        !enforce && !pending && pairs.every((pair) => pair.prevPos !== null);
     const before = known
         ? sortedDestIds(
               pairs,
@@ -210,7 +214,7 @@ function diffChannelScope(
             detail: 'order differs: Fluxer keeps voice channels below text',
         });
     }
-    push(out, diffOrder('channel', scope, pairs));
+    push(out, diffOrder('channel', scope, pairs, input.enforce === true));
 }
 
 /** Reorder ops for roles and for each channel scope. */
@@ -229,7 +233,8 @@ export function diffOrders(input: OrderInput, map: IdMap, out: Out): void {
                 input.previousSource?.roles ?? null,
                 (r) => map.dest('role', r.id),
                 (r) => map.applied('role', r.id)?.[ORDER_PENDING] === true
-            )
+            ),
+            input.enforce === true
         )
     );
     for (const [scope, channels] of channelScopes(input, map)) {
