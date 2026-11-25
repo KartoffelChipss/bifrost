@@ -60,9 +60,33 @@ export function everyoneHidden(
     return (bits.bits & VIEW_CHANNEL) === NO_BITS;
 }
 
-/** Destination user IDs whose member overwrites the sync manages. */
-export function managedMembers(ctx: ProjectionContext): ReadonlySet<string> {
-    return new Set(ctx.members?.values() ?? []);
+/**
+ * Destination user IDs whose member overwrites the sync manages on one
+ * channel: every linked member, and every member the sync wrote an
+ * overwrite for there before. The second part lets an overwrite go once
+ * its member unlinks, instead of keeping their access forever.
+ */
+export function managedMembers(
+    ctx: ProjectionContext,
+    channel?: { readonly kind: 'category' | 'channel'; readonly destId: string }
+): ReadonlySet<string> {
+    const members = new Set(ctx.members?.values() ?? []);
+    if (!channel) return members;
+    const written = ctx.map.appliedTo(channel.kind, channel.destId)?.overwrites;
+    if (!Array.isArray(written)) return members;
+    for (const item of written) {
+        if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+            continue;
+        }
+        const { id, type } = item as Record<string, JsonValue>;
+        if (type === MEMBER_TYPE && typeof id === 'string') members.add(id);
+    }
+    return members;
+}
+
+/** The map kind of a channel: category or channel. */
+export function channelMapKind(type: number): 'category' | 'channel' {
+    return channelKind(type) === 'category' ? 'category' : 'channel';
 }
 
 const managed = (bits: string) => (BigInt(bits) & MANAGED_BITS).toString();
@@ -148,10 +172,14 @@ function sourceOverwrites(
 }
 
 function destOverwrites(
-    overwrites: readonly OverwriteSnap[],
+    channel: ChannelSnap,
     ctx: ProjectionContext
 ): JsonValue {
-    const members = managedMembers(ctx);
+    const { overwrites } = channel;
+    const members = managedMembers(ctx, {
+        kind: channelMapKind(channel.type),
+        destId: channel.id,
+    });
     const list: Record<string, string>[] = [];
     for (const overwrite of overwrites) {
         const isManaged =
@@ -260,7 +288,7 @@ export function projectDestChannel(
     return {
         name: channel.name,
         ...kindFields(channel, destEmoji),
-        overwrites: destOverwrites(channel.overwrites, ctx),
+        overwrites: destOverwrites(channel, ctx),
         parentId: channel.parentId,
     };
 }

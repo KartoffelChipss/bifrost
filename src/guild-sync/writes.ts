@@ -3,6 +3,7 @@ import type { IdMap } from './idmap';
 import type { FieldChange, JsonValue, PlanOp } from './ops';
 import { bitOf, mergePermissions, NO_BITS } from './permissions';
 import {
+    channelMapKind,
     managedMembers,
     projectEmoji,
     projectSourceChannel,
@@ -423,7 +424,10 @@ function channelPatch(
                 managedOverwrites(change.to),
                 dest.overwrites,
                 ctx.map,
-                managedMembers(ctx)
+                managedMembers(ctx, {
+                    kind: channelMapKind(dest.type),
+                    destId: dest.id,
+                })
             );
         } else if (change.field === 'tags') patch.tags = names(change.to);
         else if (change.field === 'tagMeta') patch.tagMeta = tagMeta(change.to);
