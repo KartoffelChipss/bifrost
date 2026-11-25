@@ -10,11 +10,19 @@ import {
     type Message,
     type PartialMessage,
 } from 'discord.js';
+import {
+    isCommandMessage,
+    upstreamCommandPrefix,
+} from '../relay-extras/commandPrefix';
 import type { ThreadMessageEvent, ThreadRelay } from './threadRelay';
 
 /**
  * Feeds the thread relay from both gateways. Only messages inside threads
  * are passed on; upstream's own handlers deal with channel messages.
+ *
+ * A message that starts with upstream's command prefix is a command, and
+ * upstream's channel relay never copies one; neither does the thread
+ * relay (see src/relay-extras/commandPrefix.ts).
  */
 
 /** Message types a person writes. Joins, pins and renames are skipped. */
@@ -47,12 +55,14 @@ function discordEvent(
 export function listenToDiscordThreads(
     client: DiscordClient,
     relay: ThreadRelay,
-    wrap: Wrap
+    wrap: Wrap,
+    prefix: string = upstreamCommandPrefix()
 ): () => void {
     const onCreate = wrap('thread-message', async (message: Message) => {
         const event = discordEvent(message);
         if (!event || message.author.id === client.user?.id) return;
         if (!DISCORD_USER_TYPES.has(message.type)) return;
+        if (isCommandMessage(message.content, prefix)) return;
         await relay.created('discord', event, message);
     });
     const onUpdate = wrap(
@@ -91,6 +101,7 @@ interface FluxerMessageLike {
     readonly type?: number;
     readonly partial?: boolean;
     readonly author?: { readonly id: string } | null;
+    readonly content?: string | null;
 }
 
 function fluxerEvent(message: FluxerMessageLike): ThreadMessageEvent | null {
@@ -108,7 +119,8 @@ function fluxerEvent(message: FluxerMessageLike): ThreadMessageEvent | null {
 export function listenToFluxerThreads(
     client: FluxerClient,
     relay: ThreadRelay,
-    wrap: Wrap
+    wrap: Wrap,
+    prefix: string = upstreamCommandPrefix()
 ): () => void {
     const onCreate = wrap(
         'thread-message',
@@ -118,6 +130,7 @@ export function listenToFluxerThreads(
             const type = Number(message.type ?? FLUXER_DEFAULT_TYPE);
             if (type !== FLUXER_DEFAULT_TYPE && type !== FLUXER_REPLY_TYPE)
                 return;
+            if (isCommandMessage(message.content, prefix)) return;
             await relay.created('fluxer', event, message);
         }
     );

@@ -29,6 +29,10 @@ import type { LinkService } from '../services/LinkService';
 import DiscordMessageTransformer from '../services/messageTransformer/DiscordMessageTransformer';
 import FluxerMessageTransformer from '../services/messageTransformer/FluxerMessageTransformer';
 import type { WebhookService } from '../services/WebhookService';
+import {
+    defuseContent,
+    upstreamCommandPrefix,
+} from '../relay-extras/commandPrefix';
 import type {
     ChannelLinker,
     LinkedChannel,
@@ -57,6 +61,8 @@ export interface UpstreamServices {
     readonly webhookService: WebhookService;
     readonly discordEntityResolver: DiscordEntityResolver;
     readonly fluxerEntityResolver: FluxerEntityResolver;
+    /** Upstream's command prefix; read from the environment when unset. */
+    readonly commandPrefix?: string;
 }
 
 /** A Discord message, as upstream's transformer takes it. */
@@ -96,7 +102,11 @@ export class UpstreamBridge
     private readonly fromDiscord = new DiscordMessageTransformer();
     private readonly fromFluxer = new FluxerMessageTransformer();
 
-    constructor(private readonly up: UpstreamServices) {}
+    private readonly commandPrefix: string;
+
+    constructor(private readonly up: UpstreamServices) {
+        this.commandPrefix = up.commandPrefix ?? upstreamCommandPrefix();
+    }
 
     /** For the Fluxer writer: upstream's webhook send, with its file handling. */
     readonly sendViaFluxerWebhook: FluxerWebhookSend = (webhook, payload) =>
@@ -215,7 +225,16 @@ export class UpstreamBridge
         const emojis = guildLink
             ? await fluxerEntityResolver.fetchEmojis(guildLink.fluxerGuildId)
             : [];
-        return this.fromDiscord.transformMessage(message, emojis);
+        const payload = await this.fromDiscord.transformMessage(
+            message,
+            emojis
+        );
+        // Every copy posted on Fluxer: a thread reply, an edit, a forum
+        // starter or an imported message must not run as a command there.
+        return {
+            ...payload,
+            content: defuseContent(payload.content, this.commandPrefix),
+        };
     }
 
     private async toDiscordPayload(

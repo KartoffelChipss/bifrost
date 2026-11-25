@@ -82,3 +82,47 @@ describe('UpstreamBridge ReactionPorts', () => {
         );
     });
 });
+
+/** A Discord message with just what upstream's transformer reads. */
+function discordMessage(content: string) {
+    return {
+        content,
+        client: {
+            users: { cache: new Map() },
+            channels: { cache: new Map() },
+        },
+        guild: null,
+        attachments: [],
+        stickers: [],
+        poll: null,
+        embeds: [],
+        reference: null,
+        author: { username: 'alice', avatarURL: () => null },
+    };
+}
+
+describe('UpstreamBridge Fluxer copies', () => {
+    function withPrefix(commandPrefix: string) {
+        const services = {
+            linkService: { getGuildLinkById: async () => null },
+            commandPrefix,
+        } as unknown as UpstreamServices;
+        return new UpstreamBridge(services);
+    }
+
+    it('defuses a leading command prefix so Fluxer never runs it', async () => {
+        const payload = await withPrefix('!b ').payload(
+            discordMessage('!b unlink'),
+            'gl'
+        );
+        assert.equal(payload.content, '​!b unlink');
+    });
+
+    it('leaves other content alone', async () => {
+        const payload = await withPrefix('!b ').payload(
+            discordMessage('hello !b unlink'),
+            'gl'
+        );
+        assert.equal(payload.content, 'hello !b unlink');
+    });
+});
