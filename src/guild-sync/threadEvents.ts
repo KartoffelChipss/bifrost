@@ -96,7 +96,8 @@ export function listenToDiscordThreads(
     client.on(Events.MessageUpdate, onUpdate);
     client.on(Events.MessageDelete, onDelete);
     // Parked replies are retried while the relay listens.
-    relay.startFlushing();
+    const flush = wrap('thread-flush', (pass: () => Promise<void>) => pass());
+    relay.startFlushing(flush);
     return () => {
         relay.stopFlushing();
         client.off(Events.MessageCreate, onCreate);

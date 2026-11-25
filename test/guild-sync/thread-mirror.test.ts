@@ -7,6 +7,7 @@ import {
     type FluxerThreadInfo,
 } from '../../src/guild-sync/threadMirror';
 import { ThreadRelay } from '../../src/guild-sync/threadRelay';
+import { UnrecordedWriteError } from '../../src/addons/isolation';
 import { createRecordingLogger } from '../addons/fakes';
 import { FakeLinker } from './fake-store';
 
@@ -31,7 +32,10 @@ class MirrorStore {
 
     async deleteThreadMessage() {}
 
+    failInsert = false;
+
     async insertMapping(mapping: NewMapping) {
+        if (this.failInsert) throw new Error('connection reset');
         this.mappings.push(mapping);
         if (mapping.discordId && mapping.fluxerId) {
             this.pairs.push({
@@ -177,5 +181,14 @@ describe('a thread started on Fluxer', () => {
             await s.relay.created('fluxer', inFluxerPost('r1'), 'reply');
             assert.deepEqual(s.calls, []);
         }
+    });
+
+    it('raises an unrecorded write when the new thread cannot be saved', async () => {
+        const s = await setup();
+        s.store.failInsert = true;
+        await assert.rejects(
+            s.relay.created('fluxer', inFluxerPost('r1'), 'reply'),
+            UnrecordedWriteError
+        );
     });
 });

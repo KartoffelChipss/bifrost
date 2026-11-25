@@ -1,5 +1,5 @@
 import type { SnapshotSide } from '../addons/db/schema';
-import type { AddonLogger } from '../addons/isolation';
+import { UnrecordedWriteError, type AddonLogger } from '../addons/isolation';
 import { KeyedQueue } from '../relay-extras/queue';
 import type { ChannelLinker, LinkedChannel } from './links';
 import {
@@ -144,11 +144,15 @@ export class ThreadRelay {
         return !link || this.isOwn(from, event, link) ? null : link;
     }
 
-    /** Runs relay work so a failure is logged and never escapes. */
+    /**
+     * Runs relay work so a failure is logged and never escapes. Only an
+     * unrecorded structure write escapes, so the boundary stops add-ons.
+     */
     private async guarded(what: string, work: () => Promise<void>) {
         try {
             await work();
         } catch (error) {
+            if (error instanceof UnrecordedWriteError) throw error;
             const detail = error instanceof Error ? error.message : error;
             this.deps.logger.warn(
                 `[guild-sync] Thread relay ${what}: ${detail}`
@@ -285,6 +289,7 @@ export class ThreadRelay {
         try {
             return await this.resend(parked);
         } catch (error) {
+            if (error instanceof UnrecordedWriteError) throw error;
             const failures = await this.parked.failed(
                 parked.from,
                 parked.messageId
@@ -294,8 +299,7 @@ export class ThreadRelay {
                 `[guild-sync] Thread relay send of held ${parked.messageId} failed (${failures}/${MAX_PARKED_FAILURES}): ${detail}`
             );
             // Keep the order; give up on a reply that keeps failing.
-            if (failures < MAX_PARKED_FAILURES) return false;
-            return true;
+            return failures >= MAX_PARKED_FAILURES;
         }
     }
 
@@ -330,14 +334,35 @@ export class ThreadRelay {
     }
 
     /** Retries parked threads every {@link PARKED_POLL_MS} until stopped. */
-    startFlushing(): void {
+    /**
+     * `run` runs each pass, such as inside the isolation boundary; without
+     * it, a pass's escaping error is logged.
+     */
+    startFlushing(run?: (pass: () => Promise<void>) => void): void {
         if (this.timer) return;
-        this.timer = setInterval(() => {
-            if (this.flushing) return;
-            this.flushing = this.flush().finally(() => {
-                this.flushing = null;
+        const pass = () => this.pollOnce();
+        const tick =
+            run ??
+            ((work: () => Promise<void>) => {
+                work().catch((error: unknown) =>
+                    this.deps.logger.error(
+                        '[guild-sync] Thread relay flush failed:',
+                        error
+                    )
+                );
             });
-        }, PARKED_POLL_MS);
+        this.timer = setInterval(() => tick(pass), PARKED_POLL_MS);
+    }
+
+    /** One timed pass; skipped while the previous one runs. */
+    private async pollOnce(): Promise<void> {
+        if (this.flushing) return;
+        this.flushing = this.flush();
+        try {
+            await this.flushing;
+        } finally {
+            this.flushing = null;
+        }
     }
 
     stopFlushing(): void {

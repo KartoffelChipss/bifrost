@@ -17,8 +17,13 @@ import type { RelayLookupPorts, Side } from './types';
  *
  * Mode: like guild-sync's thread relay, this runs in dry-run and apply and
  * stops in read-only. Dry-run governs structure plans, not live relaying;
- * read-only (set by an admin or tripped by an error) stops every add-on
- * write. Mode is read per event, so a trip takes effect at once.
+ * read-only (set by an admin, or tripped by a failed structure write)
+ * stops every add-on write. Mode is read per event, so a trip takes
+ * effect at once.
+ *
+ * Errors: listeners run through the boundary's live failure policy
+ * (src/addons/isolation.ts). Repeated errors pause one feature, such as
+ * pins, for a few minutes; they never switch the add-ons to read-only.
  */
 
 export const RELAY_EXTRAS_NAME = 'relay-extras';
