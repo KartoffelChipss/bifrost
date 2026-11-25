@@ -1,17 +1,31 @@
 import { randomUUID } from 'node:crypto';
 import { QueryTypes, type Sequelize } from 'sequelize';
 import { TABLES } from '../addons/db/schema';
+import { MAX_MAP_ROWS } from '../guild-sync/store';
 import type {
     HistoryJob,
     ImportedMessage,
+    JobKey,
     JobKind,
     JobPatch,
     JobStatus,
+    JobTotals,
 } from './types';
 
 /** The database access the history importer needs. */
 export interface HistoryStore {
+    /** A link's jobs, oldest first, up to MAX_JOBS. */
     listJobs(guildLinkId: string): Promise<HistoryJob[]>;
+    /** A link's jobs that are neither done nor failed, up to MAX_JOBS. */
+    listOpenJobs(guildLinkId: string): Promise<HistoryJob[]>;
+    /** Only the columns planning needs, for every job up to MAX_JOBS. */
+    jobKeys(guildLinkId: string): Promise<JobKey[]>;
+    jobTotals(guildLinkId: string): Promise<JobTotals>;
+    /**
+     * True while a job waits for a time rather than for work: a channel
+     * copied and waiting for its bridge, or an open job in a backoff.
+     */
+    hasWaitingJob(guildLinkId: string, now: Date): Promise<boolean>;
     getJob(jobId: string): Promise<HistoryJob | null>;
     /** Creates a job unless one exists for this source. */
     ensureJob(
@@ -126,6 +140,7 @@ export function parseJob(row: Row): HistoryJob {
         retries: int(row, 'retries'),
         retryAt: row.retryAt instanceof Date ? row.retryAt : null,
         skipped: int(row, 'skipped'),
+        skipStreak: int(row, 'skipStreak'),
         messageCount:
             row.messageCount === null ? null : int(row, 'messageCount'),
         attachmentCount:
@@ -166,6 +181,7 @@ const PATCH_COLUMNS: readonly (keyof JobPatch)[] = [
     'retries',
     'retryAt',
     'skipped',
+    'skipStreak',
     'messageCount',
     'attachmentCount',
     'surveyedAt',
@@ -173,8 +189,34 @@ const PATCH_COLUMNS: readonly (keyof JobPatch)[] = [
     'lastError',
 ];
 
-/** Upper bound on jobs per guild link: channels plus threads. */
-export const MAX_JOBS = 10_000;
+/**
+ * Upper bound on jobs per guild link: channels plus threads, in line with
+ * guild-sync's map rows, where every synced thread has a row too. The
+ * importer stops making jobs at this bound (createJobs); listings stop
+ * at it rather than fail, so the jobs already made keep running.
+ */
+export const MAX_JOBS = MAX_MAP_ROWS;
+
+/** A job neither done nor failed. */
+const OPEN = `status NOT IN ('done', 'failed')`;
+
+function totalsOf(row: Row | undefined): JobTotals {
+    // count() and sum() are bigint, which pg returns as text.
+    const num = (field: string) => {
+        const value = Number(row?.[field] ?? 0);
+        if (!Number.isSafeInteger(value) || value < 0) {
+            throw new HistoryDataError(`${field} is not a count`);
+        }
+        return value;
+    };
+    return {
+        jobs: num('jobs'),
+        open: num('open'),
+        imported: num('imported'),
+        skipped: num('skipped'),
+        failed: num('failed'),
+    };
+}
 
 export class PostgresHistoryStore implements HistoryStore {
     constructor(private readonly db: Sequelize) {
@@ -186,12 +228,61 @@ export class PostgresHistoryStore implements HistoryStore {
     async listJobs(guildLinkId: string): Promise<HistoryJob[]> {
         const rows = await this.db.query<Row>(
             `SELECT * FROM ${TABLES.historyJobs} WHERE "guildLinkId" = $1 ORDER BY "createdAt", id LIMIT $2`,
-            { bind: [guildLinkId, MAX_JOBS + 1], type: QueryTypes.SELECT }
+            { bind: [guildLinkId, MAX_JOBS], type: QueryTypes.SELECT }
         );
-        if (rows.length > MAX_JOBS) {
-            throw new HistoryDataError(`over ${MAX_JOBS} history jobs`);
-        }
         return rows.map(parseJob);
+    }
+
+    async listOpenJobs(guildLinkId: string): Promise<HistoryJob[]> {
+        const rows = await this.db.query<Row>(
+            `SELECT * FROM ${TABLES.historyJobs} WHERE "guildLinkId" = $1 AND ${OPEN} ORDER BY "createdAt", id LIMIT $2`,
+            { bind: [guildLinkId, MAX_JOBS], type: QueryTypes.SELECT }
+        );
+        return rows.map(parseJob);
+    }
+
+    async jobKeys(guildLinkId: string): Promise<JobKey[]> {
+        const rows = await this.db.query<Row>(
+            `SELECT id, kind, "discordId", "fluxerId" FROM ${TABLES.historyJobs} WHERE "guildLinkId" = $1 ORDER BY "createdAt", id LIMIT $2`,
+            { bind: [guildLinkId, MAX_JOBS], type: QueryTypes.SELECT }
+        );
+        return rows.map((row) => {
+            const kind = str(row, 'kind');
+            if (kind !== 'channel' && kind !== 'thread') {
+                throw new HistoryDataError('history job has an unknown kind');
+            }
+            return {
+                id: str(row, 'id'),
+                kind,
+                discordId: str(row, 'discordId'),
+                fluxerId: optStr(row, 'fluxerId'),
+            };
+        });
+    }
+
+    async jobTotals(guildLinkId: string): Promise<JobTotals> {
+        const rows = await this.db.query<Row>(
+            `SELECT count(*) AS jobs,
+                    count(*) FILTER (WHERE ${OPEN}) AS open,
+                    coalesce(sum(imported), 0) AS imported,
+                    coalesce(sum(skipped), 0) AS skipped,
+                    count(*) FILTER (WHERE status = 'failed') AS failed
+             FROM ${TABLES.historyJobs} WHERE "guildLinkId" = $1`,
+            { bind: [guildLinkId], type: QueryTypes.SELECT }
+        );
+        return totalsOf(rows[0]);
+    }
+
+    async hasWaitingJob(guildLinkId: string, now: Date): Promise<boolean> {
+        const rows = await this.db.query<Row>(
+            `SELECT 1 FROM ${TABLES.historyJobs}
+             WHERE "guildLinkId" = $1
+               AND ((kind = 'channel' AND status = 'ready')
+                    OR (${OPEN} AND "retryAt" > $2))
+             LIMIT 1`,
+            { bind: [guildLinkId, now], type: QueryTypes.SELECT }
+        );
+        return rows.length > 0;
     }
 
     async getJob(jobId: string): Promise<HistoryJob | null> {
@@ -342,7 +433,7 @@ export class PostgresHistoryStore implements HistoryStore {
         const rows = await this.db.query<Row>(
             `UPDATE ${TABLES.historyJobs}
              SET status = CASE WHEN "cutoffId" IS NULL THEN 'pending' ELSE 'importing' END,
-                 failures = 0, retries = 0, "retryAt" = NULL, "lastError" = NULL, "updatedAt" = $2
+                 failures = 0, retries = 0, "skipStreak" = 0, "retryAt" = NULL, "lastError" = NULL, "updatedAt" = $2
              WHERE "guildLinkId" = $1 AND status = 'failed'
              RETURNING id`,
             { bind: [guildLinkId, now], type: QueryTypes.SELECT }

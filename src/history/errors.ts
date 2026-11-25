@@ -52,6 +52,39 @@ const UPLOAD_CODES: ReadonlySet<string> = new Set([
     'NO_FILE_FOR_ATTACHMENT_METADATA',
 ]);
 
+/**
+ * Error codes that blame the target, not the message: the webhook, the
+ * channel or the guild is gone, or the bot may not write there. Fluxer
+ * names them in packages/constants ApiErrorCodes (UnknownWebhookError and
+ * UnknownChannelError are 404s, MissingAccess and MissingPermissions 403s,
+ * ThreadLockedError a 400); Discord uses numeric codes (10003 Unknown
+ * Channel, 10004 Unknown Guild, 10015 Unknown Webhook, 50001 Missing
+ * Access, 50013 Missing Permissions).
+ */
+const TARGET_CODES: ReadonlySet<string | number> = new Set([
+    'UNKNOWN_WEBHOOK',
+    'UNKNOWN_CHANNEL',
+    'UNKNOWN_GUILD',
+    'MISSING_ACCESS',
+    'MISSING_PERMISSIONS',
+    'UNAUTHORIZED',
+    'THREAD_LOCKED',
+    10003,
+    10004,
+    10015,
+    50001,
+    50013,
+]);
+
+/** HTTP statuses that blame the target when the body names no code. */
+const TARGET_STATUSES: ReadonlySet<number> = new Set([401, 403, 404]);
+
+/** Fluxer refuses webhook edits in an archived or locked thread. */
+const CLOSED_THREAD_CODES: ReadonlySet<string> = new Set([
+    'THREAD_ARCHIVED',
+    'THREAD_LOCKED',
+]);
+
 type Fields = Record<string, unknown>;
 
 function fields(error: unknown): Fields {
@@ -93,6 +126,47 @@ export function isTransient(error: unknown): boolean {
     if (transientShape(root)) return true;
     const { cause } = fields(root);
     return cause !== undefined && transientShape(cause);
+}
+
+/** A REST error's code: Fluxer's are strings, Discord's numbers. */
+function codeOf(error: unknown): string | number | null {
+    const { code } = fields(error);
+    return typeof code === 'string' || typeof code === 'number' ? code : null;
+}
+
+/**
+ * True when the error is about where copies go rather than about one
+ * message: an unknown webhook, channel or guild, missing access, or a
+ * refused login. Every message would fail the same way, so the job backs
+ * off and fails instead of skipping messages one by one. A 401 always
+ * counts; a 403 or 404 counts when its code is one of TARGET_CODES or
+ * the body names no code. Another code, such as an unknown sticker, is
+ * the message's own problem.
+ */
+export function isTargetError(error: unknown): boolean {
+    const root = rootOf(error);
+    const status = statusOf(root);
+    if (status === 401) return true;
+    const code = codeOf(root);
+    if (code !== null) return TARGET_CODES.has(code);
+    return status !== null && TARGET_STATUSES.has(status);
+}
+
+/** True when the webhook the copy was sent through no longer exists. */
+export function isUnknownWebhook(error: unknown): boolean {
+    const code = codeOf(rootOf(error));
+    return code === 'UNKNOWN_WEBHOOK' || code === 10015;
+}
+
+/**
+ * THREAD_ARCHIVED or THREAD_LOCKED when Fluxer refused a webhook edit
+ * because its thread is closed, else null.
+ */
+export function closedThreadCode(error: unknown): string | null {
+    const code = codeOf(rootOf(error));
+    return typeof code === 'string' && CLOSED_THREAD_CODES.has(code)
+        ? code
+        : null;
 }
 
 /** True when the platform refused the message's files, not the message. */
