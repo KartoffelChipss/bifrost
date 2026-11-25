@@ -3,6 +3,7 @@ import type { FailureLedger } from './failures';
 import type { AddonLogger } from '../addons/isolation';
 import type { AssetSource } from './assets';
 import { IdMap } from './idmap';
+import { OwnershipLostError } from './cycleGuard';
 import type { ChannelLinker, ThreadSource } from './links';
 import type { JsonValue, MapRow, PlanOp } from './ops';
 import { destIdOf, isRemoval } from './ops';
@@ -646,18 +647,15 @@ async function followUp(
     return true;
 }
 
-/** Records a successful write: audit, ownership, removal state, follow-up. */
-async function recordWrite(
+/** Audit, ownership and removal state for a write that went through. */
+async function recordOutcome(
     state: RunState,
     op: PlanOp,
     action: Exclude<WriteAction, { type: 'skip' }>,
     result: Extract<Attempt, { ok: true }>
-): Promise<'written' | 'failed'> {
+): Promise<void> {
     const { plan } = state.input;
-    const { store, now, failures } = state.deps;
-    failures?.succeeded(opKey(plan, op));
-    // A database error from here on is not caught: the write happened but
-    // ownership was not recorded, so the add-ons must stop (guard 15).
+    const { store, now } = state.deps;
     await store.audit(
         {
             ...auditBase(plan, op),
@@ -670,12 +668,35 @@ async function recordWrite(
     if ('applied' in action) {
         await record(state, op, action.applied, result.newId);
     }
+    await recordRemoval(state, op, result.gone || action.type === 'gone');
+    await settleOrder(state, op, action);
+}
+
+/**
+ * Records a write that went through. A failure to record it means the
+ * bot may own an object the map does not know of: that is the one case
+ * that must stop the add-ons (guard 15, see cycleGuard.ts).
+ */
+async function recordWrite(
+    state: RunState,
+    op: PlanOp,
+    action: Exclude<WriteAction, { type: 'skip' }>,
+    result: Extract<Attempt, { ok: true }>
+): Promise<'written' | 'failed'> {
+    state.deps.failures?.succeeded(opKey(state.input.plan, op));
+    try {
+        await recordOutcome(state, op, action, result);
+    } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new OwnershipLostError(
+            `${op.op} ${op.kind} was written but not recorded: ${detail}`,
+            error
+        );
+    }
     noteMoves(state, op);
     if (isEveryoneUpdate(op, state.input.destination.everyoneRoleId)) {
         state.everyonePending = false;
     }
-    await recordRemoval(state, op, result.gone || action.type === 'gone');
-    await settleOrder(state, op, action);
     const next = 'followUp' in action ? action.followUp : null;
     if (next && result.newId) {
         await state.deps.pause(UPDATE_WRITE_MS);
