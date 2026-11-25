@@ -36,9 +36,11 @@ import {
     MAX_LINKS,
     MAX_ROLE_REMOVALS_PER_HOUR,
     RoleSync,
+    SWEEP_BUDGET_MS,
+    rotate,
     type Tally,
 } from './roleSync';
-import { PostgresIdentityStore } from './store';
+import { PostgresIdentityStore, type AccountPair } from './store';
 
 export type { IdentityPorts, MemberState, UserInfo } from './ports';
 
@@ -274,35 +276,72 @@ function listen(l: Listeners): () => void {
 }
 
 /** The admin notice for one link in dry-run. */
-export function dryRunNotice(pairs: number, tally: Tally): string {
-    return `Account linking (dry-run): ${pairs} linked members. Would add ${tally.add} roles, remove ${tally.remove} roles and set ${tally.nicks} nicknames. At most ${MAX_ROLE_REMOVALS_PER_HOUR} role removals per hour are applied.`;
+export function dryRunNotice(
+    pairs: number,
+    tally: Tally,
+    checked = pairs
+): string {
+    const partial =
+        checked < pairs
+            ? ` (${checked} checked this sweep; the rest next)`
+            : '';
+    return `Account linking (dry-run): ${pairs} linked members${partial}. Would add ${tally.add} roles, remove ${tally.remove} roles and set ${tally.nicks} nicknames. At most ${MAX_ROLE_REMOVALS_PER_HOUR} role removals per hour are applied.`;
 }
 
-/** Housekeeping, then one pass over every linked member and guild link. */
-async function sweep(
-    deps: IdentityDeps,
-    roles: RoleSync,
-    store: PostgresIdentityStore,
-    notices: NoticeBoard
-) {
+/** Where each guild link's next sweep resumes, by pair index. */
+type Cursors = Map<string, number>;
+
+interface SweepParts {
+    readonly roles: RoleSync;
+    readonly store: PostgresIdentityStore;
+    readonly notices: NoticeBoard;
+    readonly logger: AddonLogger;
+}
+
+/**
+ * Housekeeping, then one pass over the guild links and their linked
+ * members, bounded by SWEEP_BUDGET_MS; each link resumes where its last
+ * sweep stopped. One link's failure is logged and skips only that link.
+ */
+async function sweep(deps: IdentityDeps, s: SweepParts, cursors: Cursors) {
     const now = new Date();
-    await store.purgeExpired(
+    const deadline = now.getTime() + SWEEP_BUDGET_MS;
+    await s.store.purgeExpired(
         now,
         new Date(now.getTime() - FAILURE_RETENTION_MS)
     );
-    const pairs = await store.listPairs();
+    const pairs = await s.store.listPairs();
     for (const link of (await deps.listGuildLinks()).slice(0, MAX_LINKS)) {
-        const result = await roles.sweepLink(link, pairs);
-        if (!result || result.plan.mode !== 'dry-run' || pairs.length === 0)
-            continue;
-        const text = dryRunNotice(pairs.length, result.tally);
-        await notices.post(
-            `identity:${link.id}`,
-            result.plan.adminChannelId,
-            text,
-            text
+        if (Date.now() >= deadline) break;
+        await quietly(s.logger, `Sweep of guild link ${link.id}`, () =>
+            sweepOne(link, pairs, deadline, s, cursors)
         );
     }
+}
+
+async function sweepOne(
+    link: LinkedGuild,
+    pairs: readonly AccountPair[],
+    deadline: number,
+    s: SweepParts,
+    cursors: Cursors
+): Promise<void> {
+    const start = cursors.get(link.id) ?? 0;
+    const result = await s.roles.sweepLink(
+        link,
+        rotate(pairs, start),
+        deadline
+    );
+    if (!result) return;
+    cursors.set(link.id, (start + result.checked) % Math.max(pairs.length, 1));
+    if (result.plan.mode !== 'dry-run' || pairs.length === 0) return;
+    const text = dryRunNotice(pairs.length, result.tally, result.checked);
+    await s.notices.post(
+        `identity:${link.id}`,
+        result.plan.adminChannelId,
+        text,
+        text
+    );
 }
 
 function createRoleSync(deps: IdentityDeps, context: AddonContext) {
@@ -325,14 +364,20 @@ function sweepTask(
     store: PostgresIdentityStore
 ): RepeatingTask {
     const lock = new PostgresGuildSyncStore(deps.sequelize);
-    const notices = new NoticeBoard(deps.sendNotice, context.logger);
+    const parts: SweepParts = {
+        roles,
+        store,
+        notices: new NoticeBoard(deps.sendNotice, context.logger),
+        logger: context.logger,
+    };
+    const cursors: Cursors = new Map();
     const holder = `${hostname()}:${process.pid}:identity`;
     return new RepeatingTask(
         async () => {
             await context.boundary.run(ADDON_NAME, 'sweep', () =>
                 lock.withLeaderLock(
                     holder,
-                    () => sweep(deps, roles, store, notices),
+                    () => sweep(deps, parts, cursors),
                     IDENTITY_LOCK_KEY
                 )
             );

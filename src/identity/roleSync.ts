@@ -23,6 +23,31 @@ const HOUR_MS = 60 * 60_000;
 export const MAX_LINKS = 50;
 /** Guild links whose removal budget is kept at once. */
 const MAX_TRACKED_LINKS = 1_000;
+/**
+ * A link's role lists, from its snapshot and map, are reused this long by
+ * member events: the sweep interval, after which a sweep reloads them.
+ */
+export const PLAN_TTL_MS = 10 * 60_000;
+/**
+ * A sweep starts no new member after this long. The sweep holds the
+ * identity leader lock, a Postgres transaction, so the bound keeps it
+ * short; the next sweep carries on where this one stopped.
+ */
+export const SWEEP_BUDGET_MS = 60_000;
+
+/** Role lists loaded from a link's snapshot and map. */
+interface RoleLists {
+    readonly at: number;
+    readonly syncable: ReadonlyMap<string, string>;
+    readonly managed: ReadonlyMap<string, string>;
+}
+
+/** `items` starting at `start`, wrapping around: a sweep's resume order. */
+export function rotate<T>(items: readonly T[], start: number): T[] {
+    if (items.length === 0) return [];
+    const at = ((start % items.length) + items.length) % items.length;
+    return [...items.slice(at), ...items.slice(0, at)];
+}
 
 export interface RoleSyncDeps {
     readonly store: Pick<
@@ -77,13 +102,17 @@ export class RoleSync {
         MAX_TRACKED_LINKS
     );
     private readonly nicks = new NickMemory();
+    private readonly lists = new Map<string, RoleLists>();
 
     constructor(private readonly deps: RoleSyncDeps) {}
 
-    /** Loads a link's settings, snapshot and map. Null when it syncs nothing. */
-    async plan(link: LinkedGuild): Promise<LinkPlan | null> {
-        const { store } = this.deps;
-        const settings = await store.loadSettings(link.id);
+    /**
+     * Loads a link's settings, and its role lists from the snapshot and
+     * map unless loaded within PLAN_TTL_MS (`fresh` always reloads them).
+     * Null when the link syncs nothing.
+     */
+    async plan(link: LinkedGuild, fresh = false): Promise<LinkPlan | null> {
+        const settings = await this.deps.store.loadSettings(link.id);
         if (settings.direction !== 'discord-to-fluxer') return null;
         const { mode } = resolveMode(
             this.deps.processMode(),
@@ -91,16 +120,40 @@ export class RoleSync {
             this.deps.allowApply
         );
         if (mode === 'read-only') return null;
-        const snapshot = await store.lastSnapshot(link.id, 'discord', true);
-        if (!snapshot) return null;
-        const rows = await store.loadObjectMap(link.id);
+        const lists = await this.roleLists(link, fresh);
+        if (!lists) return null;
         return {
             link,
             mode,
             adminChannelId: settings.adminChannelId,
+            syncable: lists.syncable,
+            managed: lists.managed,
+        };
+    }
+
+    private async roleLists(
+        link: LinkedGuild,
+        fresh: boolean
+    ): Promise<RoleLists | null> {
+        const now = this.deps.now();
+        const cached = this.lists.get(link.id);
+        if (!fresh && cached && now - cached.at < PLAN_TTL_MS) return cached;
+        const { store } = this.deps;
+        const snapshot = await store.lastSnapshot(link.id, 'discord', true);
+        if (!snapshot) return null;
+        const rows = await store.loadObjectMap(link.id);
+        const lists = {
+            at: now,
             syncable: syncableRoles(snapshot, rows),
             managed: managedRoles(snapshot, rows),
         };
+        this.lists.delete(link.id);
+        if (this.lists.size >= MAX_TRACKED_LINKS) {
+            const oldest = this.lists.keys().next();
+            if (!oldest.done) this.lists.delete(oldest.value);
+        }
+        this.lists.set(link.id, lists);
+        return lists;
     }
 
     /** Syncs one member on one link. Never throws. */
@@ -169,16 +222,25 @@ export class RoleSync {
         await this.applyRoles(plan, pair, fluxer, change, emptyTally());
     }
 
-    /** Syncs every pair on one link. Null when the link syncs nothing. */
+    /**
+     * Syncs the pairs on one link in order until `deadline` (ms). Returns
+     * how many were checked, or null when the link syncs nothing.
+     */
     async sweepLink(
         link: LinkedGuild,
-        pairs: readonly AccountPair[]
-    ): Promise<{ plan: LinkPlan; tally: Tally } | null> {
-        const plan = await this.plan(link);
+        pairs: readonly AccountPair[],
+        deadline = Number.POSITIVE_INFINITY
+    ): Promise<{ plan: LinkPlan; tally: Tally; checked: number } | null> {
+        const plan = await this.plan(link, true);
         if (!plan) return null;
         const tally = emptyTally();
-        for (const pair of pairs) await this.member(plan, pair, tally);
-        return { plan, tally };
+        let checked = 0;
+        for (const pair of pairs) {
+            if (this.deps.now() >= deadline) break;
+            await this.member(plan, pair, tally);
+            checked += 1;
+        }
+        return { plan, tally, checked };
     }
 
     private async syncMember(plan: LinkPlan, pair: AccountPair, tally: Tally) {

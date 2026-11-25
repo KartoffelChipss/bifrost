@@ -5,7 +5,9 @@ import type { LinkedGuild } from '../../src/guild-sync/cycle';
 import type { MemberState } from '../../src/identity/ports';
 import {
     MAX_ROLE_REMOVALS_PER_HOUR,
+    PLAN_TTL_MS,
     RoleSync,
+    rotate,
 } from '../../src/identity/roleSync';
 import type { AccountPair } from '../../src/identity/store';
 import { createRecordingLogger } from '../addons/fakes';
@@ -21,9 +23,16 @@ const HOUR_MS = 60 * 60_000;
 
 class CountingStore extends FakeStore {
     settingsLoads = 0;
+    snapshotLoads = 0;
     override async loadSettings() {
         this.settingsLoads += 1;
         return super.loadSettings();
+    }
+    override async lastSnapshot(
+        ...args: Parameters<FakeStore['lastSnapshot']>
+    ) {
+        this.snapshotLoads += 1;
+        return super.lastSnapshot(...args);
     }
 }
 
@@ -232,5 +241,38 @@ describe('RoleSync members who left and unlinks', () => {
         t.members.fluxer.set('f1', { roleIds: ['f-gamer'], nick: null });
         await t.roles.strip(pairOf(1));
         assert.deepEqual(t.members.roleWrites, []);
+    });
+});
+
+describe('RoleSync bounds', () => {
+    it('stops a sweep at its deadline and reports how many it checked', async () => {
+        const s = setup();
+        const pairs = withStaleRoles(s, 5);
+        s.members.fluxerMember = async (_guild, userId) => {
+            s.clock.now += 10;
+            return { roleIds: ['f-gamer'], nick: null, userId };
+        };
+        const result = await s.roles.sweepLink(LINK, pairs, s.clock.now + 25);
+        assert.equal(result?.checked, 3);
+    });
+
+    it('resumes in rotated order', () => {
+        assert.deepEqual(rotate([1, 2, 3, 4], 3), [4, 1, 2, 3]);
+        assert.deepEqual(rotate([1, 2], 5), [2, 1]);
+        assert.deepEqual(rotate([], 2), []);
+    });
+
+    it('reuses a link role lists for member events until they expire', async () => {
+        const s = setup();
+        s.members.discord.set('d1', { roleIds: ['gamer'], nick: null });
+        s.members.fluxer.set('f1', { roleIds: [], nick: null });
+        await s.roles.pair(pairOf(1));
+        await s.roles.pair(pairOf(1));
+        assert.equal(s.store.snapshotLoads, 1);
+        s.clock.now += PLAN_TTL_MS;
+        await s.roles.pair(pairOf(1));
+        assert.equal(s.store.snapshotLoads, 2);
+        await s.roles.sweepLink(LINK, [pairOf(1)]);
+        assert.equal(s.store.snapshotLoads, 3);
     });
 });
