@@ -1,3 +1,4 @@
+import { AccountLinkService } from './services/AccountLinkService';
 import {
     Client,
     ClientOptions,
@@ -47,6 +48,7 @@ import FluxerStatsService from './services/statsService/FluxerStatsService';
 import { DbStatsService } from './services/DbStatsService';
 
 const startFluxerClient = async ({
+    accountLinkService,
     linkService,
     webhookService,
     healthCheckService,
@@ -58,6 +60,7 @@ const startFluxerClient = async ({
     fluxerStatsService,
     dbStatsService,
 }: {
+    accountLinkService: AccountLinkService;
     linkService: LinkService;
     webhookService: WebhookService;
     healthCheckService: HealthCheckService;
@@ -103,6 +106,7 @@ const startFluxerClient = async ({
 
     const messageTransformer = new FluxerMessageTransformer();
     const messageRelay = new FluxerToDiscordMessageRelay({
+        accountLinkService,
         linkService,
         webhookService,
         messageTransformer,

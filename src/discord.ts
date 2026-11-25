@@ -1,3 +1,4 @@
+import { AccountLinkService } from './services/AccountLinkService';
 import {
     Client,
     EmbedBuilder,
@@ -36,6 +37,7 @@ import StatsDiscordCommandHandler from './commands/discord/handlers/StatsDiscord
 import { DbStatsService } from './services/DbStatsService';
 
 const startDiscordClient = async ({
+    accountLinkService,
     linkService,
     webhookService,
     healthCheckService,
@@ -47,6 +49,7 @@ const startDiscordClient = async ({
     fluxerStatsService,
     dbStatsService,
 }: {
+    accountLinkService: AccountLinkService;
     linkService: LinkService;
     webhookService: WebhookService;
     healthCheckService: HealthCheckService;
@@ -83,6 +86,7 @@ const startDiscordClient = async ({
 
     const messageTransformer = new DiscordMessageTransformer();
     const messageRelay = new DiscordToFluxerMessageRelay({
+        accountLinkService,
         linkService,
         webhookService,
         messageTransformer,

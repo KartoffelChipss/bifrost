@@ -1,3 +1,4 @@
+import { fluxerIdentity } from '../accountIdentity';
 import { Channel, Client, Guild, GuildEmoji, Message } from '@fluxerjs/core';
 import NodeCache from 'node-cache';
 import logger from '../../utils/logging/logger';
@@ -31,6 +32,11 @@ export default class FluxerEntityResolver implements EntityResolver<
             throw new Error('Fluxer client not set in FluxerEntityResolver');
         }
         return this.fluxerClient;
+    }
+
+    async fetchAccountIdentity(guildId: string, userId: string) {
+        if (isFluxerApiBlocked()) return null;
+        return fluxerIdentity(this.ensureClient(), guildId, userId);
     }
 
     async fetchGuild(guildId: string): Promise<Guild | null> {

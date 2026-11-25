@@ -23,6 +23,7 @@ import {
 } from '../components/ui/empty';
 import { CreateChannelLinkDialog } from '../components/CreateChannelLinkDialog';
 import { AutolinkDialog } from '../components/AutolinkDialog';
+import { AccountPresentationSettings } from '../components/AccountPresentationSettings';
 
 export function GuildDetail() {
     const { guildLinkId } = useParams<{ guildLinkId: string }>();
@@ -53,6 +54,10 @@ export function GuildDetail() {
                     </div>
                 )}
             </div>
+
+            {guildLinkId && (
+                <AccountPresentationSettings guildLinkId={guildLinkId} />
+            )}
 
             {isLoading || !data ? (
                 <Table>
