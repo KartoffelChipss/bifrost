@@ -1,10 +1,13 @@
 import {
+    ForumChannel as FluxerForumChannel,
     Routes,
+    ThreadChannel as FluxerThreadChannel,
     Webhook as FluxerWebhook,
     type Client as FluxerClient,
     type Message as FluxerMessage,
 } from '@fluxerjs/core';
 import {
+    ChannelType,
     DiscordAPIError,
     MessageType,
     RESTJSONErrorCodes,
@@ -27,8 +30,13 @@ import type {
     RelayPayload,
     ThreadSource,
 } from './links';
+import type { FluxerThreadInfo, ThreadMirrorPorts } from './threadMirror';
 import type { ThreadRelayPorts } from './threadRelay';
-import { discordThreadWebhook, fluxerThreadWebhook } from './threadWebhook';
+import {
+    discordPostWebhook,
+    discordThreadWebhook,
+    fluxerThreadWebhook,
+} from './threadWebhook';
 import type { FluxerWebhookSend } from './writers/fluxer';
 
 /**
@@ -76,6 +84,7 @@ export class UpstreamBridge
         ChannelLinker,
         ThreadSource,
         ThreadRelayPorts,
+        ThreadMirrorPorts,
         HistoryPorts,
         IdentityPorts
 {
@@ -345,6 +354,107 @@ export class UpstreamBridge
         const { id, token } = link.fluxerWebhook;
         const route = `${Routes.webhookExecute(id, token)}/messages/${messageId}?thread_id=${encodeURIComponent(threadId)}`;
         await this.fluxer().rest.delete(route, { auth: false });
+    }
+
+    // ---- ThreadMirrorPorts
+
+    fluxerBotId(): string | null {
+        return this.up.fluxerClientRef.current?.user?.id ?? null;
+    }
+
+    async fluxerThread(threadId: string): Promise<FluxerThreadInfo | null> {
+        const client = this.fluxer();
+        const thread = await client.channels.fetch(threadId);
+        if (!(thread instanceof FluxerThreadChannel) || !thread.parentId) {
+            return null;
+        }
+        const parent = await client.channels.fetch(thread.parentId);
+        const forum = parent instanceof FluxerForumChannel;
+        const tagNames = forum
+            ? thread.appliedTags.flatMap((id) => {
+                  const tag = parent.availableTags.find((t) => t.id === id);
+                  return tag ? [tag.name] : [];
+              })
+            : [];
+        return {
+            id: thread.id,
+            parentId: thread.parentId,
+            name: thread.name ?? '',
+            ownerId: thread.ownerId,
+            forum,
+            tags: tagNames.sort(),
+            archived: thread.archived,
+            locked: thread.locked,
+        };
+    }
+
+    /** The Fluxer post's first message, or a placeholder when it is gone. */
+    private async fluxerStarter(
+        info: FluxerThreadInfo,
+        guildLinkId: string
+    ): Promise<RelayPayload> {
+        const message = await this.fluxer()
+            .channels.fetchMessage(info.id, info.id)
+            .catch(() => null);
+        if (message) return this.toDiscordPayload(message, guildLinkId);
+        const me = this.up.discordClient.user;
+        return {
+            content: '*The first message of this post is no longer available.*',
+            username: me?.username ?? 'Bifröst',
+            avatarURL: me?.avatarURL() ?? '',
+        };
+    }
+
+    async createDiscordPost(
+        link: LinkedChannel,
+        info: FluxerThreadInfo,
+        starter: unknown | null
+    ): Promise<string> {
+        const forum = await this.up.discordClient.channels.fetch(
+            link.discordChannelId
+        );
+        if (forum?.type !== ChannelType.GuildForum) {
+            throw new Error(`${link.discordChannelId} is not a forum`);
+        }
+        const appliedTags = info.tags.flatMap((name) => {
+            const tag = forum.availableTags.find((t) => t.name === name);
+            return tag ? [tag.id] : [];
+        });
+        const payload = starter
+            ? await this.toDiscordPayload(
+                  starter as FluxerMessage,
+                  link.guildLinkId
+              )
+            : await this.fluxerStarter(info, link.guildLinkId);
+        const { client } = await this.discordWebhook(link, '');
+        const post = discordPostWebhook(client, {
+            threadName: info.name,
+            appliedTags,
+        });
+        await this.up.webhookService.sendMessageViaDiscordWebhook(
+            post.client,
+            payload
+        );
+        const threadId = post.threadId();
+        if (!threadId) throw new Error('Discord did not name the new post');
+        return threadId;
+    }
+
+    async createDiscordThread(
+        link: LinkedChannel,
+        info: FluxerThreadInfo
+    ): Promise<string> {
+        const parent = await this.up.discordClient.channels.fetch(
+            link.discordChannelId
+        );
+        if (
+            parent?.type !== ChannelType.GuildText &&
+            parent?.type !== ChannelType.GuildAnnouncement
+        ) {
+            throw new Error(`${link.discordChannelId} cannot hold threads`);
+        }
+        const thread = await parent.threads.create({ name: info.name });
+        return thread.id;
     }
 
     // ---- HistoryPorts

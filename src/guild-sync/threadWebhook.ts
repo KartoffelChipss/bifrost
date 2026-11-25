@@ -84,3 +84,28 @@ export function discordThreadWebhook(
         })) as WebhookClient['editMessage'];
     return scoped;
 }
+
+/**
+ * A Discord webhook client whose next send starts a forum post. Discord
+ * names the post's thread in the response's `channel_id`, which upstream's
+ * helper drops, so `threadId()` keeps it.
+ */
+export function discordPostWebhook(
+    webhook: WebhookClient,
+    post: { readonly threadName: string; readonly appliedTags: string[] }
+): { client: WebhookClient; threadId: () => string | null } {
+    let created: string | null = null;
+    const scoped = Object.create(webhook) as WebhookClient;
+    scoped.send = (async (options: unknown) => {
+        const body =
+            typeof options === 'string' ? { content: options } : options;
+        const sent = await webhook.send({
+            ...(body as object),
+            threadName: post.threadName,
+            appliedTags: post.appliedTags,
+        });
+        created = sent.channel_id;
+        return sent;
+    }) as WebhookClient['send'];
+    return { client: scoped, threadId: () => created };
+}

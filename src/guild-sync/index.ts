@@ -5,8 +5,14 @@ import type { Client as FluxerClient } from '@fluxerjs/core';
 import type { Sequelize } from 'sequelize';
 import type { Addon, AddonContext } from '../addons/host';
 import { DiscordAssetSource } from './assets';
-import { runCycle, type CycleDeps, type LinkedGuild } from './cycle';
+import {
+    resolveMode,
+    runCycle,
+    type CycleDeps,
+    type LinkedGuild,
+} from './cycle';
 import { MemoryFailureLedger } from './failures';
+import { ThreadMirror, type ThreadMirrorPorts } from './threadMirror';
 import type { ChannelLinker, ThreadSource } from './links';
 import { NoticeBoard } from './notices';
 import { discordNoticeSender } from './notifier';
@@ -69,7 +75,8 @@ export interface GuildSyncDeps {
 
 export type GuildSyncBridge = ChannelLinker &
     ThreadSource &
-    ThreadRelayPorts & { readonly sendViaFluxerWebhook: FluxerWebhookSend };
+    ThreadRelayPorts &
+    ThreadMirrorPorts & { readonly sendViaFluxerWebhook: FluxerWebhookSend };
 
 /**
  * Runs one cycle per linked guild while holding the leader lock. Returns
@@ -173,6 +180,23 @@ function startThreadRelay(
     context: AddonContext,
     store: PostgresGuildSyncStore
 ): { relay: ThreadRelay; stop: () => void } {
+    const mirror = new ThreadMirror({
+        store,
+        ports: deps.bridge,
+        // Creating a Discord thread is a structure write: apply mode only.
+        mayWrite: async (linkId) => {
+            const settings = await store.loadSettings(linkId);
+            if (settings.direction !== 'discord-to-fluxer') return false;
+            const mode = resolveMode(
+                context.mode.mode,
+                settings,
+                context.allowApply
+            );
+            return mode.mode === 'apply';
+        },
+        now: () => new Date(),
+        logger: context.logger,
+    });
     const relay = new ThreadRelay({
         store,
         links: deps.bridge,
@@ -182,6 +206,7 @@ function startThreadRelay(
             ? (id) =>
                   new PostgresHistoryStore(deps.sequelize).threadImporting(id)
             : undefined,
+        mirror: (link, event, raw) => mirror.mirror(link, event, raw),
         now: () => new Date(),
         logger: context.logger,
     });

@@ -2,6 +2,7 @@ import type { SnapshotSide } from '../addons/db/schema';
 import type { AddonLogger } from '../addons/isolation';
 import type { ChannelLinker, LinkedChannel } from './links';
 import type { ThreadRelayStore } from './store';
+import type { ThreadMirror } from './threadMirror';
 
 /**
  * Relays messages posted inside synced threads and forum posts. Upstream's
@@ -57,6 +58,11 @@ export interface ThreadRelayDeps {
      * wait, so they land below the history.
      */
     readonly importing?: (fluxerThreadId: string) => Promise<boolean>;
+    /**
+     * Creates the Discord copy of a thread started on Fluxer (see
+     * threadMirror.ts). Without it, such a thread's replies wait and expire.
+     */
+    readonly mirror?: ThreadMirror['mirror'];
     readonly now: () => Date;
     readonly logger: AddonLogger;
 }
@@ -120,7 +126,12 @@ export class ThreadRelay {
         if (!event.parentId) return 'ignored';
         const link = await this.linkFor(from, event.parentId);
         if (!link || this.isOwn(from, event, link)) return 'ignored';
-        const pair = await store.findThreadPair(from, event.channelId);
+        let pair = await store.findThreadPair(from, event.channelId);
+        if (!pair && from === 'fluxer' && this.deps.mirror) {
+            const mirrored = await this.deps.mirror(link, event, raw);
+            if (mirrored?.starterCopied) return 'relayed';
+            pair = mirrored?.pair ?? null;
+        }
         if (!pair) return 'unmapped';
         if (await this.deps.importing?.(pair.fluxerId)) return 'unmapped';
         const to = other(from);
