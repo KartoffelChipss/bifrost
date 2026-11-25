@@ -45,6 +45,7 @@ import type { ThreadRelayPorts } from './threadRelay';
 import {
     discordPostWebhook,
     discordThreadWebhook,
+    fluxerAllowedMentions,
     fluxerThreadWebhook,
 } from './threadWebhook';
 import type { FluxerWebhookSend } from './writers/fluxer';
@@ -310,10 +311,14 @@ export class UpstreamBridge
         return { client, scoped: discordThreadWebhook(client, threadId) };
     }
 
-    private fluxerWebhook(link: LinkedChannel, threadId: string) {
-        return fluxerThreadWebhook(this.fluxer(), link.fluxerWebhook, {
-            threadId,
-        });
+    /** `raw` is the Discord message copied: it decides who may be pinged. */
+    private fluxerWebhook(link: LinkedChannel, threadId: string, raw: unknown) {
+        return fluxerThreadWebhook(
+            this.fluxer(),
+            link.fluxerWebhook,
+            { threadId },
+            { allowed_mentions: fluxerAllowedMentions(raw) }
+        );
     }
 
     async send(
@@ -329,7 +334,7 @@ export class UpstreamBridge
                 link.guildLinkId
             );
             const sent = await webhookService.sendMessageViaFluxerWebhook(
-                this.fluxerWebhook(link, threadId),
+                this.fluxerWebhook(link, threadId, raw),
                 payload
             );
             return sent.messageId;
@@ -360,7 +365,7 @@ export class UpstreamBridge
                 link.guildLinkId
             );
             await webhookService.editMessageViaFluxerWebhook(
-                this.fluxerWebhook(link, threadId),
+                this.fluxerWebhook(link, threadId, raw),
                 messageId,
                 payload
             );

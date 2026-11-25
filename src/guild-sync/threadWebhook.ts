@@ -17,6 +17,22 @@ export type FluxerThreadTarget =
           readonly appliedTags: readonly string[];
       };
 
+/**
+ * `allowed_mentions` for a Fluxer copy of a Discord message. Upstream's
+ * transformer writes user and role mentions as plain `@name` text, so
+ * only `@everyone` and `@here` could ping. They may ping only when the
+ * Discord message really mentioned everyone: Discord sets that only when
+ * the author may mention everyone. Fluxer reads `allowed_mentions` on
+ * webhook execute and edit (WebhookService.ts, MessageEditService.ts).
+ */
+export function fluxerAllowedMentions(raw: unknown): {
+    parse: 'everyone'[];
+} {
+    const mentions = (raw as { mentions?: { everyone?: unknown } } | null)
+        ?.mentions;
+    return { parse: mentions?.everyone === true ? ['everyone'] : [] };
+}
+
 function withThreadQuery(route: string, threadId: string): string {
     const separator = route.includes('?') ? '&' : '?';
     return `${route}${separator}thread_id=${encodeURIComponent(threadId)}`;
@@ -24,41 +40,49 @@ function withThreadQuery(route: string, threadId: string): string {
 
 type RestCall = (route: string, options?: Record<string, unknown>) => unknown;
 
+/** Body fields a thread target adds: none for a thread, a post's name. */
+function targetBody(target: FluxerThreadTarget): Record<string, unknown> {
+    if ('threadId' in target) return {};
+    return {
+        thread_name: target.threadName,
+        applied_tags: [...target.appliedTags],
+    };
+}
+
 /**
  * A Fluxer webhook whose requests carry the thread. Fluxer takes
  * `thread_id` as a query parameter, and `thread_name` with `applied_tags`
- * in the body to start a forum post (WebhookRequestSchemas.ts).
+ * in the body to start a forum post (WebhookRequestSchemas.ts). `extra`
+ * fields, such as `allowed_mentions`, join every send and edit body.
  */
 export function fluxerThreadWebhook(
     client: Client,
     ref: WebhookRef,
-    target: FluxerThreadTarget
+    target: FluxerThreadTarget,
+    extra: Record<string, unknown> = {}
 ): Webhook {
-    const aim = (call: RestCall): RestCall => {
+    const fields = { ...extra, ...targetBody(target) };
+    const addsBody = Object.keys(fields).length > 0;
+    const aim = (call: RestCall, withBody: boolean): RestCall => {
         return (route, options = {}) => {
-            if ('threadId' in target) {
-                return call(withThreadQuery(route, target.threadId), options);
-            }
+            const aimed =
+                'threadId' in target
+                    ? withThreadQuery(route, target.threadId)
+                    : route;
+            if (!withBody || !addsBody) return call(aimed, options);
             const body = (options.body ?? {}) as Record<string, unknown>;
-            return call(route, {
-                ...options,
-                body: {
-                    ...body,
-                    thread_name: target.threadName,
-                    applied_tags: [...target.appliedTags],
-                },
-            });
+            return call(aimed, { ...options, body: { ...body, ...fields } });
         };
     };
     const rest = new Proxy(client.rest, {
         get(original, property, receiver) {
             const value = Reflect.get(original, property, receiver);
-            const aimed =
-                property === 'post' ||
-                property === 'patch' ||
-                property === 'delete';
-            if (!aimed || typeof value !== 'function') return value;
-            return aim(value.bind(original) as RestCall);
+            if (typeof value !== 'function') return value;
+            const bound = value.bind(original) as RestCall;
+            if (property === 'post' || property === 'patch') {
+                return aim(bound, true);
+            }
+            return property === 'delete' ? aim(bound, false) : value;
         },
     });
     const scoped = Object.create(client, { rest: { value: rest } }) as Client;

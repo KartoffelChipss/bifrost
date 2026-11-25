@@ -20,6 +20,7 @@ import {
 } from '../../src/guild-sync/threadRelay';
 import {
     discordThreadWebhook,
+    fluxerAllowedMentions,
     fluxerThreadWebhook,
 } from '../../src/guild-sync/threadWebhook';
 import { createRecordingLogger } from '../addons/fakes';
@@ -452,6 +453,43 @@ describe('thread webhooks', () => {
             ]
         );
         assert.deepEqual(calls[0].body, { content: 'hi' });
+    });
+
+    it('adds extra fields to sends and edits, not to deletes', async () => {
+        const calls: Call[] = [];
+        const webhook = fluxerThreadWebhook(
+            fluxerClient(calls),
+            ref,
+            { threadId: 't1' },
+            { allowed_mentions: { parse: [] } }
+        );
+        const { rest } = webhook.client;
+        await rest.post('/webhooks/w1/secret', { body: { content: 'hi' } });
+        await rest.patch('/webhooks/w1/secret/messages/m1', { body: {} });
+        await rest.delete('/webhooks/w1/secret/messages/m1', {});
+        assert.deepEqual(
+            calls.map((c) => c.body),
+            [
+                { content: 'hi', allowed_mentions: { parse: [] } },
+                { allowed_mentions: { parse: [] } },
+                undefined,
+            ]
+        );
+    });
+
+    it('lets @everyone ping on Fluxer only when it pinged on Discord', () => {
+        assert.deepEqual(
+            fluxerAllowedMentions({ mentions: { everyone: true } }),
+            {
+                parse: ['everyone'],
+            }
+        );
+        // Typed by a member without Mention Everyone: Discord did not ping.
+        assert.deepEqual(
+            fluxerAllowedMentions({ mentions: { everyone: false } }),
+            { parse: [] }
+        );
+        assert.deepEqual(fluxerAllowedMentions({}), { parse: [] });
     });
 
     it('starts a forum post by name, with its tags', async () => {
