@@ -2,14 +2,10 @@ import type { SyncDirection } from '../addons/db/schema';
 import { IdMap } from './idmap';
 import type { FieldChange, Finding, MapRow, PlanOp, SyncKind } from './ops';
 import { diffOrders } from './order';
-import {
-    ADMINISTRATOR,
-    NO_BITS,
-    flagNames,
-    translatePermissions,
-} from './permissions';
+import { NO_BITS, flagNames, translatePermissions } from './permissions';
 import type { Fields, ProjectionContext } from './project';
 import {
+    botHeldBits,
     everyoneHidden,
     historyLocks,
     maxBitrateOf,
@@ -560,16 +556,8 @@ function reportFullCategories(source: GuildSnapshot, out: Out) {
 /** Bits the plan would grant that the destination bot does not hold. */
 function reportBotPermissions(input: DiffInput, out: Out) {
     const { destination, source, direction } = input;
-    const bot = destination.bot;
-    if (!bot || bot.isOwner) return;
-    const held = destination.roles
-        .filter(
-            (r) =>
-                r.id === destination.everyoneRoleId ||
-                bot.roleIds.includes(r.id)
-        )
-        .reduce((bits, r) => bits | BigInt(r.permissions), NO_BITS);
-    if ((held & ADMINISTRATOR) !== NO_BITS) return;
+    const held = botHeldBits(destination);
+    if (held === null) return;
     let granted = NO_BITS;
     for (const role of source.roles) {
         if (!role.managed)
@@ -696,6 +684,7 @@ export function diff(input: DiffInput): DiffResult {
             never: input.links?.never ?? new Set(),
             excluded: input.excluded,
         }),
+        everyoneMask: botHeldBits(input.destination) ?? undefined,
     };
     const out: Out = { ops: [], findings: [] };
     diffStructure(input, ctx, out);

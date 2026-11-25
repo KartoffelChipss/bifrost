@@ -11,6 +11,7 @@ import type { Plan } from './plan';
 import { MAX_CHANNELS_PER_CATEGORY } from './diff';
 import { ORDER_PENDING } from './order';
 import {
+    botHeldBits,
     everyoneHidden,
     maxBitrateOf,
     projectSourceRole,
@@ -885,7 +886,11 @@ async function recordBaselines(state: RunState): Promise<void> {
         (op) => op.op === 'update' && op.baseline
     );
     const everyone = source.roles.find((r) => r.id === source.everyoneRoleId);
-    const ctx = { map: state.map, direction: plan.direction };
+    const ctx = {
+        map: state.map,
+        direction: plan.direction,
+        everyoneMask: botHeldBits(destination) ?? undefined,
+    };
     const baselines: { kind: 'role' | 'guild'; applied: Fields }[] = [
         {
             kind: 'guild',
