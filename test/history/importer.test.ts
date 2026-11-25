@@ -1445,8 +1445,10 @@ describe('leader lock', () => {
             inThread: false,
             webhookId: 'import-f10',
         });
+        // Ours is last in a full page: Fluxer returns up to 100 messages.
+        assert.equal(RECOVERY_SCAN, 100);
         s.ports.recentCopies = [
-            ...Array.from({ length: RECOVERY_SCAN - 1 }, (_, i) => ({
+            ...Array.from({ length: 99 }, (_, i) => ({
                 id: `chat-${i}`,
                 webhookId: 'someone',
                 content: '',
