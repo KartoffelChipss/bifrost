@@ -41,10 +41,15 @@ export async function startAddons(
         logger.warn(`[addons] ${key} is enabled but not implemented yet`);
     }
 
-    const host = new AddonHost(addons, { mode, boundary, logger });
+    const host = new AddonHost(addons, {
+        mode,
+        boundary,
+        logger,
+        allowApply: config.allowApply,
+    });
     const { started, failed } = await host.startAll();
     logger.info(
-        `[addons] Mode ${mode.mode}. Started: ${started.join(', ') || 'none'}. Failed: ${failed.join(', ') || 'none'}.`
+        `[addons] Mode ${mode.mode}, apply ${config.allowApply ? 'allowed' : 'not allowed'}. Started: ${started.join(', ') || 'none'}. Failed: ${failed.join(', ') || 'none'}.`
     );
     return { stop: () => host.stopAll() };
 }

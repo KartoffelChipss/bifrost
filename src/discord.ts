@@ -47,6 +47,7 @@ const startDiscordClient = async ({
     fluxerStatsService,
     dbStatsService,
     extraIntents = [],
+    extraCommands = {},
 }: {
     linkService: LinkService;
     webhookService: WebhookService;
@@ -60,6 +61,10 @@ const startDiscordClient = async ({
     dbStatsService: DbStatsService;
     // Fork hook: intents the enabled add-ons need (src/addons/intents.ts).
     extraIntents?: GatewayIntentBits[];
+    // Fork hook: commands the enabled add-ons add (src/addons/commands.ts).
+    extraCommands?: Readonly<
+        Record<string, (client: Client) => DiscordCommandHandler>
+    >;
 }): Promise<Client> => {
     const client = new Client({
         intents: [
@@ -135,6 +140,9 @@ const startDiscordClient = async ({
             fluxerEntityResolver
         )
     );
+    for (const [name, create] of Object.entries(extraCommands)) {
+        commandRegistry.registerCommand(name, create(client));
+    }
 
     client.once(Events.ClientReady, () => {
         logger.info(`Discord bot logged in as ${client.user?.tag}`);

@@ -12,13 +12,20 @@ import type { Fields, ProjectionContext } from './project';
 import {
     projectDestChannel,
     projectDestRole,
+    projectDestThread,
     projectEmoji,
     projectSourceChannel,
     projectSourceRole,
+    projectSourceThread,
     projectSticker,
 } from './project';
-import type { ChannelSnap, GuildSnapshot, RoleSnap } from './snapshot';
-import { channelKind } from './snapshot';
+import type {
+    ChannelSnap,
+    GuildSnapshot,
+    RoleSnap,
+    ThreadSnap,
+} from './snapshot';
+import { THREAD_PARENT_TYPES, channelKind } from './snapshot';
 
 /** Fluxer refuses a 51st channel in one category (ChannelHelpers.ts). */
 export const MAX_CHANNELS_PER_CATEGORY = 50;
@@ -30,6 +37,14 @@ export interface DiffInput {
     readonly previousSource: GuildSnapshot | null;
     readonly rows: readonly MapRow[];
     readonly direction: SyncDirection;
+    /**
+     * Which source channels the relay already bridges, and which must never
+     * be bridged (the admin channel). Without it, no link is planned.
+     */
+    readonly links?: {
+        readonly linked: ReadonlySet<string>;
+        readonly never: ReadonlySet<string>;
+    };
 }
 
 export interface DiffResult {
@@ -47,20 +62,24 @@ const same = (a: unknown, b: unknown) =>
 
 /**
  * Splits differing fields into source changes and destination drift. A
- * field counts as a source change only when the source value moved since
- * the last healthy snapshot; otherwise the destination was edited by hand,
- * which guard 8 reports and never reverts.
+ * field counts as a source change only when the source value differs from
+ * the base: the fields last written to the destination, or the last
+ * healthy source snapshot when nothing was written yet. Otherwise the
+ * destination was edited by hand, which guard 8 reports and never reverts.
+ * On a first sync there is no base, and every difference follows the source.
  */
 export function compareFields(
     desired: Fields,
     actual: Fields,
-    previous: Fields | null
+    previous: Fields | null,
+    firstSync = false
 ): { changes: FieldChange[]; drifted: string[] } {
     const changes: FieldChange[] = [];
     const drifted: string[] = [];
     for (const [field, to] of Object.entries(desired)) {
         if (!(field in actual) || same(to, actual[field])) continue;
-        const moved = previous !== null && !same(previous[field], to);
+        const moved =
+            firstSync || (previous !== null && !same(previous[field], to));
         if (moved) changes.push({ field, from: actual[field], to });
         else drifted.push(field);
     }
@@ -76,6 +95,8 @@ interface ObjectSpec<T extends { readonly id: string; readonly name: string }> {
     readonly projectDest: (item: T) => Fields;
     readonly sameType: (a: T, b: T) => boolean;
     readonly skipReason: (item: T) => string | null;
+    /** True for an object that syncs without a map row, such as @everyone. */
+    readonly implicit?: (item: T) => boolean;
 }
 
 function createOp<T extends { readonly id: string; readonly name: string }>(
@@ -96,6 +117,24 @@ function createOp<T extends { readonly id: string; readonly name: string }>(
         name: item.name,
         existingDestId: existing?.id ?? null,
     };
+}
+
+/** Compares one mapped pair against its base (see compareFields). */
+function compareMapped<
+    T extends { readonly id: string; readonly name: string },
+>(spec: ObjectSpec<T>, map: IdMap, item: T, dest: T, prev: T | undefined) {
+    const firstSync =
+        spec.implicit?.(item) === true && !map.hasRow(spec.kind, item.id);
+    const base =
+        map.applied(spec.kind, item.id) ??
+        (prev ? spec.projectSource(prev) : null);
+    const compared = compareFields(
+        spec.projectSource(item),
+        spec.projectDest(dest),
+        base,
+        firstSync
+    );
+    return { ...compared, firstSync };
 }
 
 function diffObjects<T extends { readonly id: string; readonly name: string }>(
@@ -131,11 +170,12 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
             });
             continue;
         }
-        const prev = prevById.get(item.id);
-        const { changes, drifted } = compareFields(
-            spec.projectSource(item),
-            spec.projectDest(dest),
-            prev ? spec.projectSource(prev) : null
+        const { changes, drifted, firstSync } = compareMapped(
+            spec,
+            map,
+            item,
+            dest,
+            prevById.get(item.id)
         );
         if (changes.length > 0) {
             out.ops.push({
@@ -144,6 +184,7 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
                 sourceId: item.id,
                 destId,
                 changes,
+                ...(firstSync ? { baseline: true as const } : {}),
             });
         }
         if (drifted.length > 0) {
@@ -172,12 +213,15 @@ const notCategory = (c: ChannelSnap) => !isCategory(c);
 
 function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
     const { source, destination, previousSource } = input;
+    // Creates run in source order, so new channels land in that order.
     const channelSpec = (
         filter: (c: ChannelSnap) => boolean,
         kind: SyncKind
     ) => ({
         kind,
-        sources: source.channels.filter(filter),
+        sources: source.channels
+            .filter(filter)
+            .sort((a, b) => a.position - b.position),
         dests: destination.channels.filter(filter),
         previous: previousSource?.channels.filter(filter) ?? null,
         projectSource: (c: ChannelSnap) => projectSourceChannel(c, ctx),
@@ -195,6 +239,7 @@ function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
             projectDest: (r) => projectDestRole(r, ctx),
             sameType: () => true,
             skipReason: roleSkip,
+            implicit: (r) => r.id === source.everyoneRoleId,
         },
         ctx.map,
         out
@@ -235,24 +280,17 @@ function diffExpressions(input: DiffInput, map: IdMap, out: Out) {
     );
 }
 
-function diffGuild(input: DiffInput, out: Out) {
+function diffGuild(input: DiffInput, map: IdMap, out: Out) {
     const { source, destination, previousSource } = input;
     const prevName = previousSource ? { name: previousSource.name } : null;
+    const firstSync = !map.hasRow('guild', source.guildId);
     const { changes, drifted } = compareFields(
         { name: source.name },
         { name: destination.name },
-        prevName
+        map.applied('guild', source.guildId) ?? prevName,
+        firstSync
     );
-    // Image hashes differ across platforms, so only a source change counts.
-    for (const field of ['icon', 'banner'] as const) {
-        if (previousSource && previousSource[field] !== source[field]) {
-            changes.push({
-                field,
-                from: previousSource[field],
-                to: source[field],
-            });
-        }
-    }
+    // The server icon and banner are not synced. Each server keeps its own.
     const destId = destination.guildId;
     if (changes.length > 0) {
         out.ops.push({
@@ -261,6 +299,7 @@ function diffGuild(input: DiffInput, out: Out) {
             sourceId: source.guildId,
             destId,
             changes,
+            ...(firstSync ? { baseline: true as const } : {}),
         });
     }
     if (drifted.length > 0) {
@@ -348,6 +387,57 @@ function reportBotPermissions(input: DiffInput, out: Out) {
     });
 }
 
+/** One link op for each mapped text, announcement or forum channel. */
+function diffLinks(input: DiffInput, map: IdMap, out: Out) {
+    if (!input.links) return;
+    const present = new Set(input.destination.channels.map((c) => c.id));
+    for (const channel of input.source.channels) {
+        if (!THREAD_PARENT_TYPES.has(channel.type)) continue;
+        if (input.links.linked.has(channel.id)) continue;
+        if (input.links.never.has(channel.id)) continue;
+        const destId = map.dest('channel', channel.id);
+        if (!destId || !present.has(destId)) continue;
+        out.ops.push({
+            op: 'link',
+            kind: 'channel',
+            sourceId: channel.id,
+            destId,
+        });
+    }
+}
+
+/** Threads and forum posts whose parent channel is already mapped. */
+function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
+    const { source, destination, previousSource } = input;
+    for (const parentId of source.threadGaps) {
+        out.findings.push({
+            type: 'skipped',
+            kind: 'thread',
+            id: parentId,
+            detail: 'threads in this channel could not be listed; the bot may lack Read Message History',
+        });
+    }
+    // An incomplete list must not create, change or remove anything.
+    if (source.threadGaps.length > 0 || destination.threadGaps.length > 0) {
+        return;
+    }
+    const mapped = (t: ThreadSnap) => ctx.map.dest('channel', t.parentId);
+    diffObjects(
+        {
+            kind: 'thread',
+            sources: source.threads.filter((t) => mapped(t) !== null),
+            dests: destination.threads,
+            previous: previousSource?.threads ?? null,
+            projectSource: (t) => projectSourceThread(t, ctx),
+            projectDest: projectDestThread,
+            sameType: (a, b) => mapped(a) === b.parentId,
+            skipReason: () => null,
+        },
+        ctx.map,
+        out
+    );
+}
+
 /**
  * Computes the ops that bring the destination in line with the source.
  * Pure: no network, no database, no clock. Removals are not decided here;
@@ -364,7 +454,9 @@ export function diff(input: DiffInput): DiffResult {
     const out: Out = { ops: [], findings: [] };
     diffStructure(input, ctx, out);
     diffExpressions(input, map, out);
-    diffGuild(input, out);
+    diffLinks(input, map, out);
+    diffThreads(input, ctx, out);
+    diffGuild(input, map, out);
     diffOrders(input, map, out);
     reportPermissions(input, out);
     reportFullCategories(input.source, out);

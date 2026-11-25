@@ -42,7 +42,11 @@ import {
     requireAddonConfig,
     startAddons,
 } from './addons';
+// Apart from './addons': the commands load upstream's command classes.
+import { addonDiscordCommands } from './addons/commands';
+import { UpstreamBridge } from './guild-sync/upstreamBridge';
 import sequelize from './db/sequelize';
+import { COMMAND_PREFIX, DISCORD_OWNER_ID } from './utils/env';
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import FluxerStatsService from './services/statsService/FluxerStatsService';
 
@@ -229,6 +233,15 @@ const main = async () => {
             fluxerStatsService,
             dbStatsService,
             extraIntents: addonDiscordIntents(addonConfig),
+            extraCommands: addonDiscordCommands(addonConfig, {
+                sequelize,
+                findGuildLink: (id) =>
+                    linkService.getGuildLinkForDiscordGuild(id),
+                discordOwnerId: DISCORD_OWNER_ID,
+                isChannelLinked: async (id) =>
+                    (await linkService.getChannelLinkByDiscordChannelId(id)) !==
+                    null,
+            }),
         }),
         connectFluxer(),
     ]);
@@ -247,7 +260,19 @@ const main = async () => {
             discordClient,
             fluxerClientRef,
             listGuildLinks: () => linkService.getAllGuildLinks(),
+            isChannelLinked: async (id) =>
+                (await linkService.getChannelLinkByDiscordChannelId(id)) !==
+                null,
+            commandPrefix: COMMAND_PREFIX,
             sequelize,
+            bridge: new UpstreamBridge({
+                discordClient,
+                fluxerClientRef,
+                linkService,
+                webhookService,
+                discordEntityResolver,
+                fluxerEntityResolver,
+            }),
         })
     );
     if (addons) registerAddonShutdown(addons);

@@ -53,10 +53,6 @@ export const DISCORD_ONLY_BITS = {
     UseApplicationCommands: 31,
     RequestToSpeak: 32,
     ManageEvents: 33,
-    ManageThreads: 34,
-    CreatePublicThreads: 35,
-    CreatePrivateThreads: 36,
-    SendMessagesInThreads: 38,
     UseEmbeddedActivities: 39,
     ViewCreatorMonetizationAnalytics: 41,
     UseSoundboard: 42,
@@ -65,6 +61,19 @@ export const DISCORD_ONLY_BITS = {
     SendVoiceMessages: 46,
     SendPolls: 49,
     UseExternalApps: 50,
+} as const;
+
+/**
+ * Thread permissions. The Fluxer server defines them on the same bits as
+ * Discord (ThreadPermissionUtils.ts), but @fluxerjs/util 3.1.0 does not
+ * list them yet, so they cannot sit in PERMISSION_TABLE. Members need
+ * SendMessagesInThreads to reply inside a forum post.
+ */
+export const THREAD_BITS = {
+    ManageThreads: 34,
+    CreatePublicThreads: 35,
+    CreatePrivateThreads: 36,
+    SendMessagesInThreads: 38,
 } as const;
 
 export const FLUXER_ONLY_BITS = {
@@ -83,10 +92,10 @@ export function bitOf(bit: number): bigint {
 export const ADMINISTRATOR = bitOf(3);
 
 /** Every bit guild-sync manages. Other destination bits are preserved. */
-export const MANAGED_BITS: bigint = PERMISSION_TABLE.reduce(
-    (mask, [, , bit]) => mask | bitOf(bit),
-    NO_BITS
-);
+export const MANAGED_BITS: bigint = [
+    ...PERMISSION_TABLE.map(([, , bit]) => bit),
+    ...Object.values(THREAD_BITS),
+].reduce((mask, bit) => mask | bitOf(bit), NO_BITS);
 
 /** Highest bit either library defines today, as a bound for scans. */
 const MAX_BIT = 63;
@@ -101,6 +110,8 @@ export interface TranslatedPermissions {
 function nameForBit(bit: number, direction: SyncDirection): string {
     const row = PERMISSION_TABLE.find(([, , b]) => b === bit);
     if (row) return direction === 'discord-to-fluxer' ? row[0] : row[1];
+    const thread = Object.entries(THREAD_BITS).find(([, b]) => b === bit);
+    if (thread) return thread[0];
     const only =
         direction === 'discord-to-fluxer'
             ? DISCORD_ONLY_BITS

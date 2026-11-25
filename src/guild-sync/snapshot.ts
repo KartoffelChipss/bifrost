@@ -53,6 +53,25 @@ export interface ChannelSnap {
     readonly bitrate: number | null;
     readonly userLimit: number | null;
     readonly overwrites: readonly OverwriteSnap[];
+    /** Names of the tags a forum offers, in order. Empty for other kinds. */
+    readonly tags: readonly string[];
+}
+
+/** Channel types that can hold threads or posts: text, announcement, forum. */
+export const THREAD_PARENT_TYPES: ReadonlySet<number> = new Set([0, 5, 15]);
+
+/** Thread types that are synced: announcement and public. Never private. */
+export const SYNCED_THREAD_TYPES: ReadonlySet<number> = new Set([10, 11]);
+
+/** A thread in a text channel, or a post in a forum. */
+export interface ThreadSnap {
+    readonly id: string;
+    readonly parentId: string;
+    readonly name: string;
+    readonly archived: boolean;
+    readonly locked: boolean;
+    /** Names of the applied forum tags, sorted. */
+    readonly tags: readonly string[];
 }
 
 export interface EmojiSnap {
@@ -87,6 +106,13 @@ export interface GuildSnapshot {
     readonly channels: readonly ChannelSnap[];
     readonly emojis: readonly EmojiSnap[];
     readonly stickers: readonly StickerSnap[];
+    readonly threads: readonly ThreadSnap[];
+    /**
+     * Channels whose threads could not be listed, for example for a missing
+     * Read Message History permission. While this is not empty, the thread
+     * list is incomplete and no thread counts as missing.
+     */
+    readonly threadGaps: readonly string[];
     readonly bot: BotSnap | null;
 }
 

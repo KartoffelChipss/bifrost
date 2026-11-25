@@ -3,17 +3,21 @@ import { QueryTypes, type Sequelize } from 'sequelize';
 import {
     OBJECT_KINDS,
     OBJECT_STATES,
+    PLAN_STATUSES,
     SYNC_DIRECTIONS,
     SYNC_MODES,
     TABLES,
+    type ObjectKind,
+    type ObjectState,
+    type PlanStatus,
     type SnapshotSide,
     type SyncDirection,
     type SyncMode,
 } from '../addons/db/schema';
 import type { MissingUpdate, GuardSettings } from './guards';
 import type { ShrinkLimits } from './health';
-import type { MapRow } from './ops';
-import type { Plan } from './plan';
+import type { JsonValue, MapRow } from './ops';
+import type { Plan, PlanBody } from './plan';
 import type { GuildSnapshot } from './snapshot';
 import { countObjects } from './snapshot';
 
@@ -22,6 +26,64 @@ export interface SyncSettings extends GuardSettings, ShrinkLimits {
     readonly mode: SyncMode;
     readonly direction: SyncDirection;
     readonly killSwitch: boolean;
+    /** The source-side channel for plans and admin commands, if set. */
+    readonly adminChannelId: string | null;
+    /** The pending plan an admin approved. Used once, then cleared. */
+    readonly approvedPlanId: string | null;
+}
+
+type AppliedFields = Readonly<Record<string, JsonValue>>;
+
+/** A new `addon_object_map` row. */
+export interface NewMapping {
+    readonly guildLinkId: string;
+    readonly kind: ObjectKind;
+    readonly discordId: string;
+    readonly fluxerId: string;
+    /** False for an object that existed before, such as @everyone. */
+    readonly createdBySync: boolean;
+    readonly appliedFields: AppliedFields;
+}
+
+/** One `addon_audit_log` row: a write that was attempted. */
+export interface AuditEntry {
+    readonly planId: string;
+    readonly guildLinkId: string;
+    readonly op: string;
+    readonly kind: ObjectKind;
+    readonly sourceId: string | null;
+    readonly destId: string | null;
+    readonly before: JsonValue | null;
+    readonly after: JsonValue | null;
+    readonly result: 'ok' | 'failed';
+}
+
+/** The two copies of one message relayed inside a thread. */
+export interface ThreadMessage {
+    readonly guildLinkId: string;
+    readonly discordThreadId: string;
+    readonly fluxerThreadId: string;
+    readonly discordMessageId: string;
+    readonly fluxerMessageId: string;
+}
+
+/** The database access the thread relay needs. */
+export interface ThreadRelayStore {
+    /** The active thread pair that holds this thread, on either side. */
+    findThreadPair(
+        side: SnapshotSide,
+        threadId: string
+    ): Promise<{
+        guildLinkId: string;
+        discordId: string;
+        fluxerId: string;
+    } | null>;
+    saveThreadMessage(message: ThreadMessage, now: Date): Promise<void>;
+    findThreadMessage(
+        side: SnapshotSide,
+        messageId: string
+    ): Promise<ThreadMessage | null>;
+    deleteThreadMessage(side: SnapshotSide, messageId: string): Promise<void>;
 }
 
 /** The database access one cycle needs. The cycle depends only on this. */
@@ -48,6 +110,34 @@ export interface GuildSyncStore {
     savePlan(plan: Plan, now: Date): Promise<void>;
     removalsSince(guildLinkId: string, since: Date): Promise<number>;
     pruneSnapshots(before: Date): Promise<void>;
+    /** Records ownership of a destination object (guard 1). */
+    insertMapping(mapping: NewMapping, now: Date): Promise<MapRow>;
+    /** Records the fields a successful update wrote. */
+    saveApplied(rowId: string, fields: AppliedFields, now: Date): Promise<void>;
+    audit(entry: AuditEntry, now: Date): Promise<void>;
+    setPlanStatus(
+        planId: string,
+        status: PlanStatus,
+        abortReason: string | null,
+        now: Date
+    ): Promise<void>;
+    setMode(guildLinkId: string, mode: SyncMode, now: Date): Promise<void>;
+    setKillSwitch(guildLinkId: string, on: boolean, now: Date): Promise<void>;
+    setAdminChannel(
+        guildLinkId: string,
+        channelId: string | null,
+        now: Date
+    ): Promise<void>;
+    /** Stores or clears the one plan an admin approved. */
+    setApprovedPlan(
+        guildLinkId: string,
+        planId: string | null,
+        now: Date
+    ): Promise<void>;
+    /** Marks a map row archived or tombstoned after a removal. */
+    setRowState(rowId: string, state: ObjectState, now: Date): Promise<void>;
+    lastPlan(guildLinkId: string): Promise<Plan | null>;
+    getPlan(planId: string): Promise<Plan | null>;
 }
 
 /** Arbitrary constant: 'bfsg' in ASCII. Shared by every fork instance. */
@@ -97,6 +187,14 @@ export function parseSettings(row: Row): SyncSettings {
         mode: oneOf(SYNC_MODES, row.mode, 'mode'),
         direction: oneOf(SYNC_DIRECTIONS, row.direction, 'direction'),
         killSwitch: row.killSwitch,
+        adminChannelId: optionalId(
+            row.adminChannelId ?? null,
+            'adminChannelId'
+        ),
+        approvedPlanId: optionalId(
+            row.approvedPlanId ?? null,
+            'approvedPlanId'
+        ),
         shrinkPercent: int(row.shrinkPercent, 'shrinkPercent'),
         shrinkMinObjects: int(row.shrinkMinObjects, 'shrinkMinObjects'),
         confirmChecks: int(row.confirmChecks, 'confirmChecks'),
@@ -129,6 +227,44 @@ export function parseMapRow(row: Row): MapRow {
         createdBySync: row.createdBySync,
         missingSince,
         missingCount: int(row.missingCount, 'missingCount'),
+        appliedFields: parseApplied(row.appliedFields),
+    };
+}
+
+/** `appliedFields` is NULL or a JSON object. Only the fork writes it. */
+function parseApplied(value: unknown): AppliedFields | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value !== 'object' || Array.isArray(value)) {
+        throw new StoreDataError('appliedFields is not an object');
+    }
+    return value as AppliedFields;
+}
+
+const PLAN_LISTS = ['ops', 'deferred', 'findings'] as const;
+
+/** Parses an `addon_plans` row. The body is checked at its top level. */
+export function parsePlan(row: Row): Plan {
+    const body = row.ops;
+    if (
+        typeof row.id !== 'string' ||
+        typeof row.guildLinkId !== 'string' ||
+        typeof body !== 'object' ||
+        body === null
+    ) {
+        throw new StoreDataError('plan row is malformed');
+    }
+    for (const key of PLAN_LISTS) {
+        if (!Array.isArray((body as Row)[key])) {
+            throw new StoreDataError(`plan body has no ${key} list`);
+        }
+    }
+    return {
+        id: row.id,
+        guildLinkId: row.guildLinkId,
+        direction: oneOf(SYNC_DIRECTIONS, row.direction, 'direction'),
+        status: oneOf(PLAN_STATUSES, row.status, 'status'),
+        body: body as PlanBody,
+        abortReason: optionalId(row.abortReason, 'abortReason'),
     };
 }
 
@@ -154,14 +290,25 @@ export function parseSnapshot(payload: unknown): GuildSnapshot {
             throw new StoreDataError(`snapshot payload has no ${key} list`);
         }
     }
-    return payload as GuildSnapshot;
+    // Snapshots saved before threads and forum tags lack those fields.
+    const channels = (snap.channels as Row[]).map((channel) =>
+        Array.isArray(channel.tags) ? channel : { ...channel, tags: [] }
+    );
+    return {
+        ...snap,
+        channels,
+        threads: Array.isArray(snap.threads) ? snap.threads : [],
+        threadGaps: Array.isArray(snap.threadGaps) ? snap.threadGaps : [],
+    } as unknown as GuildSnapshot;
 }
 
 /** Upper bound on map rows per guild link: roles + channels + expressions. */
 export const MAX_MAP_ROWS = 5_000;
 
 /** {@link GuildSyncStore} on the fork's Postgres database. */
-export class PostgresGuildSyncStore implements GuildSyncStore {
+export class PostgresGuildSyncStore
+    implements GuildSyncStore, ThreadRelayStore
+{
     constructor(private readonly db: Sequelize) {
         if (db.getDialect() !== 'postgres') {
             throw new StoreDataError('guild-sync needs Postgres');
@@ -210,7 +357,7 @@ export class PostgresGuildSyncStore implements GuildSyncStore {
 
     async loadObjectMap(guildLinkId: string): Promise<MapRow[]> {
         const rows = await this.db.query<Row>(
-            `SELECT id, kind, "discordId", "fluxerId", state, "createdBySync", "missingSince", "missingCount"
+            `SELECT id, kind, "discordId", "fluxerId", state, "createdBySync", "missingSince", "missingCount", "appliedFields"
              FROM ${TABLES.objectMap} WHERE "guildLinkId" = $1 ORDER BY id LIMIT $2`,
             { bind: [guildLinkId, MAX_MAP_ROWS + 1], type: QueryTypes.SELECT }
         );
@@ -320,6 +467,234 @@ export class PostgresGuildSyncStore implements GuildSyncStore {
                 SELECT DISTINCT ON ("guildLinkId", side) id FROM ${TABLES.snapshots}
                 WHERE healthy ORDER BY "guildLinkId", side, "takenAt" DESC)`,
             { bind: [before] }
+        );
+    }
+
+    async insertMapping(mapping: NewMapping, now: Date): Promise<MapRow> {
+        const id = randomUUID();
+        await this.db.query(
+            `INSERT INTO ${TABLES.objectMap} (id, "guildLinkId", kind, "discordId", "fluxerId", state, "createdBySync", "appliedFields", "createdAt", "updatedAt")
+             VALUES ($1, $2, $3, $4, $5, 'active', $6, $7::jsonb, $8, $8)`,
+            {
+                bind: [
+                    id,
+                    mapping.guildLinkId,
+                    mapping.kind,
+                    mapping.discordId,
+                    mapping.fluxerId,
+                    mapping.createdBySync,
+                    JSON.stringify(mapping.appliedFields),
+                    now,
+                ],
+            }
+        );
+        return {
+            id,
+            kind: mapping.kind,
+            discordId: mapping.discordId,
+            fluxerId: mapping.fluxerId,
+            state: 'active',
+            createdBySync: mapping.createdBySync,
+            missingSince: null,
+            missingCount: 0,
+            appliedFields: mapping.appliedFields,
+        };
+    }
+
+    async saveApplied(
+        rowId: string,
+        fields: AppliedFields,
+        now: Date
+    ): Promise<void> {
+        await this.db.query(
+            `UPDATE ${TABLES.objectMap} SET "appliedFields" = $2::jsonb, "updatedAt" = $3 WHERE id = $1`,
+            { bind: [rowId, JSON.stringify(fields), now] }
+        );
+    }
+
+    async audit(entry: AuditEntry, now: Date): Promise<void> {
+        await this.db.query(
+            `INSERT INTO ${TABLES.auditLog} ("planId", "guildLinkId", op, kind, "sourceId", "destId", before, after, result, at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10)`,
+            {
+                bind: [
+                    entry.planId,
+                    entry.guildLinkId,
+                    entry.op,
+                    entry.kind,
+                    entry.sourceId,
+                    entry.destId,
+                    JSON.stringify(entry.before),
+                    JSON.stringify(entry.after),
+                    entry.result,
+                    now,
+                ],
+            }
+        );
+    }
+
+    async setPlanStatus(
+        planId: string,
+        status: PlanStatus,
+        abortReason: string | null,
+        now: Date
+    ): Promise<void> {
+        await this.db.query(
+            `UPDATE ${TABLES.plans} SET status = $2, "abortReason" = $3, "updatedAt" = $4 WHERE id = $1`,
+            { bind: [planId, status, abortReason, now] }
+        );
+    }
+
+    async setMode(
+        guildLinkId: string,
+        mode: SyncMode,
+        now: Date
+    ): Promise<void> {
+        await this.loadSettings(guildLinkId);
+        await this.db.query(
+            `UPDATE ${TABLES.settings} SET mode = $2, "updatedAt" = $3 WHERE "guildLinkId" = $1`,
+            { bind: [guildLinkId, mode, now] }
+        );
+    }
+
+    async setKillSwitch(
+        guildLinkId: string,
+        on: boolean,
+        now: Date
+    ): Promise<void> {
+        await this.loadSettings(guildLinkId);
+        await this.db.query(
+            `UPDATE ${TABLES.settings} SET "killSwitch" = $2, "updatedAt" = $3 WHERE "guildLinkId" = $1`,
+            { bind: [guildLinkId, on, now] }
+        );
+    }
+
+    private async setSetting(
+        guildLinkId: string,
+        column: 'adminChannelId' | 'approvedPlanId',
+        value: string | null,
+        now: Date
+    ): Promise<void> {
+        await this.loadSettings(guildLinkId);
+        await this.db.query(
+            `UPDATE ${TABLES.settings} SET "${column}" = $2, "updatedAt" = $3 WHERE "guildLinkId" = $1`,
+            { bind: [guildLinkId, value, now] }
+        );
+    }
+
+    setAdminChannel(guildLinkId: string, channelId: string | null, now: Date) {
+        return this.setSetting(guildLinkId, 'adminChannelId', channelId, now);
+    }
+
+    setApprovedPlan(guildLinkId: string, planId: string | null, now: Date) {
+        return this.setSetting(guildLinkId, 'approvedPlanId', planId, now);
+    }
+
+    async setRowState(
+        rowId: string,
+        state: ObjectState,
+        now: Date
+    ): Promise<void> {
+        await this.db.query(
+            `UPDATE ${TABLES.objectMap} SET state = $2, "updatedAt" = $3 WHERE id = $1`,
+            { bind: [rowId, state, now] }
+        );
+    }
+
+    async getPlan(planId: string): Promise<Plan | null> {
+        const rows = await this.db.query<Row>(
+            `SELECT id, "guildLinkId", direction, status, ops, "abortReason" FROM ${TABLES.plans} WHERE id = $1`,
+            { bind: [planId], type: QueryTypes.SELECT }
+        );
+        return rows.length === 0 ? null : parsePlan(rows[0]);
+    }
+
+    async lastPlan(guildLinkId: string): Promise<Plan | null> {
+        const rows = await this.db.query<Row>(
+            `SELECT id, "guildLinkId", direction, status, ops, "abortReason" FROM ${TABLES.plans}
+             WHERE "guildLinkId" = $1 ORDER BY "createdAt" DESC LIMIT 1`,
+            { bind: [guildLinkId], type: QueryTypes.SELECT }
+        );
+        return rows.length === 0 ? null : parsePlan(rows[0]);
+    }
+
+    async findThreadPair(side: SnapshotSide, threadId: string) {
+        const column = side === 'discord' ? 'discordId' : 'fluxerId';
+        const rows = await this.db.query<Row>(
+            `SELECT "guildLinkId", "discordId", "fluxerId" FROM ${TABLES.objectMap}
+             WHERE kind = 'thread' AND state = 'active' AND "${column}" = $1 LIMIT 1`,
+            { bind: [threadId], type: QueryTypes.SELECT }
+        );
+        const row = rows[0];
+        if (
+            typeof row?.guildLinkId !== 'string' ||
+            typeof row.discordId !== 'string' ||
+            typeof row.fluxerId !== 'string'
+        ) {
+            return null;
+        }
+        return {
+            guildLinkId: row.guildLinkId,
+            discordId: row.discordId,
+            fluxerId: row.fluxerId,
+        };
+    }
+
+    async saveThreadMessage(message: ThreadMessage, now: Date): Promise<void> {
+        await this.db.query(
+            `INSERT INTO ${TABLES.threadMessages} ("guildLinkId", "discordThreadId", "fluxerThreadId", "discordMessageId", "fluxerMessageId", "createdAt")
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            {
+                bind: [
+                    message.guildLinkId,
+                    message.discordThreadId,
+                    message.fluxerThreadId,
+                    message.discordMessageId,
+                    message.fluxerMessageId,
+                    now,
+                ],
+            }
+        );
+    }
+
+    async findThreadMessage(
+        side: SnapshotSide,
+        messageId: string
+    ): Promise<ThreadMessage | null> {
+        const column =
+            side === 'discord' ? 'discordMessageId' : 'fluxerMessageId';
+        const rows = await this.db.query<Row>(
+            `SELECT "guildLinkId", "discordThreadId", "fluxerThreadId", "discordMessageId", "fluxerMessageId"
+             FROM ${TABLES.threadMessages} WHERE "${column}" = $1 LIMIT 1`,
+            { bind: [messageId], type: QueryTypes.SELECT }
+        );
+        const row = rows[0];
+        if (!row) return null;
+        const text = (field: string) => {
+            const value = row[field];
+            if (typeof value !== 'string') {
+                throw new StoreDataError(`thread message ${field} is missing`);
+            }
+            return value;
+        };
+        return {
+            guildLinkId: text('guildLinkId'),
+            discordThreadId: text('discordThreadId'),
+            fluxerThreadId: text('fluxerThreadId'),
+            discordMessageId: text('discordMessageId'),
+            fluxerMessageId: text('fluxerMessageId'),
+        };
+    }
+
+    async deleteThreadMessage(
+        side: SnapshotSide,
+        messageId: string
+    ): Promise<void> {
+        const column =
+            side === 'discord' ? 'discordMessageId' : 'fluxerMessageId';
+        await this.db.query(
+            `DELETE FROM ${TABLES.threadMessages} WHERE "${column}" = $1`,
+            { bind: [messageId] }
         );
     }
 }

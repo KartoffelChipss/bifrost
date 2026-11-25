@@ -10,6 +10,7 @@ const OFF: AddonConfig = {
     history: false,
     identity: false,
     initialMode: 'dry-run',
+    allowApply: false,
 };
 
 describe('addonDiscordIntents', () => {

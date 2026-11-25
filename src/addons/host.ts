@@ -7,6 +7,8 @@ export interface AddonContext {
     readonly mode: AddonModeController;
     readonly boundary: IsolationBoundary;
     readonly logger: AddonLogger;
+    /** True when the environment allows apply mode at all. */
+    readonly allowApply: boolean;
 }
 
 /** One add-on module: guild-sync, history or identity. */

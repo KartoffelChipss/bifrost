@@ -3,8 +3,8 @@
  *
  * Everything defaults to off, so a fresh deploy of the fork behaves exactly
  * like upstream Bifröst. The apply mode is never accepted from the
- * environment: it must be switched on deliberately through the settings
- * table, once that exists (safety guard 9).
+ * environment: an admin switches it on per guild link (safety guard 9).
+ * The environment only decides whether that switch is allowed at all.
  */
 
 export type AddonMode = 'read-only' | 'dry-run' | 'apply';
@@ -15,6 +15,8 @@ export interface AddonConfig {
     readonly history: boolean;
     readonly identity: boolean;
     readonly initialMode: Exclude<AddonMode, 'apply'>;
+    /** BF_ADDONS_ALLOW_APPLY. Without it, no add-on writes to a server. */
+    readonly allowApply: boolean;
 }
 
 export type AddonConfigResult =
@@ -51,7 +53,7 @@ function parseMode(
     if (normalized === 'apply') {
         return {
             ok: false,
-            error: 'BF_ADDONS_MODE=apply is not accepted from the environment. Apply mode is switched on in the settings table.',
+            error: 'BF_ADDONS_MODE=apply is not accepted from the environment. Set BF_ADDONS_ALLOW_APPLY=true, then switch apply on per server with the sync command.',
         };
     }
     const mode = ENV_MODES.find((candidate) => candidate === normalized);
@@ -69,6 +71,7 @@ const BOOL_KEYS = {
     guildSync: 'BF_ADDON_GUILD_SYNC',
     history: 'BF_ADDON_HISTORY',
     identity: 'BF_ADDON_IDENTITY',
+    allowApply: 'BF_ADDONS_ALLOW_APPLY',
 } as const;
 
 /** Parses add-on settings from an environment map without side effects. */
@@ -78,6 +81,7 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
         guildSync: false,
         history: false,
         identity: false,
+        allowApply: false,
     };
     for (const [field, envName] of Object.entries(BOOL_KEYS)) {
         const parsed = parseStrictBool(envName, env[envName]);
@@ -107,6 +111,7 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
             history: flags.enabled && flags.history,
             identity: flags.enabled && flags.identity,
             initialMode: mode.value,
+            allowApply: flags.enabled && flags.allowApply,
         },
     };
 }

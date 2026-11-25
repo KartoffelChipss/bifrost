@@ -39,6 +39,10 @@ function presentSourceIds(source: GuildSnapshot): Map<SyncKind, Set<string>> {
         ['channel', ids(channels)],
         ['emoji', ids(source.emojis)],
         ['sticker', ids(source.stickers)],
+        // With a gap in the thread list, no thread may count as missing.
+        ...(source.threadGaps.length === 0
+            ? [['thread', ids(source.threads)] as [SyncKind, Set<string>]]
+            : []),
     ]);
 }
 
@@ -261,11 +265,17 @@ const KIND_RANK: Readonly<Record<SyncKind, number>> = {
     channel: 2,
     emoji: 3,
     sticker: 4,
+    // After emojis: a post's first message can use the server's emojis.
+    thread: 4.5,
     guild: 5,
 };
 
 function rank(op: PlanOp): number {
     if (isRemoval(op)) return 100 + KIND_RANK[op.kind];
+    // First-sync updates fit under any write cap, so they are never deferred.
+    if (op.op === 'update' && op.baseline) return -1;
+    // A link follows every channel write and comes before any thread.
+    if (op.op === 'link') return KIND_RANK.channel * 2 + 1.5;
     const reorder = op.op === 'reorder' ? 0.5 : 0;
     return KIND_RANK[op.kind] * 2 + reorder * 2;
 }

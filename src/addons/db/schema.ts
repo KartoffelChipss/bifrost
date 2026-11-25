@@ -13,6 +13,7 @@ export const TABLES = {
     auditLog: 'addon_audit_log',
     settings: 'addon_settings',
     leaderLock: 'addon_leader_lock',
+    threadMessages: 'addon_thread_messages',
 } as const;
 
 /** Umzug's record of applied add-on migrations, apart from upstream's. */
@@ -27,6 +28,7 @@ export const OBJECT_KINDS = [
     'overwrite',
     'emoji',
     'sticker',
+    'thread',
 ] as const;
 
 export const OBJECT_STATES = ['active', 'archived', 'tombstoned'] as const;

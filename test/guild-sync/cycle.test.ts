@@ -10,7 +10,12 @@ import type { ReadResult } from '../../src/guild-sync/health';
 import { isRemoval } from '../../src/guild-sync/ops';
 import type { Plan } from '../../src/guild-sync/plan';
 import { createRecordingLogger } from '../addons/fakes';
-import { DEFAULT_SETTINGS, FakeReader, FakeStore } from './fake-store';
+import {
+    DEFAULT_SETTINGS,
+    FakeReader,
+    FakeStore,
+    recordingNotices,
+} from './fake-store';
 import {
     D_GUILD,
     F_GUILD,
@@ -52,7 +57,15 @@ function primed(source: ReadResult, mode: AddonMode = 'dry-run') {
     const deps: CycleDeps = {
         store,
         readers: { discord, fluxer },
+        writers: {},
+        assets: {},
+        links: null,
+        threadSources: {},
+        notices: recordingNotices().board,
+        commandPrefix: '!b ',
         processMode: () => mode,
+        allowApply: false,
+        pause: async () => {},
         logger: createRecordingLogger(),
         now: () => NOW,
         newId: () => `plan-${++seq}`,
@@ -111,7 +124,12 @@ describe('runCycle guard tests (required to merge)', () => {
     for (const [label, read, prime] of failing) {
         it(`plans zero archive or delete ops on ${label}`, async () => {
             const { plan, store } = await planFor(read, prime);
-            assert.equal(plan.status, 'aborted');
+            // A shrink waits for an admin; every other failure is final.
+            assert.equal(
+                plan.status,
+                plan.body.needsApproval ? 'pending-approval' : 'aborted'
+            );
+            assert.ok(plan.abortReason);
             assert.deepEqual(removals(plan), []);
             assert.deepEqual(plan.body.ops, []);
             // A failed read never advances the missing counters.
@@ -142,9 +160,19 @@ describe('runCycle modes', () => {
         assert.equal((await runCycle(LINK, deps)).status, 'skipped');
     });
 
-    it('plans as dry-run even when the link says apply', () => {
-        const settings = { ...DEFAULT_SETTINGS, mode: 'apply' as const };
-        assert.equal(resolveMode('apply', settings).mode, 'dry-run');
+    it('applies only when the link and the environment both say so', () => {
+        const apply = { ...DEFAULT_SETTINGS, mode: 'apply' as const };
+        assert.equal(resolveMode('dry-run', apply).mode, 'dry-run');
+        assert.equal(resolveMode('dry-run', apply, true).mode, 'apply');
+        assert.equal(
+            resolveMode('dry-run', DEFAULT_SETTINGS, true).mode,
+            'dry-run'
+        );
+        assert.equal(resolveMode('read-only', apply, true).mode, 'read-only');
+        assert.equal(
+            resolveMode('dry-run', { ...apply, killSwitch: true }, true).mode,
+            'read-only'
+        );
     });
 
     it('does not save an unchanged snapshot twice', async () => {

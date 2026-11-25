@@ -13,6 +13,7 @@ const ALL_ON: AddonConfig = {
     history: true,
     identity: true,
     initialMode: 'dry-run',
+    allowApply: false,
 };
 
 function fakeAddon(
@@ -33,7 +34,12 @@ function fakeAddon(
 function context() {
     const mode = new AddonModeController('dry-run');
     const logger = createRecordingLogger();
-    return { mode, logger, boundary: new IsolationBoundary(mode, logger) };
+    return {
+        mode,
+        logger,
+        boundary: new IsolationBoundary(mode, logger),
+        allowApply: false,
+    };
 }
 
 describe('selectAddons', () => {
