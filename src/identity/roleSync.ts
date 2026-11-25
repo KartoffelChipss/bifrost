@@ -5,7 +5,12 @@ import type { GuildSyncStore } from '../guild-sync/store';
 import { RollingLimit } from './limits';
 import { NickMemory, nickChange, type NickChange } from './nick';
 import type { IdentityPorts, MemberState } from './ports';
-import { roleChanges, syncableRoles, type RoleChange } from './roles';
+import {
+    managedRoles,
+    roleChanges,
+    syncableRoles,
+    type RoleChange,
+} from './roles';
 import type { AccountPair } from './store';
 
 /**
@@ -43,7 +48,10 @@ export interface LinkPlan {
     readonly link: LinkedGuild;
     readonly mode: 'dry-run' | 'apply';
     readonly adminChannelId: string | null;
+    /** Roles that may be added: mapped and not privileged. */
     readonly syncable: ReadonlyMap<string, string>;
+    /** Roles that may be removed: every mapped member role. */
+    readonly managed: ReadonlyMap<string, string>;
 }
 
 /** Changes counted in one pass. In dry-run they are only counted. */
@@ -91,6 +99,7 @@ export class RoleSync {
             mode,
             adminChannelId: settings.adminChannelId,
             syncable: syncableRoles(snapshot, rows),
+            managed: managedRoles(snapshot, rows),
         };
     }
 
@@ -126,6 +135,40 @@ export class RoleSync {
         }
     }
 
+    /**
+     * Removes every synced role from a member whose accounts were just
+     * unlinked, within the removal limit, in apply only. Never throws.
+     */
+    async strip(pair: AccountPair): Promise<void> {
+        try {
+            const links = await this.deps.listGuildLinks();
+            for (const link of links.slice(0, MAX_LINKS)) {
+                const plan = await this.plan(link);
+                if (plan?.mode === 'apply') await this.stripOn(plan, pair);
+            }
+        } catch (error) {
+            this.deps.logger.warn(
+                `[identity] Could not remove synced roles of ${describePair(pair)}:`,
+                error
+            );
+        }
+    }
+
+    private async stripOn(plan: LinkPlan, pair: AccountPair) {
+        const fluxer = await this.deps.ports.fluxerMember(
+            plan.link.fluxerGuildId,
+            pair.fluxerUserId
+        );
+        if (!fluxer) return;
+        const change = roleChanges(
+            [],
+            fluxer.roleIds,
+            plan.syncable,
+            plan.managed
+        );
+        await this.applyRoles(plan, pair, fluxer, change, emptyTally());
+    }
+
     /** Syncs every pair on one link. Null when the link syncs nothing. */
     async sweepLink(
         link: LinkedGuild,
@@ -141,11 +184,11 @@ export class RoleSync {
     private async syncMember(plan: LinkPlan, pair: AccountPair, tally: Tally) {
         const { ports } = this.deps;
         const { link } = plan;
-        const discord = await ports.discordMember(
+        // A member who left or was banned holds no roles there.
+        const discord = (await ports.discordMember(
             link.discordGuildId,
             pair.discordUserId
-        );
-        if (!discord) return;
+        )) ?? { roleIds: [], nick: null };
         const fluxer = await ports.fluxerMember(
             link.fluxerGuildId,
             pair.fluxerUserId
@@ -155,7 +198,8 @@ export class RoleSync {
         const roles = roleChanges(
             discord.roleIds,
             fluxer.roleIds,
-            plan.syncable
+            plan.syncable,
+            plan.managed
         );
         const nick = nickChange(discord.nick, fluxer.nick, this.nicks.get(key));
         if (plan.mode !== 'apply') {

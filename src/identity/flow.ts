@@ -48,6 +48,8 @@ export interface FlowDeps {
     } | null;
     /** Called after a pair is saved, so roles can sync at once. */
     readonly onLinked: (pair: AccountPair) => Promise<void>;
+    /** Called after a pair is removed, so its synced roles go. */
+    readonly onUnlinked: (pair: AccountPair) => Promise<void>;
     readonly now: () => Date;
     readonly newCode?: () => string;
     /** Failures the member is told about in a reply are logged here. */
@@ -241,8 +243,9 @@ async function confirm(
 async function unlink(input: DmInput, deps: FlowDeps): Promise<DmReply[]> {
     const pair = await deps.store.deletePair(input.side, input.userId);
     if (!pair) return reply(input, 'This account is not linked.');
+    await deps.onUnlinked(pair);
     const text =
-        'Your accounts are unlinked. Roles already given stay, but stop syncing.';
+        'Your accounts are unlinked. Synced roles stop following you and are removed from your Fluxer account.';
     return [
         { side: 'discord', userId: pair.discordUserId, text },
         { side: 'fluxer', userId: pair.fluxerUserId, text },

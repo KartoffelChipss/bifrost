@@ -87,6 +87,7 @@ function flowDeps(
               }
             : null,
         onLinked: (pair) => roles.pair(pair),
+        onUnlinked: (pair) => roles.strip(pair),
         now: () => new Date(),
         logger,
     };
@@ -187,21 +188,35 @@ function listenToDiscord(l: Listeners): () => void {
     const onMember = l.wrap(
         'member',
         (_old: GuildMember | PartialGuildMember, member: GuildMember) =>
-            quietly(l.logger, `Member update of ${member.id}`, async () => {
-                const pair = await l.store.pairFor('discord', member.id);
-                if (pair)
-                    await l.roles.pair(
-                        pair,
-                        (link) => link.discordGuildId === member.guild.id
-                    );
-            })
+            syncDiscordMember(l, member.id, member.guild.id)
+    );
+    // A member who left holds no roles, so their synced roles go too.
+    const onLeave = l.wrap(
+        'member-leave',
+        (member: GuildMember | PartialGuildMember) =>
+            syncDiscordMember(l, member.id, member.guild.id)
     );
     client.on(Events.MessageCreate, onDm);
     client.on(Events.GuildMemberUpdate, onMember);
+    client.on(Events.GuildMemberRemove, onLeave);
     return () => {
         client.off(Events.MessageCreate, onDm);
         client.off(Events.GuildMemberUpdate, onMember);
+        client.off(Events.GuildMemberRemove, onLeave);
     };
+}
+
+/** Syncs a linked Discord member on the links of one Discord server. */
+function syncDiscordMember(
+    l: Listeners,
+    userId: string,
+    guildId: string
+): Promise<void> {
+    return quietly(l.logger, `Member change of ${userId}`, async () => {
+        const pair = await l.store.pairFor('discord', userId);
+        if (pair)
+            await l.roles.pair(pair, (link) => link.discordGuildId === guildId);
+    });
 }
 
 interface FluxerDm {

@@ -30,6 +30,7 @@ function flow(): FlowDeps {
         nameOf: async () => 'name',
         history: null,
         onLinked: async () => {},
+        onUnlinked: async () => {},
         now: () => new Date(0),
         logger: createRecordingLogger(),
     };

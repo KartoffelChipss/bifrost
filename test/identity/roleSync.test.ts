@@ -204,3 +204,33 @@ describe('RoleSync nicknames', () => {
         );
     });
 });
+
+describe('RoleSync members who left and unlinks', () => {
+    it('treats a member gone from Discord as holding no roles, within the limit', async () => {
+        const s = setup();
+        const pairs: AccountPair[] = [];
+        for (let n = 0; n < MAX_ROLE_REMOVALS_PER_HOUR + 3; n++) {
+            pairs.push(pairOf(n));
+            s.members.fluxer.set(`f${n}`, {
+                roleIds: ['f-gamer', 'own'],
+                nick: null,
+            });
+        }
+        const result = await s.roles.sweepLink(LINK, pairs);
+        assert.equal(result?.tally.remove, MAX_ROLE_REMOVALS_PER_HOUR);
+        assert.equal(s.members.roleWrites[0], 'f0:own');
+    });
+
+    it('strips synced roles on unlink in apply, and nothing in dry-run', async () => {
+        const s = setup();
+        s.members.discord.set('d1', { roleIds: ['gamer'], nick: null });
+        s.members.fluxer.set('f1', { roleIds: ['f-gamer', 'own'], nick: null });
+        await s.roles.strip(pairOf(1));
+        assert.deepEqual(s.members.roleWrites, ['f1:own']);
+
+        const t = setup('dry-run');
+        t.members.fluxer.set('f1', { roleIds: ['f-gamer'], nick: null });
+        await t.roles.strip(pairOf(1));
+        assert.deepEqual(t.members.roleWrites, []);
+    });
+});

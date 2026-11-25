@@ -106,6 +106,7 @@ function setup() {
     const links = new FakeLinker();
     const state = { now: new Date('2026-11-25T12:00:00Z'), code: 'ABCD2345' };
     const linked: AccountPair[] = [];
+    const unlinked: AccountPair[] = [];
     const logger = createRecordingLogger();
     const deps: FlowDeps = {
         store,
@@ -117,13 +118,27 @@ function setup() {
         onLinked: async (pair) => {
             linked.push(pair);
         },
+        onUnlinked: async (pair) => {
+            unlinked.push(pair);
+        },
         now: () => state.now,
         newCode: () => state.code,
         logger,
     };
     const dm = (side: Side, userId: string, text: string) =>
         handleDm({ side, userId, text } satisfies DmInput, deps);
-    return { store, history, ports, links, state, linked, deps, dm, logger };
+    return {
+        store,
+        history,
+        ports,
+        links,
+        state,
+        linked,
+        unlinked,
+        deps,
+        dm,
+        logger,
+    };
 }
 
 describe('account linking', () => {
@@ -202,6 +217,9 @@ describe('account linking', () => {
         const gone = await s.dm('fluxer', 'f1', 'unlink');
         assert.deepEqual(s.store.pairs, []);
         assert.equal(gone.length, 2);
+        assert.deepEqual(s.unlinked, [
+            { discordUserId: 'd1', fluxerUserId: 'f1' },
+        ]);
     });
 
     it('stores only a hash of each code', async () => {
