@@ -39,6 +39,7 @@ import type {
     RelayPayload,
     ThreadSource,
 } from './links';
+import { isNotFound } from './apply';
 import type { FluxerThreadInfo, ThreadMirrorPorts } from './threadMirror';
 import type { ThreadRelayPorts } from './threadRelay';
 import {
@@ -391,6 +392,28 @@ export class UpstreamBridge
         const { id, token } = link.fluxerWebhook;
         const route = `${Routes.webhookExecute(id, token)}/messages/${messageId}?thread_id=${encodeURIComponent(threadId)}`;
         await this.fluxer().rest.delete(route, { auth: false });
+    }
+
+    /** A thread message as `raw`, or null when it or its thread is gone. */
+    async fetch(
+        side: SnapshotSide,
+        threadId: string,
+        messageId: string
+    ): Promise<unknown | null> {
+        try {
+            if (side === 'fluxer') {
+                return await this.fluxer().channels.fetchMessage(
+                    threadId,
+                    messageId
+                );
+            }
+            const thread = await this.up.discordClient.channels.fetch(threadId);
+            if (!thread?.isThread()) return null;
+            return await thread.messages.fetch({ message: messageId });
+        } catch (error) {
+            if (isNotFound(error)) return null;
+            throw error;
+        }
     }
 
     // ---- ThreadMirrorPorts

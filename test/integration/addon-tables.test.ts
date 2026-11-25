@@ -22,6 +22,7 @@ const MIGRATIONS = [
     '00003-settings-admin-approval',
     '00004-threads',
     '00005-history-identity',
+    '00006-parked-messages',
 ];
 
 describe('add-on tables on Postgres', { skip: !url }, () => {

@@ -51,7 +51,10 @@ function discordEvent(
     };
 }
 
-/** Listens on the Discord client. Returns a function that stops it. */
+/**
+ * Listens on the Discord client and retries the relay's parked replies
+ * meanwhile. Returns a function that stops both.
+ */
 export function listenToDiscordThreads(
     client: DiscordClient,
     relay: ThreadRelay,
@@ -80,13 +83,22 @@ export function listenToDiscordThreads(
         'thread-delete',
         async (message: Message | PartialMessage) => {
             const event = discordEvent(message);
-            if (event) await relay.deleted('discord', event.id, event.parentId);
+            if (!event) return;
+            await relay.deleted(
+                'discord',
+                event.id,
+                event.parentId,
+                event.channelId
+            );
         }
     );
     client.on(Events.MessageCreate, onCreate);
     client.on(Events.MessageUpdate, onUpdate);
     client.on(Events.MessageDelete, onDelete);
+    // Parked replies are retried while the relay listens.
+    relay.startFlushing();
     return () => {
+        relay.stopFlushing();
         client.off(Events.MessageCreate, onCreate);
         client.off(Events.MessageUpdate, onUpdate);
         client.off(Events.MessageDelete, onDelete);
@@ -146,7 +158,13 @@ export function listenToFluxerThreads(
         'thread-delete',
         async (message: FluxerMessageLike) => {
             const event = fluxerEvent(message);
-            if (event) await relay.deleted('fluxer', event.id, event.parentId);
+            if (!event) return;
+            await relay.deleted(
+                'fluxer',
+                event.id,
+                event.parentId,
+                event.channelId
+            );
         }
     );
     client.on(FluxerEvents.MessageCreate, onCreate);

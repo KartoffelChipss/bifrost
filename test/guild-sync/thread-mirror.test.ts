@@ -90,6 +90,9 @@ async function setup(info: FluxerThreadInfo | null = post()) {
             },
             async edit() {},
             async remove() {},
+            async fetch() {
+                return null;
+            },
         },
         active: () => true,
         mirror: (link, event, raw) => mirror.mirror(link, event, raw),
