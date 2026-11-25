@@ -493,13 +493,13 @@ describe('approval', () => {
         assert.equal(applied?.applied, 4);
     });
 
-    it('does not carry an approval over to a different plan', async () => {
+    it('lets an approval cover fewer removals, never more', async () => {
         const s = await overBudget();
         s.store.settings = { ...s.store.settings, deleteBudgetPerCycle: 1 };
         const pending = await s.cycle();
         assert.equal(removalCount(pending.plan), 4);
         await s.store.setApprovedPlan(LINK.id, pending.plan.id);
-        // One role comes back, so the plan is no longer the approved one.
+        // One role comes back: the other three were approved.
         s.discord.result = {
             ok: true,
             snapshot: discordGuild({
@@ -508,10 +508,30 @@ describe('approval', () => {
         };
         const next = await s.cycle();
         assert.equal(removalCount(next.plan), 3);
-        assert.equal(next.plan.status, 'pending-approval');
-        assert.equal(next.applied, undefined);
-        assert.equal(archived(s).length, 0);
+        assert.equal(next.applied?.applied, 3);
+        assert.equal(archived(s).length, 3);
         assert.equal(s.store.settings.approvedPlanId, null);
+    });
+
+    it('needs a new approval for a removal outside the approved set', async () => {
+        const s = await overBudget();
+        const pending = await s.cycle();
+        // An approval that covered only three of the four removals.
+        const { ops } = pending.plan.body;
+        const approved = {
+            ...pending.plan,
+            id: 'approved-subset',
+            body: {
+                ...pending.plan.body,
+                ops: ops.filter(isRemoval).slice(0, 3),
+                deferred: [],
+            },
+        };
+        await s.store.savePlan(approved);
+        await s.store.setApprovedPlan(LINK.id, approved.id);
+        const next = await s.cycle();
+        assert.equal(next.plan.status, 'pending-approval');
+        assert.equal(archived(s).length, 0);
     });
 
     it('accepts a shrink only after it is approved', async () => {

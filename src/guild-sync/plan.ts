@@ -9,6 +9,13 @@ export interface PlanBody {
     readonly findings: readonly Finding[];
     readonly needsApproval: boolean;
     readonly approvalReason: string | null;
+    /**
+     * Map rows behind this plan's removals. While the plan waits for
+     * approval, later cycles look up these rows again instead of a new
+     * batch, so the plan an admin approves stays the plan that runs.
+     * Absent in plans saved before it.
+     */
+    readonly removalRowIds?: readonly string[];
 }
 
 export interface Plan {

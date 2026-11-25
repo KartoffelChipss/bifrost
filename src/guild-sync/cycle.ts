@@ -24,7 +24,7 @@ import {
     type NoticeBoard,
 } from './notices';
 import type { Finding, MapRow } from './ops';
-import { sourceIdOf } from './ops';
+import { destIdOf, isRemoval, sourceIdOf } from './ops';
 import { EMPTY_BODY, summarizePlan, type Plan, type PlanBody } from './plan';
 import type { GuildReader } from './readers/reader';
 import type { GuildSnapshot } from './snapshot';
@@ -268,13 +268,29 @@ function protectedIds(destination: GuildSnapshot): Set<string> {
     ]);
 }
 
+/**
+ * The rows to look up this cycle. While a plan waits for approval, its
+ * own removal rows are looked up again, so the batch does not rotate
+ * away from what the admin is asked to approve.
+ */
+function batchFor(
+    candidates: readonly MapRow[],
+    lookups: ReadonlyMap<string, number>,
+    pinned: ReadonlySet<string>
+): MapRow[] {
+    const kept = candidates.filter((row) => pinned.has(row.id));
+    if (kept.length > 0) return kept.slice(0, MAX_LOOKUPS_PER_CYCLE);
+    return lookupBatch(candidates, lookups);
+}
+
 /** Guards 4 to 6: removal ops for rows a direct lookup confirmed gone. */
 async function confirmedRemovals(
     link: LinkedGuild,
     settings: SyncSettings,
     rows: readonly MapRow[],
     deps: CycleDeps,
-    now: Date
+    now: Date,
+    pinned: ReadonlySet<string>
 ) {
     const { direction } = settings;
     const lookups = deps.lookups ?? new Map<string, number>();
@@ -282,7 +298,7 @@ async function confirmedRemovals(
     for (const id of lookups.keys()) {
         if (!candidates.some((row) => row.id === id)) lookups.delete(id);
     }
-    const batch = lookupBatch(candidates, lookups);
+    const batch = batchFor(candidates, lookups, pinned);
     const s = sides(link, direction);
     const gone = await confirmGone(
         batch,
@@ -291,7 +307,14 @@ async function confirmedRemovals(
         direction,
         (rowId) => lookups.set(rowId, now.getTime())
     );
-    return planRemovals(batch, gone, direction, settings, now);
+    const planned = planRemovals(batch, gone, direction, settings, now);
+    const removed = new Set(
+        planned.ops.map((op) => ('destId' in op ? op.destId : ''))
+    );
+    const rowIds = batch
+        .filter((row) => removed.has(destIdOf(row, direction) ?? ''))
+        .map((row) => row.id);
+    return { ...planned, rowIds };
 }
 
 /**
@@ -324,7 +347,8 @@ async function buildBody(
     settings: SyncSettings,
     gated: Extract<GateOutcome, { ok: true }>,
     deps: CycleDeps,
-    now: Date
+    now: Date,
+    pinned: ReadonlySet<string> = new Set()
 ): Promise<{
     body: PlanBody;
     rows: MapRow[];
@@ -348,7 +372,14 @@ async function buildBody(
         members,
         links: await linkState(link, settings, deps),
     });
-    const removals = await confirmedRemovals(link, settings, rows, deps, now);
+    const removals = await confirmedRemovals(
+        link,
+        settings,
+        rows,
+        deps,
+        now,
+        pinned
+    );
 
     const map = IdMap.from(rows, direction, source, destination);
     const owned = enforceOwnership(
@@ -373,6 +404,7 @@ async function buildBody(
         findings,
         needsApproval: budget.needsApproval,
         approvalReason: budget.needsApproval ? budget.reason : null,
+        removalRowIds: removals.rowIds,
     };
     return { body, rows, members };
 }
@@ -434,7 +466,8 @@ async function applySaved(
         rows: readonly MapRow[];
         members: ReadonlyMap<string, string> | undefined;
     },
-    deps: CycleDeps
+    deps: CycleDeps,
+    removalsHeld = false
 ): Promise<ApplyResult | null> {
     const toFluxer = plan.direction === 'discord-to-fluxer';
     const dest = toFluxer ? 'fluxer' : 'discord';
@@ -469,6 +502,9 @@ async function applySaved(
             logger: deps.logger,
         }
     );
+    deps.logger.info(`[guild-sync] ${applyNotice(plan, result)}`);
+    // The plan still waits for its removals to be approved.
+    if (removalsHeld) return result;
     const failed = result.failed > 0 || result.stopped !== null;
     await deps.store.setPlanStatus(
         plan.id,
@@ -478,8 +514,16 @@ async function applySaved(
             : null,
         deps.now()
     );
-    deps.logger.info(`[guild-sync] ${applyNotice(plan, result)}`);
     return result;
+}
+
+/** The link's latest plan, while it waits for approval. */
+async function waitingPlan(
+    link: LinkedGuild,
+    deps: CycleDeps
+): Promise<Plan | null> {
+    const last = await deps.store.lastPlan(link.id);
+    return last?.status === 'pending-approval' ? last : null;
 }
 
 /** The approved plan, if an admin approved one that still waits. */
@@ -492,25 +536,52 @@ async function loadApproval(
     return plan?.status === 'pending-approval' ? plan : null;
 }
 
-/** What an approval covers: the writes and the reason, not the findings. */
-function approvedScope(plan: Plan) {
-    const { ops, deferred, approvalReason } = plan.body;
-    return stableJson({
-        ops,
-        deferred,
-        approvalReason,
-        abort: plan.abortReason,
-    });
+/** Each removal a plan would write, as `op:kind:destId`. */
+function removalKeys(plan: Plan): Set<string> {
+    const keys = new Set<string>();
+    for (const op of [...plan.body.ops, ...plan.body.deferred]) {
+        if (isRemoval(op) && 'destId' in op) {
+            keys.add(`${op.op}:${op.kind}:${op.destId}`);
+        }
+    }
+    return keys;
 }
 
 /**
- * True when the admin approved exactly what this plan would do. Findings
- * are left out of the match: a lookup that timed out changes them, not
- * what the plan writes.
+ * Why approval is needed, without the counts: the daily count slides
+ * with every removal, which must not void an approval.
  */
-function isApproved(plan: Plan, approved: Plan | null): boolean {
+export function reasonCategory(reason: string | null): string | null {
+    return reason === null ? null : reason.replace(/\d+/g, '#');
+}
+
+/**
+ * True when an admin approved what this plan's removals would do. The
+ * approval covers a set of removals for one reason: this plan may do
+ * those or fewer, never one more. Creates, updates and findings play no
+ * part; they never need approval.
+ */
+export function isApproved(plan: Plan, approved: Plan | null): boolean {
     if (!plan.body.needsApproval) return true;
-    return approved !== null && approvedScope(approved) === approvedScope(plan);
+    if (approved === null || approved.abortReason !== plan.abortReason) {
+        return false;
+    }
+    const same =
+        reasonCategory(approved.body.approvalReason) ===
+        reasonCategory(plan.body.approvalReason);
+    const covered = removalKeys(approved);
+    return same && [...removalKeys(plan)].every((key) => covered.has(key));
+}
+
+/** The plan without its removals, for a run while they wait for approval. */
+function withoutRemovals(plan: Plan): Plan {
+    return {
+        ...plan,
+        body: {
+            ...plan.body,
+            ops: plan.body.ops.filter((op) => !isRemoval(op)),
+        },
+    };
 }
 
 /** Saves, logs and posts a plan. */
@@ -545,17 +616,25 @@ async function planAndApply(
 ): Promise<Planned> {
     await saveIfChanged(deps.store, link.id, gated.source, now);
     await saveIfChanged(deps.store, link.id, gated.destination, now);
-    const built = await buildBody(link, settings, gated, deps, now);
+    const pending = approved ?? (await waitingPlan(link, deps));
+    const built = await buildBody(
+        link,
+        settings,
+        gated,
+        deps,
+        now,
+        new Set(pending?.body.removalRowIds ?? [])
+    );
     const { body } = built;
     const plan = newPlan(deps, link, settings.direction, body, null);
     await publish(plan, settings, deps, now);
     const mode = resolveMode(deps.processMode(), settings, deps.allowApply);
-    const runnable =
-        mode.mode === 'apply' &&
-        body.ops.length > 0 &&
-        isApproved(plan, approved);
+    // Removals wait for approval; every other write goes ahead.
+    const held = !isApproved(plan, approved);
+    const run = held ? withoutRemovals(plan) : plan;
+    const runnable = mode.mode === 'apply' && run.body.ops.length > 0;
     const applied = runnable
-        ? await applySaved(plan, gated, built, deps)
+        ? await applySaved(run, gated, built, deps, held)
         : null;
     if (!applied) return { status: 'planned', plan, more: false };
     await deps.notices.post(
