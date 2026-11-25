@@ -29,17 +29,23 @@ import type { LinkService } from '../services/LinkService';
 import DiscordMessageTransformer from '../services/messageTransformer/DiscordMessageTransformer';
 import FluxerMessageTransformer from '../services/messageTransformer/FluxerMessageTransformer';
 import type { WebhookService } from '../services/WebhookService';
+import {
+    defuseContent,
+    upstreamCommandPrefix,
+} from '../relay-extras/commandPrefix';
 import type {
     ChannelLinker,
     LinkedChannel,
     RelayPayload,
     ThreadSource,
 } from './links';
+import { isNotFound } from './apply';
 import type { FluxerThreadInfo, ThreadMirrorPorts } from './threadMirror';
 import type { ThreadRelayPorts } from './threadRelay';
 import {
     discordPostWebhook,
     discordThreadWebhook,
+    fluxerAllowedMentions,
     fluxerThreadWebhook,
 } from './threadWebhook';
 import type { FluxerWebhookSend } from './writers/fluxer';
@@ -57,6 +63,8 @@ export interface UpstreamServices {
     readonly webhookService: WebhookService;
     readonly discordEntityResolver: DiscordEntityResolver;
     readonly fluxerEntityResolver: FluxerEntityResolver;
+    /** Upstream's command prefix; read from the environment when unset. */
+    readonly commandPrefix?: string;
 }
 
 /** A Discord message, as upstream's transformer takes it. */
@@ -96,7 +104,11 @@ export class UpstreamBridge
     private readonly fromDiscord = new DiscordMessageTransformer();
     private readonly fromFluxer = new FluxerMessageTransformer();
 
-    constructor(private readonly up: UpstreamServices) {}
+    private readonly commandPrefix: string;
+
+    constructor(private readonly up: UpstreamServices) {
+        this.commandPrefix = up.commandPrefix ?? upstreamCommandPrefix();
+    }
 
     /** For the Fluxer writer: upstream's webhook send, with its file handling. */
     readonly sendViaFluxerWebhook: FluxerWebhookSend = (webhook, payload) =>
@@ -215,7 +227,16 @@ export class UpstreamBridge
         const emojis = guildLink
             ? await fluxerEntityResolver.fetchEmojis(guildLink.fluxerGuildId)
             : [];
-        return this.fromDiscord.transformMessage(message, emojis);
+        const payload = await this.fromDiscord.transformMessage(
+            message,
+            emojis
+        );
+        // Every copy posted on Fluxer: a thread reply, an edit, a forum
+        // starter or an imported message must not run as a command there.
+        return {
+            ...payload,
+            content: defuseContent(payload.content, this.commandPrefix),
+        };
     }
 
     private async toDiscordPayload(
@@ -290,10 +311,14 @@ export class UpstreamBridge
         return { client, scoped: discordThreadWebhook(client, threadId) };
     }
 
-    private fluxerWebhook(link: LinkedChannel, threadId: string) {
-        return fluxerThreadWebhook(this.fluxer(), link.fluxerWebhook, {
-            threadId,
-        });
+    /** `raw` is the Discord message copied: it decides who may be pinged. */
+    private fluxerWebhook(link: LinkedChannel, threadId: string, raw: unknown) {
+        return fluxerThreadWebhook(
+            this.fluxer(),
+            link.fluxerWebhook,
+            { threadId },
+            { allowed_mentions: fluxerAllowedMentions(raw) }
+        );
     }
 
     async send(
@@ -309,7 +334,7 @@ export class UpstreamBridge
                 link.guildLinkId
             );
             const sent = await webhookService.sendMessageViaFluxerWebhook(
-                this.fluxerWebhook(link, threadId),
+                this.fluxerWebhook(link, threadId, raw),
                 payload
             );
             return sent.messageId;
@@ -340,7 +365,7 @@ export class UpstreamBridge
                 link.guildLinkId
             );
             await webhookService.editMessageViaFluxerWebhook(
-                this.fluxerWebhook(link, threadId),
+                this.fluxerWebhook(link, threadId, raw),
                 messageId,
                 payload
             );
@@ -372,6 +397,28 @@ export class UpstreamBridge
         const { id, token } = link.fluxerWebhook;
         const route = `${Routes.webhookExecute(id, token)}/messages/${messageId}?thread_id=${encodeURIComponent(threadId)}`;
         await this.fluxer().rest.delete(route, { auth: false });
+    }
+
+    /** A thread message as `raw`, or null when it or its thread is gone. */
+    async fetch(
+        side: SnapshotSide,
+        threadId: string,
+        messageId: string
+    ): Promise<unknown | null> {
+        try {
+            if (side === 'fluxer') {
+                return await this.fluxer().channels.fetchMessage(
+                    threadId,
+                    messageId
+                );
+            }
+            const thread = await this.up.discordClient.channels.fetch(threadId);
+            if (!thread?.isThread()) return null;
+            return await thread.messages.fetch({ message: messageId });
+        } catch (error) {
+            if (isNotFound(error)) return null;
+            throw error;
+        }
     }
 
     // ---- ThreadMirrorPorts

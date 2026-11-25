@@ -21,6 +21,7 @@ export const TABLES = {
     identityCodes: 'addon_identity_codes',
     identityPending: 'addon_identity_pending',
     identityFailures: 'addon_identity_failures',
+    parkedMessages: 'addon_parked_messages',
 } as const;
 
 /** Umzug's record of applied add-on migrations, apart from upstream's. */

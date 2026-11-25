@@ -4,11 +4,13 @@ import type { MessagePair, Side } from './types';
 /**
  * Finds the counterpart of a relayed message. Upstream records messages of
  * bridged channels in message_links; guild-sync records messages of synced
- * threads and forum posts in addon_thread_messages.
+ * threads and forum posts in addon_thread_messages; history import records
+ * copied past messages in addon_history_messages.
  */
 export interface PairSources {
     bridgedMessage(side: Side, messageId: string): Promise<MessagePair | null>;
     threadMessage(side: Side, messageId: string): Promise<ThreadMessage | null>;
+    historyMessage?(side: Side, messageId: string): Promise<MessagePair | null>;
 }
 
 export function threadPair(message: ThreadMessage): MessagePair {
@@ -35,6 +37,31 @@ export function pairFinder(sources: PairSources): FindPair {
         const bridged = await sources.bridgedMessage(side, messageId);
         if (bridged) return bridged;
         const thread = await sources.threadMessage(side, messageId);
-        return thread ? threadPair(thread) : null;
+        if (thread) return threadPair(thread);
+        return (await sources.historyMessage?.(side, messageId)) ?? null;
+    };
+}
+
+/**
+ * A Discord channel and its ancestors: for a thread, its parent channel
+ * and that channel's category; for a channel, its category.
+ */
+export type DiscordLineage = (channelId: string) => Promise<readonly string[]>;
+
+/**
+ * Leaves out pairs in channels excluded by BF_ADDONS_EXCLUDE_CHANNELS:
+ * the Discord channel, its parent or its category is in `excluded`.
+ */
+export function excludingChannels(
+    findPair: FindPair,
+    excluded: ReadonlySet<string>,
+    lineage: DiscordLineage
+): FindPair {
+    if (excluded.size === 0) return findPair;
+    return async (side, messageId) => {
+        const pair = await findPair(side, messageId);
+        if (!pair) return null;
+        const ids = await lineage(pair.discord.channelId);
+        return ids.some((id) => excluded.has(id)) ? null : pair;
     };
 }

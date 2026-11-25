@@ -6,19 +6,27 @@ import { PostgresGuildSyncStore } from '../guild-sync/store';
 import { followFluxerClient } from '../guild-sync/threadEvents';
 import { EmojiTranslator } from './emojiMap';
 import { listenToDiscord, listenToFluxer, type Wrap } from './events';
-import { pairFinder } from './pairs';
+import { PostgresHistoryPairs } from './historyPairs';
+import { excludingChannels, pairFinder } from './pairs';
 import { PinRelay } from './pinRelay';
 import { ClientPlatform } from './platform';
 import { ReactionRelay } from './reactionRelay';
 import type { RelayLookupPorts, Side } from './types';
 
 /**
- * Live reactions and pins, started with the guild-sync add-on.
+ * Live reactions and pins, started with the guild-sync add-on. They are
+ * mirrored on every message pair the fork knows: channel relay copies,
+ * thread relay copies and imported history copies (pairs.ts).
  *
  * Mode: like guild-sync's thread relay, this runs in dry-run and apply and
  * stops in read-only. Dry-run governs structure plans, not live relaying;
- * read-only (set by an admin or tripped by an error) stops every add-on
- * write. Mode is read per event, so a trip takes effect at once.
+ * read-only (set by an admin, or tripped by a failed structure write)
+ * stops every add-on write. Mode is read per event, so a trip takes
+ * effect at once.
+ *
+ * Errors: listeners run through the boundary's live failure policy
+ * (src/addons/isolation.ts). Repeated errors pause one feature, such as
+ * pins, for a few minutes; they never switch the add-ons to read-only.
  */
 
 export const RELAY_EXTRAS_NAME = 'relay-extras';
@@ -29,6 +37,8 @@ export interface RelayExtrasDeps {
     readonly sequelize: Sequelize;
     /** Upstream lookups (ReactionPorts section of upstreamBridge.ts). */
     readonly lookups: RelayLookupPorts;
+    /** BF_ADDONS_EXCLUDE_CHANNELS: Discord channels and categories left out. */
+    readonly excludedChannels?: ReadonlySet<string>;
 }
 
 export interface RelayExtras {
@@ -39,11 +49,17 @@ export interface RelayExtras {
 function buildRelays(deps: RelayExtrasDeps, context: AddonContext) {
     const store = new PostgresGuildSyncStore(deps.sequelize);
     const { lookups, discordClient, fluxerClientRef } = deps;
-    const findPair = pairFinder({
-        bridgedMessage: (side, id) => lookups.bridgedMessage(side, id),
-        threadMessage: (side, id) => store.findThreadMessage(side, id),
-    });
     const platform = new ClientPlatform(discordClient, fluxerClientRef);
+    const history = new PostgresHistoryPairs(deps.sequelize);
+    const findPair = excludingChannels(
+        pairFinder({
+            bridgedMessage: (side, id) => lookups.bridgedMessage(side, id),
+            threadMessage: (side, id) => store.findThreadMessage(side, id),
+            historyMessage: (side, id) => history.historyMessage(side, id),
+        }),
+        deps.excludedChannels ?? new Set(),
+        (id) => platform.discordLineage(id)
+    );
     const active = () => context.mode.mode !== 'read-only';
     const botId = (side: Side) =>
         (side === 'discord'

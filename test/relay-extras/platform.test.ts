@@ -165,4 +165,29 @@ describe('ClientPlatform', () => {
         const platform = new ClientPlatform(discord, { current: null });
         await assert.rejects(platform.react('fluxer', F, THUMBS), /not ready/);
     });
+
+    it('walks a thread up to its channel and category', async () => {
+        const parents: Record<string, string | null> = {
+            thread: 'chan',
+            chan: 'cat',
+            cat: null,
+        };
+        const cached = new Map([['thread', { parentId: 'chan' }]]);
+        const discord = {
+            channels: {
+                cache: cached,
+                fetch: async (id: string) => {
+                    if (id === 'gone') throw new Error('Unknown Channel');
+                    return { parentId: parents[id] ?? null };
+                },
+            },
+        } as unknown as DiscordClient;
+        const platform = new ClientPlatform(discord, { current: null });
+        assert.deepEqual(await platform.discordLineage('thread'), [
+            'thread',
+            'chan',
+            'cat',
+        ]);
+        assert.deepEqual(await platform.discordLineage('gone'), ['gone']);
+    });
 });

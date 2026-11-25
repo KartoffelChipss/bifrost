@@ -70,8 +70,8 @@ export class HistoryMirror {
     }
 
     /**
-     * A failure is logged here: an error that reached the add-on boundary
-     * would switch every add-on to read-only.
+     * A failure is logged here, so one bad message never counts against
+     * the add-on's event-handler error budget (isolation.ts).
      */
     private async guarded(what: string, work: () => Promise<void>) {
         try {

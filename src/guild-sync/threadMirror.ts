@@ -1,4 +1,4 @@
-import type { AddonLogger } from '../addons/isolation';
+import { UnrecordedWriteError, type AddonLogger } from '../addons/isolation';
 import type { LinkedChannel } from './links';
 import type { NewMapping, ThreadRelayStore } from './store';
 import type { ThreadMessageEvent } from './threadRelay';
@@ -127,7 +127,7 @@ export class ThreadMirror {
         event: ThreadMessageEvent,
         raw: unknown
     ): Promise<Mirrored | null> {
-        const { store, ports, now } = this.deps;
+        const { store, ports } = this.deps;
         const known = await store.findThreadPair('fluxer', event.channelId);
         if (known) return { pair: known, starterCopied: false };
         if (!(await this.deps.mayWrite(link.guildLinkId))) return null;
@@ -142,21 +142,36 @@ export class ThreadMirror {
             discordId,
             fluxerId: info.id,
         };
-        await store.insertMapping(
-            {
-                ...pair,
-                kind: 'thread',
-                // The Fluxer thread was not made by the sync.
-                createdBySync: false,
-                appliedFields: appliedFields(info),
-            },
-            now()
-        );
+        await this.recordPair(pair, info);
         if (info.forum) await this.recordStarter(pair);
         this.deps.logger.info(
             `[guild-sync] Copied Fluxer thread ${info.id} to Discord as ${discordId}`
         );
         return { pair, starterCopied: info.forum && isStarter };
+    }
+
+    /**
+     * Records the new Discord thread. If that fails, the thread exists but
+     * nothing owns it, so every add-on must stop (guard 15).
+     */
+    private async recordPair(pair: ThreadPair, info: FluxerThreadInfo) {
+        try {
+            await this.deps.store.insertMapping(
+                {
+                    ...pair,
+                    kind: 'thread',
+                    // The Fluxer thread was not made by the sync.
+                    createdBySync: false,
+                    appliedFields: appliedFields(info),
+                },
+                this.deps.now()
+            );
+        } catch (cause) {
+            throw new UnrecordedWriteError(
+                `Discord thread ${pair.discordId} was created for Fluxer thread ${pair.fluxerId} but not recorded`,
+                { cause }
+            );
+        }
     }
 
     /** A post's first message shares the post's ID on both platforms. */

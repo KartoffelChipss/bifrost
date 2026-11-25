@@ -27,9 +27,6 @@ export function forkInit(): ForkBootstrap {
             addonFactories,
             startAddons,
         },
-        processHooks: {
-            once: (signal, listener) => process.once(signal, listener),
-            exit: (code) => process.exit(code),
-        },
+        processHooks: process,
     });
 }

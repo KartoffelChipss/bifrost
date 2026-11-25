@@ -12,6 +12,7 @@ import {
     type LinkedGuild,
 } from './cycle';
 import { MemoryFailureLedger } from './failures';
+import { PostgresParkedMessages } from './parkedMessages';
 import { ThreadMirror, type ThreadMirrorPorts } from './threadMirror';
 import type { ChannelLinker, ThreadSource } from './links';
 import { NoticeBoard } from './notices';
@@ -226,6 +227,8 @@ function startThreadRelay(
                   new PostgresHistoryStore(deps.sequelize).threadImporting(id)
             : undefined,
         mirror: (link, event, raw) => mirror.mirror(link, event, raw),
+        // Held replies survive a restart (addon_parked_messages).
+        parked: new PostgresParkedMessages(deps.sequelize),
         now: () => new Date(),
         logger: context.logger,
     });

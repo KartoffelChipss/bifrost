@@ -7,6 +7,7 @@ import { requireAddonConfig, type AddonConfig } from './config';
 import type { AddonFactories } from './host';
 import type { AddonDeps, AddonsHandle } from './index';
 import { addonDiscordIntents, addonDiscordPartials } from './intents';
+import { registerAddonShutdown, type ShutdownProcess } from './shutdown';
 import type { AddonLogger } from './isolation';
 
 /**
@@ -55,13 +56,8 @@ export interface AddonRuntime {
 }
 
 /** The process calls the shutdown handler needs. */
-export interface ProcessHooks {
-    once(
-        signal: NodeJS.Signals,
-        listener: (signal: NodeJS.Signals) => void
-    ): void;
-    exit(code: number): void;
-}
+/** The process calls shutdown makes (see shutdown.ts); `process` fits. */
+export type ProcessHooks = ShutdownProcess;
 
 export interface ForkBootstrapDeps {
     readonly env: Env;
@@ -89,23 +85,6 @@ function channelLinkCheck(
 ): (discordChannelId: string) => Promise<boolean> {
     return async (id) =>
         (await linkService.getChannelLinkByDiscordChannelId(id)) !== null;
-}
-
-/** Stops the add-ons, then exits, on the first SIGTERM or SIGINT. */
-export function registerAddonShutdown(
-    addons: AddonsHandle,
-    logger: AddonLogger,
-    processHooks: ProcessHooks
-): void {
-    const shutdown = (signal: NodeJS.Signals) => {
-        logger.info(`${signal} received, stopping add-ons`);
-        addons
-            .stop()
-            .catch((err) => logger.error('Add-on shutdown error:', err))
-            .finally(() => processHooks.exit(0));
-    };
-    processHooks.once('SIGTERM', shutdown);
-    processHooks.once('SIGINT', shutdown);
 }
 
 function buildDiscordExtension(

@@ -43,8 +43,9 @@ const services = {
 interface Harness {
     deps: ForkBootstrapDeps;
     calls: string[];
-    signals: Map<NodeJS.Signals, (signal: NodeJS.Signals) => void>;
+    signals: Map<string, () => void>;
     exits: number[];
+    kills: string[];
     factoryDeps: AddonDeps[];
     logger: ReturnType<typeof createRecordingLogger>;
 }
@@ -91,12 +92,15 @@ function harness(
     options: { stop?: () => Promise<void>; started?: boolean } = {}
 ): Harness {
     const calls: string[] = [];
-    const signals = new Map<NodeJS.Signals, (s: NodeJS.Signals) => void>();
+    const signals = new Map<string, () => void>();
     const exits: number[] = [];
+    const kills: string[] = [];
     const factoryDeps: AddonDeps[] = [];
     const logger = createRecordingLogger();
     const processHooks: ProcessHooks = {
+        pid: 42,
         once: (signal, listener) => void signals.set(signal, listener),
+        kill: (_pid, signal) => void kills.push(signal),
         exit: (code) => void exits.push(code),
     };
     const stop = options.stop ?? (async () => void calls.push('stop'));
@@ -104,6 +108,7 @@ function harness(
         calls,
         signals,
         exits,
+        kills,
         factoryDeps,
         logger,
         deps: {
@@ -191,14 +196,14 @@ describe('ForkBootstrap.start', () => {
         assert.equal(h.signals.size, 0);
     });
 
-    it('stops the add-ons and exits 0 on SIGTERM or SIGINT', async () => {
+    it('stops the add-ons, then ends by the same signal', async () => {
         const h = harness(GUILD_SYNC_ON, { started: true });
         await createForkBootstrap(h.deps).start(services);
         assert.deepEqual([...h.signals.keys()], ['SIGTERM', 'SIGINT']);
-        h.signals.get('SIGTERM')?.('SIGTERM');
+        h.signals.get('SIGTERM')?.();
         await settle();
         assert.deepEqual(h.calls.slice(-1), ['stop']);
-        assert.deepEqual(h.exits, [0]);
+        assert.deepEqual(h.kills, ['SIGTERM']);
         assert.ok(
             h.logger.entries.some(
                 (e) => e.message === 'SIGTERM received, stopping add-ons'
@@ -206,7 +211,7 @@ describe('ForkBootstrap.start', () => {
         );
     });
 
-    it('logs a failed stop and still exits 0', async () => {
+    it('logs a failed stop and still ends', async () => {
         const failure = new Error('stop failed');
         const h = harness(GUILD_SYNC_ON, {
             started: true,
@@ -215,9 +220,9 @@ describe('ForkBootstrap.start', () => {
             },
         });
         await createForkBootstrap(h.deps).start(services);
-        h.signals.get('SIGINT')?.('SIGINT');
+        h.signals.get('SIGINT')?.();
         await settle();
-        assert.deepEqual(h.exits, [0]);
+        assert.deepEqual(h.kills, ['SIGINT']);
         const logged = h.logger.entries.find((e) => e.level === 'error');
         assert.equal(logged?.message, 'Add-on shutdown error:');
         assert.deepEqual(logged?.meta, [failure]);

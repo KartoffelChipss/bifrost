@@ -141,6 +141,26 @@ export class ClientPlatform implements ReactionPlatform, PinPlatform {
         return othersIn([...message.reactions.cache.values()], emoji);
     }
 
+    /** Parent channels a Discord channel can have: a thread's, a category. */
+    private static readonly MAX_ANCESTORS = 2;
+
+    /** The channel, its parent and its parent's parent, as far as known. */
+    async discordLineage(channelId: string): Promise<string[]> {
+        const ids = [channelId];
+        let current = channelId;
+        for (let i = 0; i < ClientPlatform.MAX_ANCESTORS; i++) {
+            const channel =
+                this.discord.channels.cache.get(current) ??
+                (await this.discord.channels.fetch(current).catch(() => null));
+            const parent =
+                channel && 'parentId' in channel ? channel.parentId : null;
+            if (!parent) break;
+            ids.push(parent);
+            current = parent;
+        }
+        return ids;
+    }
+
     async pinned(side: Side, ref: MessageRef): Promise<boolean> {
         if (side === 'fluxer') return (await this.fluxerMessage(ref)).pinned;
         return (await this.discordMessage(ref)).pinned;

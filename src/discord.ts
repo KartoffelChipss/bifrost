@@ -37,6 +37,10 @@ import { DbStatsService } from './services/DbStatsService';
 import { isRelayedDiscordChannel } from './relay-extras/channels';
 // Fork hook: the add-on extension type (src/addons/bootstrap.ts).
 import type { DiscordClientExtension } from './addons/bootstrap';
+// Fork: tells real edits from pin and preview updates.
+import { isContentEdit } from './relay-extras/edits';
+// Fork: keeps upstream commands out of DMs (src/addons/intents.ts).
+import { upstreamCommandAllowed } from './addons/intents';
 
 const startDiscordClient = async ({
     linkService,
@@ -217,6 +221,9 @@ const startDiscordClient = async ({
 
     client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
         if (newMessage.webhookId) return;
+        // Fork: a pin or link preview is not an edit; relaying it marks the
+        // copy "(edited)" (src/relay-extras/edits.ts).
+        if (!isContentEdit(_oldMessage, newMessage, Date.now())) return;
 
         const linkedMessage =
             await linkService.getMessageLinkByDiscordMessageId(newMessage.id);
@@ -281,7 +288,9 @@ const startDiscordClient = async ({
 
         if (
             isCommandString(message.content, COMMAND_PREFIX) &&
-            !message.author.bot
+            !message.author.bot &&
+            // Fork: add-on DM intents never open upstream commands to DMs.
+            upstreamCommandAllowed(message.inGuild(), extend.intents ?? [])
         ) {
             const { command, args } = parseCommandString(
                 message.content,
