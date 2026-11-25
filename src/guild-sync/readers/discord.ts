@@ -129,7 +129,7 @@ function forumOf(c: ForumChannel | MediaChannel): ForumSnap {
  */
 export const MAX_ARCHIVE_PAGES = 20;
 
-function discordThread(
+export function discordThread(
     t: AnyThreadChannel,
     tagNames: ReadonlyMap<string, string>
 ): ThreadSnap {

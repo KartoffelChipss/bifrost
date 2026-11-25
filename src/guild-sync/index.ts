@@ -15,7 +15,7 @@ import { CycleBackoff, guardCycle } from './cycleGuard';
 import { MemoryFailureLedger } from './failures';
 import { PostgresParkedMessages } from './parkedMessages';
 import { ThreadMirror, type ThreadMirrorPorts } from './threadMirror';
-import type { ChannelLinker, ThreadSource } from './links';
+import { excludedLinks, type ChannelLinker, type ThreadSource } from './links';
 import { NoticeBoard } from './notices';
 import { discordNoticeSender } from './notifier';
 import { DiscordGuildReader } from './readers/discord';
@@ -204,26 +204,54 @@ function buildCycleDeps(
     };
 }
 
+/** How long stopping waits for thread relay work in flight. */
+export const RELAY_STOP_TIMEOUT_MS = 5_000;
+
+/**
+ * Whether the thread mirror may create a Discord thread for a link.
+ * Creating one is a structure write: apply mode only, and only while
+ * Discord is the source, so the new thread is a source object.
+ */
+export function mirrorMayWrite(
+    store: Pick<GuildSyncStore, 'loadSettings'>,
+    context: Pick<AddonContext, 'mode' | 'allowApply'>
+): (guildLinkId: string) => Promise<boolean> {
+    return async (linkId) => {
+        const settings = await store.loadSettings(linkId);
+        if (settings.direction !== 'discord-to-fluxer') return false;
+        const mode = resolveMode(
+            context.mode.mode,
+            settings,
+            context.allowApply
+        );
+        return mode.mode === 'apply';
+    };
+}
+
+/** The category of a Discord channel, or null. */
+function discordCategory(client: DiscordClient) {
+    return async (channelId: string): Promise<string | null> => {
+        const channel =
+            client.channels.cache.get(channelId) ??
+            (await client.channels.fetch(channelId));
+        return channel && 'parentId' in channel ? channel.parentId : null;
+    };
+}
+
 /** Starts the relay for messages inside threads. Returns its stop function. */
 function startThreadRelay(
     deps: GuildSyncDeps,
     context: AddonContext,
     store: PostgresGuildSyncStore
-): { relay: ThreadRelay; stop: () => void } {
+): { relay: ThreadRelay; stop: () => Promise<void> } {
     const mirror = new ThreadMirror({
         store,
         ports: deps.bridge,
-        // Creating a Discord thread is a structure write: apply mode only.
-        mayWrite: async (linkId) => {
-            const settings = await store.loadSettings(linkId);
-            if (settings.direction !== 'discord-to-fluxer') return false;
-            const mode = resolveMode(
-                context.mode.mode,
-                settings,
-                context.allowApply
-            );
-            return mode.mode === 'apply';
-        },
+        mayWrite: mirrorMayWrite(store, context),
+        // A private thread's copy gets its members' linked accounts.
+        linkedAccounts: deps.identityEnabled
+            ? linkedMembers(deps.sequelize)
+            : undefined,
         now: () => new Date(),
         logger: context.logger,
     });
@@ -243,6 +271,11 @@ function startThreadRelay(
         mirror: (link, event, raw) => mirror.mirror(link, event, raw),
         // Held replies survive a restart (addon_parked_messages).
         parked: new PostgresParkedMessages(deps.sequelize),
+        // Excluded channels are never bridged, even while a link remains.
+        excluded: excludedLinks(
+            deps.excludedChannels,
+            discordCategory(deps.discordClient)
+        ),
         now: () => new Date(),
         logger: context.logger,
     });
@@ -256,9 +289,15 @@ function startThreadRelay(
     );
     return {
         relay,
-        stop: () => {
+        stop: async () => {
             stopDiscord();
             stopFluxer();
+            const idle = await relay.stop(RELAY_STOP_TIMEOUT_MS);
+            if (!idle) {
+                context.logger.warn(
+                    `[guild-sync] Thread relay work still running after ${RELAY_STOP_TIMEOUT_MS} ms; stopping anyway`
+                );
+            }
         },
     };
 }
@@ -272,7 +311,7 @@ function startThreadRelay(
 export function createGuildSyncAddon(deps: GuildSyncDeps): Addon {
     let scheduler: SyncScheduler | null = null;
     let listener: ((...args: unknown[]) => void) | null = null;
-    let stopRelay: (() => void) | null = null;
+    let stopRelay: (() => Promise<void>) | null = null;
 
     return {
         name: ADDON_NAME,
@@ -320,9 +359,10 @@ export function createGuildSyncAddon(deps: GuildSyncDeps): Addon {
                     deps.discordClient.off(event, listener);
             }
             listener = null;
-            stopRelay?.();
+            const relayStopped = stopRelay?.();
             stopRelay = null;
-            await scheduler?.stop();
+            // Both wait together, within the host's stop deadline.
+            await Promise.all([relayStopped, scheduler?.stop()]);
             scheduler = null;
         },
     };

@@ -39,6 +39,23 @@ export interface ChannelLinker {
     byFluxerChannel(fluxerChannelId: string): Promise<LinkedChannel | null>;
 }
 
+/**
+ * A check for links whose Discord channel is excluded: the channel itself
+ * or its category is listed, the rule excludedIds (snapshot.ts) applies to
+ * channels. `categoryOf` gives a Discord channel's category, or null.
+ */
+export function excludedLinks(
+    listed: ReadonlySet<string>,
+    categoryOf: (discordChannelId: string) => Promise<string | null>
+): (link: LinkedChannel) => Promise<boolean> {
+    return async (link) => {
+        if (listed.size === 0) return false;
+        if (listed.has(link.discordChannelId)) return true;
+        const category = await categoryOf(link.discordChannelId);
+        return category !== null && listed.has(category);
+    };
+}
+
 /** Reads what a thread needs from the source besides its structure. */
 export interface ThreadSource {
     /**
