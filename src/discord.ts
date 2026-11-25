@@ -4,7 +4,6 @@ import {
     Events,
     GatewayIntentBits,
     Partials,
-    TextChannel,
 } from 'discord.js';
 import { COMMAND_PREFIX, DELETE_INVOCATION, DISCORD_TOKEN } from './utils/env';
 import { EmbedColors } from './utils/embeds';
@@ -34,6 +33,8 @@ import FluxerStatsService from './services/statsService/FluxerStatsService';
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import StatsDiscordCommandHandler from './commands/discord/handlers/StatsDiscordCommandHandler';
 import { DbStatsService } from './services/DbStatsService';
+// Fork: the relay's channel check (src/relay-extras/channels.ts).
+import { isRelayedDiscordChannel } from './relay-extras/channels';
 
 const startDiscordClient = async ({
     linkService,
@@ -47,6 +48,7 @@ const startDiscordClient = async ({
     fluxerStatsService,
     dbStatsService,
     extraIntents = [],
+    extraPartials = [],
     extraCommands = {},
 }: {
     linkService: LinkService;
@@ -61,6 +63,8 @@ const startDiscordClient = async ({
     dbStatsService: DbStatsService;
     // Fork hook: intents the enabled add-ons need (src/addons/intents.ts).
     extraIntents?: GatewayIntentBits[];
+    // Fork hook: partials the enabled add-ons need (src/addons/intents.ts).
+    extraPartials?: Partials[];
     // Fork hook: commands the enabled add-ons add (src/addons/commands.ts).
     extraCommands?: Readonly<
         Record<string, (client: Client) => DiscordCommandHandler>
@@ -73,7 +77,7 @@ const startDiscordClient = async ({
             GatewayIntentBits.MessageContent,
             ...extraIntents,
         ],
-        partials: [Partials.Message, Partials.Channel],
+        partials: [Partials.Message, Partials.Channel, ...extraPartials],
         presence: {
             status: 'online',
             activities: [
@@ -326,7 +330,10 @@ const startDiscordClient = async ({
 
         if (
             message.inGuild() &&
-            message.channel instanceof TextChannel &&
+            // Fork: announcement and voice-channel chat relay like text
+            // channels; neither is a TextChannel. Threads stay with the
+            // guild-sync add-on's thread relay.
+            isRelayedDiscordChannel(message.channel) &&
             !isCommandString(message.content, COMMAND_PREFIX)
         ) {
             await messageRelay.relayMessage(message);

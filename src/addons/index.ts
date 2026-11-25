@@ -13,9 +13,11 @@ import { FluxerGuildWriter } from '../guild-sync/writers/fluxer';
 import { createHistoryAddon } from '../history';
 import type { HistoryPorts } from '../history/types';
 import { createIdentityAddon, type IdentityPorts } from '../identity';
+import { createRelayExtras, withRelayExtras } from '../relay-extras';
+import type { RelayLookupPorts } from '../relay-extras/types';
 
 export { requireAddonConfig } from './config';
-export { addonDiscordIntents } from './intents';
+export { addonDiscordIntents, addonDiscordPartials } from './intents';
 
 /**
  * The result of the last {@link initAddonDatabase} call. Upstream's
@@ -43,7 +45,10 @@ export type AddonDeps = Omit<
     GuildSyncDeps,
     'historyEnabled' | 'identityEnabled' | 'bridge' | 'excludedChannels'
 > & {
-    readonly bridge: GuildSyncDeps['bridge'] & HistoryPorts & IdentityPorts;
+    readonly bridge: GuildSyncDeps['bridge'] &
+        HistoryPorts &
+        IdentityPorts &
+        RelayLookupPorts;
 };
 
 /** Add-on implementations, each built only when it is switched on. */
@@ -56,13 +61,22 @@ export function addonFactories(
         deps.isChannelLinked
     );
     return {
+        // Live reactions and pins start and stop with guild-sync.
         guildSync: () =>
-            createGuildSyncAddon({
-                ...deps,
-                historyEnabled: config.history,
-                identityEnabled: config.identity,
-                excludedChannels: config.excludedChannels,
-            }),
+            withRelayExtras(
+                createGuildSyncAddon({
+                    ...deps,
+                    historyEnabled: config.history,
+                    identityEnabled: config.identity,
+                    excludedChannels: config.excludedChannels,
+                }),
+                createRelayExtras({
+                    discordClient: deps.discordClient,
+                    fluxerClientRef: deps.fluxerClientRef,
+                    sequelize: deps.sequelize,
+                    lookups: deps.bridge,
+                })
+            ),
         history: () =>
             createHistoryAddon({
                 discordClient: deps.discordClient,

@@ -773,4 +773,59 @@ export class UpstreamBridge
         const member = await guild.fetchMember(userId);
         await member.edit({ nick });
     }
+
+    // ---- ReactionPorts (src/relay-extras: live reactions and pins)
+
+    /** The message_links pair of a message relayed in a bridged channel. */
+    async bridgedMessage(side: SnapshotSide, messageId: string) {
+        const { linkService } = this.up;
+        const link =
+            side === 'discord'
+                ? await linkService.getMessageLinkByDiscordMessageId(messageId)
+                : await linkService.getMessageLinkByFluxerMessageId(messageId);
+        if (!link) return null;
+        const channel = await linkService.getChannelLinkById(
+            link.channelLinkId
+        );
+        if (!channel) return null;
+        return {
+            guildLinkId: link.guildLinkId,
+            discord: {
+                channelId: channel.discordChannelId,
+                messageId: link.discordMessageId,
+            },
+            fluxer: {
+                channelId: channel.fluxerChannelId,
+                messageId: link.fluxerMessageId,
+            },
+        };
+    }
+
+    /** A custom emoji of the guild link's server on `side`, if it is there. */
+    async guildEmoji(side: SnapshotSide, guildLinkId: string, emojiId: string) {
+        const { linkService, discordEntityResolver, fluxerEntityResolver } =
+            this.up;
+        const guildLink = await linkService.getGuildLinkById(guildLinkId);
+        if (!guildLink) return null;
+        // Both resolvers cache a guild's emoji list for a minute.
+        const emojis: readonly {
+            id: string;
+            name: string | null;
+            animated: boolean | null;
+        }[] =
+            side === 'discord'
+                ? await discordEntityResolver.fetchEmojis(
+                      guildLink.discordGuildId
+                  )
+                : await fluxerEntityResolver.fetchEmojis(
+                      guildLink.fluxerGuildId
+                  );
+        const found = emojis.find((emoji) => emoji.id === emojiId);
+        if (!found?.name) return null;
+        return {
+            id: found.id,
+            name: found.name,
+            animated: found.animated ?? false,
+        };
+    }
 }

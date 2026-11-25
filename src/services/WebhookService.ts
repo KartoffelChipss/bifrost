@@ -8,7 +8,6 @@ import {
 import {
     AttachmentBuilder,
     Client as DiscordClient,
-    TextChannel as DiscordTextChannel,
     WebhookClient,
 } from 'discord.js';
 import logger from '../utils/logging/logger';
@@ -52,7 +51,13 @@ export class WebhookService {
 
         try {
             const channel = await this.discordClient.channels.fetch(channelId);
-            if (!channel || !(channel instanceof DiscordTextChannel)) {
+            // Fork: announcement and voice channels take webhooks too, so
+            // they can be linked. Threads and DMs cannot.
+            if (
+                !channel?.isTextBased() ||
+                channel.isDMBased() ||
+                channel.isThread()
+            ) {
                 throw new Error('Invalid Discord channel');
             }
 
