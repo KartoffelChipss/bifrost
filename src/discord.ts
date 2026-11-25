@@ -35,6 +35,8 @@ import StatsDiscordCommandHandler from './commands/discord/handlers/StatsDiscord
 import { DbStatsService } from './services/DbStatsService';
 // Fork: the relay's channel check (src/relay-extras/channels.ts).
 import { isRelayedDiscordChannel } from './relay-extras/channels';
+// Fork hook: the add-on extension type (src/addons/bootstrap.ts).
+import type { DiscordClientExtension } from './addons/bootstrap';
 
 const startDiscordClient = async ({
     linkService,
@@ -47,9 +49,8 @@ const startDiscordClient = async ({
     discordStatsService,
     fluxerStatsService,
     dbStatsService,
-    extraIntents = [],
-    extraPartials = [],
-    extraCommands = {},
+    // Fork hook: what the enabled add-ons add (src/addons/bootstrap.ts).
+    extend = {},
 }: {
     linkService: LinkService;
     webhookService: WebhookService;
@@ -61,23 +62,21 @@ const startDiscordClient = async ({
     discordStatsService: DiscordStatsService;
     fluxerStatsService: FluxerStatsService;
     dbStatsService: DbStatsService;
-    // Fork hook: intents the enabled add-ons need (src/addons/intents.ts).
-    extraIntents?: GatewayIntentBits[];
-    // Fork hook: partials the enabled add-ons need (src/addons/intents.ts).
-    extraPartials?: Partials[];
-    // Fork hook: commands the enabled add-ons add (src/addons/commands.ts).
-    extraCommands?: Readonly<
-        Record<string, (client: Client) => DiscordCommandHandler>
-    >;
+    // Fork hook: add-on intents, partials and commands.
+    extend?: Partial<DiscordClientExtension>;
 }): Promise<Client> => {
     const client = new Client({
         intents: [
             GatewayIntentBits.Guilds,
             GatewayIntentBits.GuildMessages,
             GatewayIntentBits.MessageContent,
-            ...extraIntents,
+            ...(extend.intents ?? []),
         ],
-        partials: [Partials.Message, Partials.Channel, ...extraPartials],
+        partials: [
+            Partials.Message,
+            Partials.Channel,
+            ...(extend.partials ?? []),
+        ],
         presence: {
             status: 'online',
             activities: [
@@ -144,7 +143,7 @@ const startDiscordClient = async ({
             fluxerEntityResolver
         )
     );
-    for (const [name, create] of Object.entries(extraCommands)) {
+    for (const [name, create] of Object.entries(extend.commands ?? {})) {
         commandRegistry.registerCommand(name, create(client));
     }
 
