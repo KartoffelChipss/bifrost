@@ -246,6 +246,25 @@ function compareMapped<
     };
 }
 
+/** A create, or a finding when the item's parent is gone on Fluxer. */
+function planCreate<T extends { readonly id: string; readonly name: string }>(
+    spec: ObjectSpec<T>,
+    map: IdMap,
+    item: T,
+    out: Out
+): void {
+    const parent = spec.missingParent?.(item) ?? null;
+    if (parent === null) {
+        out.ops.push(createOp(spec, map, item));
+        return;
+    }
+    reportMissingParent(
+        out,
+        spec.kind === 'thread' ? 'channel' : 'category',
+        parent
+    );
+}
+
 function diffObjects<T extends { readonly id: string; readonly name: string }>(
     spec: ObjectSpec<T>,
     map: IdMap,
@@ -267,13 +286,7 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
         }
         const destId = map.dest(spec.kind, item.id);
         if (!destId) {
-            const parent = spec.missingParent?.(item) ?? null;
-            if (parent === null) out.ops.push(createOp(spec, map, item));
-            else {
-                const parentKind =
-                    spec.kind === 'thread' ? 'channel' : 'category';
-                reportMissingParent(out, parentKind, parent);
-            }
+            planCreate(spec, map, item, out);
             continue;
         }
         const dest = destById.get(destId);
@@ -286,7 +299,7 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
             });
             continue;
         }
-        const { changes, drifted, settled, firstSync } = compareMapped(
+        const compared = compareMapped(
             spec,
             map,
             item,
@@ -294,25 +307,37 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
             prevById.get(item.id),
             enforce
         );
-        if (changes.length > 0) {
-            out.ops.push({
-                op: 'update',
-                kind: spec.kind,
-                sourceId: item.id,
-                destId,
-                changes,
-                settled,
-                ...(firstSync ? { baseline: true as const } : {}),
-            });
-        }
-        if (drifted.length > 0) {
-            out.findings.push({
-                type: 'drift',
-                kind: spec.kind,
-                id: destId,
-                detail: `edited on the destination: ${drifted.join(', ')}`,
-            });
-        }
+        pushCompared(out, spec.kind, item.id, destId, compared);
+    }
+}
+
+/** The update and the drift finding one compared pair needs, if any. */
+function pushCompared(
+    out: Out,
+    kind: SyncKind,
+    sourceId: string,
+    destId: string,
+    compared: ReturnType<typeof compareMapped>
+): void {
+    const { changes, drifted, settled, firstSync } = compared;
+    if (changes.length > 0) {
+        out.ops.push({
+            op: 'update',
+            kind,
+            sourceId,
+            destId,
+            changes,
+            settled,
+            ...(firstSync ? { baseline: true as const } : {}),
+        });
+    }
+    if (drifted.length > 0) {
+        out.findings.push({
+            type: 'drift',
+            kind,
+            id: destId,
+            detail: `edited on the destination: ${drifted.join(', ')}`,
+        });
     }
 }
 

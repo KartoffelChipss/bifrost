@@ -391,6 +391,26 @@ async function withRoleIcon(
     return { ...patch, icon: image };
 }
 
+/** Locks a channel and, unless it is a category, moves it to the archive. */
+async function archiveChannel(
+    state: RunState,
+    action: Extract<Write, { type: 'archive-channel' }>,
+    destId: string
+): Promise<void> {
+    const { writer } = state.deps;
+    const guildId = state.input.destination.guildId;
+    if (!action.move) {
+        await writer.updateChannel(guildId, destId, action.patch);
+        return;
+    }
+    const parentId = await archiveCategory(state);
+    await writer.updateChannel(guildId, destId, { ...action.patch, parentId });
+    state.archiveMoves.set(
+        parentId,
+        (state.archiveMoves.get(parentId) ?? 0) + 1
+    );
+}
+
 /** Performs the write. Returns the new ID for a create, else null. */
 async function perform(
     state: RunState,
@@ -414,22 +434,9 @@ async function perform(
         case 'update-channel':
             await writer.updateChannel(guildId, destId, action.patch);
             return null;
-        case 'archive-channel': {
-            if (!action.move) {
-                await writer.updateChannel(guildId, destId, action.patch);
-                return null;
-            }
-            const parentId = await archiveCategory(state);
-            await writer.updateChannel(guildId, destId, {
-                ...action.patch,
-                parentId,
-            });
-            state.archiveMoves.set(
-                parentId,
-                (state.archiveMoves.get(parentId) ?? 0) + 1
-            );
+        case 'archive-channel':
+            await archiveChannel(state, action, destId);
             return null;
-        }
         case 'update-guild':
             await writer.updateGuild(guildId, action.patch);
             return null;

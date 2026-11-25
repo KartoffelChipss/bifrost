@@ -25,7 +25,7 @@ import {
     planNotice,
     type NoticeBoard,
 } from './notices';
-import type { Finding, MapRow } from './ops';
+import type { MapRow, PlanOp } from './ops';
 import { destIdOf, isRemoval, sourceIdOf } from './ops';
 import { EMPTY_BODY, summarizePlan, type Plan, type PlanBody } from './plan';
 import type { GuildReader } from './readers/reader';
@@ -344,20 +344,14 @@ async function linkState(
     };
 }
 
-/** Diff plus guards 1, 4 to 7 and 14, in that order. */
-async function buildBody(
+/** The map with missing counts updated (guard 4), and the diff. */
+async function diffWithMap(
     link: LinkedGuild,
     settings: SyncSettings,
     gated: Extract<GateOutcome, { ok: true }>,
     deps: CycleDeps,
-    now: Date,
-    pinned: ReadonlySet<string> = new Set()
-): Promise<{
-    body: PlanBody;
-    rows: MapRow[];
-    members: ReadonlyMap<string, string> | undefined;
-    historyLocked: ReadonlySet<string>;
-}> {
+    now: Date
+) {
     const { direction } = settings;
     const { source, destination } = gated;
     const members = await membersFor(deps, direction);
@@ -365,7 +359,6 @@ async function buildBody(
     const missing = trackMissing(loaded, source, direction, now);
     await deps.store.saveMissing(missing, now);
     const rows = applyMissing(loaded, missing);
-
     const excluded = excludedIds(source, deps.excludedChannels ?? new Set());
     const links = await linkState(link, settings, deps);
     const found = diff({
@@ -384,6 +377,48 @@ async function buildBody(
         never: links?.never ?? new Set(),
         excluded,
     });
+    return { rows, members, found, historyLocked };
+}
+
+/** Creates whose earlier attempt already made the object (adopt.ts). */
+async function withAdoptions(
+    link: LinkedGuild,
+    gated: Extract<GateOutcome, { ok: true }>,
+    ops: readonly PlanOp[],
+    map: IdMap,
+    deps: CycleDeps,
+    now: Date
+): Promise<PlanOp[]> {
+    const intents = await deps.store.createIntents(
+        link.id,
+        new Date(now.getTime() - INTENT_WINDOW_MS)
+    );
+    const { source, destination } = gated;
+    return markAdoptions({ ops, intents, source, destination, map });
+}
+
+/** Diff plus guards 1, 4 to 7 and 14, in that order. */
+async function buildBody(
+    link: LinkedGuild,
+    settings: SyncSettings,
+    gated: Extract<GateOutcome, { ok: true }>,
+    deps: CycleDeps,
+    now: Date,
+    pinned: ReadonlySet<string> = new Set()
+): Promise<{
+    body: PlanBody;
+    rows: MapRow[];
+    members: ReadonlyMap<string, string> | undefined;
+    historyLocked: ReadonlySet<string>;
+}> {
+    const { source, destination } = gated;
+    const { rows, members, found, historyLocked } = await diffWithMap(
+        link,
+        settings,
+        gated,
+        deps,
+        now
+    );
     const removals = await confirmedRemovals(
         link,
         settings,
@@ -392,19 +427,8 @@ async function buildBody(
         now,
         pinned
     );
-
-    const map = IdMap.from(rows, direction, source, destination);
-    const intents = await deps.store.createIntents(
-        link.id,
-        new Date(now.getTime() - INTENT_WINDOW_MS)
-    );
-    const adopted = markAdoptions({
-        ops: found.ops,
-        intents,
-        source,
-        destination,
-        map,
-    });
+    const map = IdMap.from(rows, settings.direction, source, destination);
+    const adopted = await withAdoptions(link, gated, found.ops, map, deps, now);
     const owned = enforceOwnership(
         [...adopted, ...removals.ops],
         map,
@@ -416,15 +440,10 @@ async function buildBody(
     );
     const budget = checkDeleteBudget(owned.kept, settings, removalsToday);
     const capped = orderAndCap(owned.kept, settings.writeCapPerCycle);
-    const findings: Finding[] = [
-        ...found.findings,
-        ...removals.findings,
-        ...owned.dropped,
-    ];
     const body: PlanBody = {
         ops: capped.now,
         deferred: capped.deferred,
-        findings,
+        findings: [...found.findings, ...removals.findings, ...owned.dropped],
         needsApproval: budget.needsApproval,
         approvalReason: budget.needsApproval ? budget.reason : null,
         removalRowIds: removals.rowIds,

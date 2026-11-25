@@ -638,6 +638,27 @@ function expressionUpdate(op: UpdateOp, ctx: WriteContext): WriteAction {
     return skip(`a ${op.kind} cannot be updated`);
 }
 
+/** A locked channel, moved to the archive; a category is renamed instead. */
+function archiveChannel(
+    destId: string,
+    destination: GuildSnapshot
+): WriteAction {
+    const channel = destination.channels.find((c) => c.id === destId);
+    if (!channel) return { type: 'gone' };
+    const overwrites = lockOverwrites(
+        channel.overwrites,
+        destination.everyoneRoleId
+    );
+    const isCategory = channelKind(channel.type) === 'category';
+    return {
+        type: 'archive-channel',
+        move: !isCategory,
+        patch: isCategory
+            ? { name: archivedName(channel.name, ROLE_NAME_MAX), overwrites }
+            : { overwrites },
+    };
+}
+
 /** Soft delete (guard 5): the object stays, renamed or locked. */
 function archiveAction(op: ArchiveOp, ctx: WriteContext): WriteAction {
     const { destination } = ctx;
@@ -653,23 +674,7 @@ function archiveAction(op: ArchiveOp, ctx: WriteContext): WriteAction {
         };
     }
     if (op.kind === 'category' || op.kind === 'channel') {
-        const channel = destination.channels.find((c) => c.id === op.destId);
-        if (!channel) return { type: 'gone' };
-        const overwrites = lockOverwrites(
-            channel.overwrites,
-            destination.everyoneRoleId
-        );
-        const isCategory = channelKind(channel.type) === 'category';
-        return {
-            type: 'archive-channel',
-            move: !isCategory,
-            patch: isCategory
-                ? {
-                      name: archivedName(channel.name, ROLE_NAME_MAX),
-                      overwrites,
-                  }
-                : { overwrites },
-        };
+        return archiveChannel(op.destId, destination);
     }
     if (op.kind === 'emoji') {
         const emoji = destination.emojis.find((e) => e.id === op.destId);
