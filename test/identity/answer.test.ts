@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { FlowDeps } from '../../src/identity/flow';
 import { FAILED_REPLY, answer, dryRunNotice } from '../../src/identity/index';
+import { emptyTally } from '../../src/identity/roleSync';
 import type { IdentityStore } from '../../src/identity/store';
 import { createRecordingLogger } from '../addons/fakes';
 
@@ -87,8 +88,19 @@ describe('answer on a failure', () => {
 
 describe('dryRunNotice', () => {
     it('counts roles and nicknames', () => {
-        const text = dryRunNotice(3, { add: 1, remove: 2, nicks: 4 });
-        assert.match(text, /3 linked members/);
-        assert.match(text, /add 1 roles, remove 2 roles and set 4 nicknames/);
+        const text = dryRunNotice(3, {
+            add: 1,
+            remove: 2,
+            nicks: 4,
+            bans: 5,
+            timeouts: 6,
+        });
+        assert.match(text, /3 linked members\./);
+        assert.match(
+            text,
+            /add 1 roles, remove 2 roles, set 4 nicknames, ban 5 and set 6 timeouts/
+        );
+        const partial = dryRunNotice(3, emptyTally(), 2);
+        assert.match(partial, /2 checked this sweep/);
     });
 });

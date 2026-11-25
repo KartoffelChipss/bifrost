@@ -20,6 +20,7 @@ export function addonDiscordIntents(config: AddonConfig): GatewayIntentBits[] {
     if (config.identity) {
         intents.add(GatewayIntentBits.GuildMembers);
         intents.add(GatewayIntentBits.DirectMessages);
+        intents.add(GatewayIntentBits.GuildModeration); // identity: ban events
     }
     return [...intents];
 }

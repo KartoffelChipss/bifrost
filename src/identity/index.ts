@@ -7,6 +7,7 @@ import {
     ChannelType,
     Events,
     type Client as DiscordClient,
+    type GuildBan,
     type GuildMember,
     type Message,
     type PartialGuildMember,
@@ -198,13 +199,39 @@ function listenToDiscord(l: Listeners): () => void {
         (member: GuildMember | PartialGuildMember) =>
             syncDiscordMember(l, member.id, member.guild.id)
     );
+    const stopBans = listenToDiscordBans(l);
     client.on(Events.MessageCreate, onDm);
     client.on(Events.GuildMemberUpdate, onMember);
     client.on(Events.GuildMemberRemove, onLeave);
     return () => {
+        stopBans();
         client.off(Events.MessageCreate, onDm);
         client.off(Events.GuildMemberUpdate, onMember);
         client.off(Events.GuildMemberRemove, onLeave);
+    };
+}
+
+/**
+ * Discord bans and unbans of linked members (Guild Moderation intent). A
+ * ban is applied by the member sync, which finds it; an unban lifts only
+ * a Fluxer ban the sync made.
+ */
+function listenToDiscordBans(l: Listeners): () => void {
+    const client = l.deps.discordClient;
+    const onBan = l.wrap('ban', (ban: GuildBan) =>
+        syncDiscordMember(l, ban.user.id, ban.guild.id)
+    );
+    const onUnban = l.wrap('unban', (ban: GuildBan) =>
+        quietly(l.logger, `Unban of ${ban.user.id}`, async () => {
+            const pair = await l.store.pairFor('discord', ban.user.id);
+            if (pair) await l.roles.unban(pair, ban.guild.id);
+        })
+    );
+    client.on(Events.GuildBanAdd, onBan);
+    client.on(Events.GuildBanRemove, onUnban);
+    return () => {
+        client.off(Events.GuildBanAdd, onBan);
+        client.off(Events.GuildBanRemove, onUnban);
     };
 }
 
@@ -285,7 +312,7 @@ export function dryRunNotice(
         checked < pairs
             ? ` (${checked} checked this sweep; the rest next)`
             : '';
-    return `Account linking (dry-run): ${pairs} linked members${partial}. Would add ${tally.add} roles, remove ${tally.remove} roles and set ${tally.nicks} nicknames. At most ${MAX_ROLE_REMOVALS_PER_HOUR} role removals per hour are applied.`;
+    return `Account linking (dry-run): ${pairs} linked members${partial}. Would add ${tally.add} roles, remove ${tally.remove} roles, set ${tally.nicks} nicknames, ban ${tally.bans} and set ${tally.timeouts} timeouts. At most ${MAX_ROLE_REMOVALS_PER_HOUR} role removals per hour are applied.`;
 }
 
 /** Where each guild link's next sweep resumes, by pair index. */

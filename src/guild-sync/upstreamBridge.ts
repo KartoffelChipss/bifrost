@@ -798,6 +798,8 @@ export class UpstreamBridge
                     (id) => id !== guildId
                 ),
                 nick: member.nickname,
+                timeoutUntil:
+                    member.communicationDisabledUntil?.toISOString() ?? null,
             };
         } catch (error) {
             const unknown =
@@ -816,7 +818,12 @@ export class UpstreamBridge
         const guild = await this.fluxer().guilds.fetch(guildId);
         try {
             const member = await guild.fetchMember(userId);
-            return { roleIds: [...member.roles.roleIds], nick: member.nick };
+            return {
+                roleIds: [...member.roles.roleIds],
+                nick: member.nick,
+                timeoutUntil:
+                    member.communicationDisabledUntil?.toISOString() ?? null,
+            };
         } catch (error) {
             if ((error as { statusCode?: unknown }).statusCode === 404) {
                 return null;
@@ -843,6 +850,58 @@ export class UpstreamBridge
         const guild = await this.fluxer().guilds.fetch(guildId);
         const member = await guild.fetchMember(userId);
         await member.edit({ nick });
+    }
+
+    async discordBanned(guildId: string, userId: string): Promise<boolean> {
+        const guild = await this.up.discordClient.guilds.fetch(guildId);
+        try {
+            await guild.bans.fetch({ user: userId, force: true });
+            return true;
+        } catch (error) {
+            const unknown =
+                error instanceof DiscordAPIError &&
+                error.code === RESTJSONErrorCodes.UnknownBan;
+            if (unknown) return false;
+            throw error;
+        }
+    }
+
+    async banFluxerMember(
+        guildId: string,
+        userId: string,
+        reason: string
+    ): Promise<void> {
+        const guild = await this.fluxer().guilds.fetch(guildId);
+        await guild.ban(userId, { reason });
+    }
+
+    async fluxerBanReason(
+        guildId: string,
+        userId: string
+    ): Promise<string | null> {
+        const guild = await this.fluxer().guilds.fetch(guildId);
+        const bans = await guild.fetchBans();
+        const ban = bans.find((b) => b.user.id === userId);
+        return ban ? (ban.reason ?? '') : null;
+    }
+
+    async unbanFluxerMember(guildId: string, userId: string): Promise<void> {
+        const guild = await this.fluxer().guilds.fetch(guildId);
+        await guild.unban(userId, 'Unbanned on Discord');
+    }
+
+    /** Fluxer takes the end as communication_disabled_until (ISO time). */
+    async setFluxerTimeout(
+        guildId: string,
+        userId: string,
+        until: string | null
+    ): Promise<void> {
+        const guild = await this.fluxer().guilds.fetch(guildId);
+        const member = await guild.fetchMember(userId);
+        await member.edit({
+            communicationDisabledUntil: until,
+            timeoutReason: until ? 'Timed out on Discord' : null,
+        });
     }
 
     // ---- ReactionPorts (src/relay-extras: live reactions and pins)

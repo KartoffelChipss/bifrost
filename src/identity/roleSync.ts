@@ -3,6 +3,11 @@ import type { AddonLogger } from '../addons/isolation';
 import { resolveMode, type LinkedGuild } from '../guild-sync/cycle';
 import type { GuildSyncStore } from '../guild-sync/store';
 import { RollingLimit } from './limits';
+import {
+    MemberModeration,
+    type ModerationPorts,
+    type ModerationTally,
+} from './moderationSync';
 import { NickMemory, nickChange, type NickChange } from './nick';
 import type { IdentityPorts, MemberState } from './ports';
 import {
@@ -60,7 +65,8 @@ export interface RoleSyncDeps {
         | 'fluxerMember'
         | 'setFluxerMemberRoles'
         | 'setFluxerMemberNick'
-    >;
+    > &
+        ModerationPorts;
     readonly listGuildLinks: () => Promise<readonly LinkedGuild[]>;
     readonly processMode: () => AddonMode;
     readonly allowApply: boolean;
@@ -80,13 +86,19 @@ export interface LinkPlan {
 }
 
 /** Changes counted in one pass. In dry-run they are only counted. */
-export interface Tally {
+export interface Tally extends ModerationTally {
     add: number;
     remove: number;
     nicks: number;
 }
 
-export const emptyTally = (): Tally => ({ add: 0, remove: 0, nicks: 0 });
+export const emptyTally = (): Tally => ({
+    add: 0,
+    remove: 0,
+    nicks: 0,
+    bans: 0,
+    timeouts: 0,
+});
 
 const describePair = (pair: AccountPair) =>
     `Discord ${pair.discordUserId} / Fluxer ${pair.fluxerUserId}`;
@@ -103,8 +115,11 @@ export class RoleSync {
     );
     private readonly nicks = new NickMemory();
     private readonly lists = new Map<string, RoleLists>();
+    private readonly moderation: MemberModeration;
 
-    constructor(private readonly deps: RoleSyncDeps) {}
+    constructor(private readonly deps: RoleSyncDeps) {
+        this.moderation = new MemberModeration(deps);
+    }
 
     /**
      * Loads a link's settings, and its role lists from the snapshot and
@@ -223,6 +238,26 @@ export class RoleSync {
     }
 
     /**
+     * Lifts the Fluxer bans this sync made for a member unbanned on one
+     * Discord server, in apply only. Never throws.
+     */
+    async unban(pair: AccountPair, discordGuildId: string): Promise<void> {
+        try {
+            const links = await this.deps.listGuildLinks();
+            for (const link of links.slice(0, MAX_LINKS)) {
+                if (link.discordGuildId !== discordGuildId) continue;
+                const plan = await this.plan(link);
+                if (plan) await this.moderation.unban(plan, pair);
+            }
+        } catch (error) {
+            this.deps.logger.warn(
+                `[identity] Could not unban ${describePair(pair)}:`,
+                error
+            );
+        }
+    }
+
+    /**
      * Syncs the pairs on one link in order until `deadline` (ms). Returns
      * how many were checked, or null when the link syncs nothing.
      */
@@ -246,16 +281,20 @@ export class RoleSync {
     private async syncMember(plan: LinkPlan, pair: AccountPair, tally: Tally) {
         const { ports } = this.deps;
         const { link } = plan;
-        // A member who left or was banned holds no roles there.
-        const discord = (await ports.discordMember(
+        const present = await ports.discordMember(
             link.discordGuildId,
             pair.discordUserId
-        )) ?? { roleIds: [], nick: null };
+        );
         const fluxer = await ports.fluxerMember(
             link.fluxerGuildId,
             pair.fluxerUserId
         );
         if (!fluxer) return;
+        if (!present && (await this.moderation.banIfBanned(plan, pair, tally)))
+            return;
+        // A member who left holds no roles there.
+        const discord = present ?? { roleIds: [], nick: null };
+        await this.moderation.syncTimeout(plan, pair, discord, fluxer, tally);
         const key = `${link.id}:${pair.fluxerUserId}`;
         const roles = roleChanges(
             discord.roleIds,
