@@ -360,8 +360,11 @@ describe('copying a forum post', () => {
             s.ports.sent.map((m) => [m.webhook, m.threadId]),
             [['fw-f20', 'f200']]
         );
+        // Unlocked only while the page is sent, then locked again; an
+        // archived thread is never opened, as a webhook post reopens it.
         assert.deepEqual(s.threadEdits, [
-            'f200 {"archived":false,"locked":false}',
+            'f200 {"locked":false}',
+            'f200 {"locked":true}',
             'f200 {"archived":true,"locked":true}',
         ]);
         assert.equal(s.store.job('200').status, 'done');
@@ -387,6 +390,32 @@ describe('copying a forum post', () => {
             ['message 201', 'message 204']
         );
         assert.equal(s.store.job('200').checkpointId, '204');
+    });
+});
+
+describe('thread lock window', () => {
+    it('never unlocks a thread that is open on Discord, and re-locks after a failed page', async () => {
+        const s = setup();
+        s.ports.add('200', '201');
+        s.map('thread', '200', 'f200');
+        await s.links.link(LINK.id, '20', 'f20');
+        s.ports.threadStates.set('200', { archived: true, locked: false });
+        await s.drain();
+        assert.deepEqual(s.threadEdits, [
+            'f200 {"archived":true,"locked":false}',
+        ]);
+
+        const t = setup();
+        t.ports.add('200', '201');
+        t.map('thread', '200', 'f200');
+        await t.links.link(LINK.id, '20', 'f20');
+        t.ports.threadStates.set('200', { archived: false, locked: true });
+        t.ports.failNext = 1;
+        await t.importer.run(LINK);
+        assert.deepEqual(t.threadEdits, [
+            'f200 {"locked":false}',
+            'f200 {"locked":true}',
+        ]);
     });
 });
 

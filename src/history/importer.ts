@@ -486,23 +486,10 @@ export class HistoryImporter {
         return { target: { webhook, threadId: null }, bridgeHook: null };
     }
 
-    /** Sets the cutoff, and opens an archived or locked thread for writing. */
-    private async begin(
-        link: LinkedGuild,
-        job: HistoryJob
-    ): Promise<HistoryJob> {
+    /** Sets the cutoff the import copies up to. */
+    private async begin(job: HistoryJob): Promise<HistoryJob> {
         const cutoffId =
             (await this.deps.ports.newestMessageId(job.discordId)) ?? '0';
-        if (job.kind === 'thread' && job.fluxerId) {
-            await this.deps.writer.updateThread(
-                link.fluxerGuildId,
-                job.fluxerId,
-                {
-                    archived: false,
-                    locked: false,
-                }
-            );
-        }
         // lastError may hold a dry-run survey note.
         await this.deps.store.updateJob(
             job.id,
@@ -561,9 +548,7 @@ export class HistoryImporter {
 
     private async importPage(pass: Pass, start: HistoryJob): Promise<boolean> {
         const job =
-            start.status === 'pending'
-                ? await this.begin(pass.link, start)
-                : start;
+            start.status === 'pending' ? await this.begin(start) : start;
         const route = await this.route(job);
         await this.recover(job);
         const cutoff = job.cutoffId ?? '0';
@@ -574,6 +559,45 @@ export class HistoryImporter {
         );
         const due = page.filter((m) => !later(m.id, cutoff));
         if (due.length === 0) return this.finish(pass, job);
+        return this.whileOpen(pass.link, job, () =>
+            this.copyPage(pass, job, due, route)
+        );
+    }
+
+    /**
+     * Fluxer refuses webhook posts in a locked thread and unarchives an
+     * archived one on its own (fluxer_api ThreadMessageActivity
+     * beforeWebhookSend). A thread locked on Discord is unlocked only for
+     * one page and locked again at once, so members cannot post there
+     * while it is copied.
+     */
+    private async whileOpen(
+        link: LinkedGuild,
+        job: HistoryJob,
+        work: () => Promise<boolean>
+    ): Promise<boolean> {
+        if (job.kind !== 'thread' || !job.fluxerId) return work();
+        const { locked } = await this.deps.ports.threadState(job.discordId);
+        if (!locked) return work();
+        const { writer } = this.deps;
+        await writer.updateThread(link.fluxerGuildId, job.fluxerId, {
+            locked: false,
+        });
+        try {
+            return await work();
+        } finally {
+            await writer.updateThread(link.fluxerGuildId, job.fluxerId, {
+                locked: true,
+            });
+        }
+    }
+
+    private async copyPage(
+        pass: Pass,
+        job: HistoryJob,
+        due: readonly SourceMessage[],
+        route: Route
+    ): Promise<boolean> {
         let state = job;
         for (const message of due) {
             if (this.overdue(pass)) return true;
