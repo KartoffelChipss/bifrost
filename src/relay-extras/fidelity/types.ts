@@ -1,5 +1,9 @@
 import type { AddonLogger } from '../../addons/isolation';
-import type { WebhookMessageData } from '../../services/WebhookService';
+import type WebhookEmbed from '../../services/WebhookEmbed';
+import type {
+    WebhookAttachment,
+    WebhookMessageData,
+} from '../../services/WebhookService';
 import type { MapRow } from '../../guild-sync/ops';
 import type { FindPair } from '../pairs';
 import type { Side } from '../types';
@@ -38,9 +42,23 @@ export interface CopyFidelity {
     readonly pings?: PingSpec;
     /** The counterpart this copy replies to. Fluxer webhooks only. */
     readonly replyTo?: TargetMessageRef;
+    /**
+     * Upstream's quote embed that `replyTo` replaces, for a copy that
+     * cannot reply natively: a rejected send, or an edit of a copy that
+     * was first sent with the quote. Set only with `replyTo`.
+     */
+    readonly replyQuote?: PlainEmbed;
     /** Synced stickers on the target side. Fluxer webhooks only, max 3. */
     readonly stickerIds?: readonly string[];
+    /**
+     * Upstream's sticker images that `stickerIds` replaces, in their
+     * place at the end of the attachments. Set only with `stickerIds`.
+     */
+    readonly stickerImages?: readonly WebhookAttachment[];
 }
+
+/** A WebhookEmbed as plain JSON, as the retry queue stores embeds. */
+export type PlainEmbed = ReturnType<WebhookEmbed['toPlainObject']>;
 
 /** What the source message really pinged, as source IDs. */
 export interface SourcePings {
@@ -136,8 +154,14 @@ export interface FidelityView {
     breakMentions(content: string): string;
     /** The copy is a native reply, so upstream's quote embed is left out. */
     readonly nativeReply: boolean;
-    /** Adds the fork fields to a finished payload. */
-    finish(payload: WebhookMessageData): WebhookMessageData;
+    /**
+     * Adds the fork fields to a finished payload. `replyQuote` is the
+     * quote embed a native reply leaves out, kept for a fallback.
+     */
+    finish(
+        payload: WebhookMessageData,
+        replyQuote?: WebhookEmbed | null
+    ): WebhookMessageData;
 }
 
 /** A custom emoji of the target server, as upstream's resolvers list it. */
