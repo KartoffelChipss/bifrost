@@ -2,7 +2,7 @@ import type { AddonLogger } from '../addons/isolation';
 import type { LinkedGuild } from '../guild-sync/cycle';
 import type { ChannelLinker, RelayPayload } from '../guild-sync/links';
 import type { MapRow } from '../guild-sync/ops';
-import type { GuildSnapshot } from '../guild-sync/snapshot';
+import { excludedIds, type GuildSnapshot } from '../guild-sync/snapshot';
 import type { GuildWriter } from '../guild-sync/writers/writer';
 import type { HistoryStore } from './store';
 import type {
@@ -52,6 +52,8 @@ export interface ImporterDeps {
     readonly ports: HistoryPorts;
     readonly links: ChannelLinker;
     readonly writer: Pick<GuildWriter, 'updateThread'>;
+    /** Discord channel or category IDs never imported. */
+    readonly excluded: ReadonlySet<string>;
     /** The link's mode now. Read again before every message. */
     readonly mode: (linkId: string) => Promise<HistoryMode>;
     readonly report: (
@@ -94,23 +96,46 @@ class StoppedError extends Error {}
 export class HistoryImporter {
     constructor(private readonly deps: ImporterDeps) {}
 
-    /** Creates a job for every source channel and thread, and maps targets. */
+    /**
+     * Creates a job for every source channel and thread, and maps targets.
+     * Returns the jobs that may run: excluded channels and their threads
+     * are left out, even when a job was created before they were excluded.
+     */
     async planJobs(link: LinkedGuild): Promise<HistoryJob[]> {
-        const { store, sync, now } = this.deps;
+        const { store, sync } = this.deps;
         const snapshot = await sync.lastSnapshot(link.id);
-        if (!snapshot) return store.listJobs(link.id);
+        const skip = snapshot
+            ? excludedIds(snapshot, this.deps.excluded)
+            : new Set(this.deps.excluded);
+        if (snapshot) await this.createJobs(link, snapshot, skip);
+        const jobs = await store.listJobs(link.id);
+        return jobs.filter((job) => !skip.has(job.discordId));
+    }
+
+    private async createJobs(
+        link: LinkedGuild,
+        snapshot: GuildSnapshot,
+        skip: ReadonlySet<string>
+    ): Promise<void> {
+        const { store, now } = this.deps;
         const known = new Set(
             (await store.listJobs(link.id)).map(
                 (j) => `${j.kind}:${j.discordId}`
             )
         );
         for (const channel of snapshot.channels) {
-            if (!MESSAGE_CHANNEL_TYPES.has(channel.type)) continue;
+            if (
+                !MESSAGE_CHANNEL_TYPES.has(channel.type) ||
+                skip.has(channel.id)
+            ) {
+                continue;
+            }
             if (known.has(`channel:${channel.id}`)) continue;
             await store.ensureJob(link.id, 'channel', channel.id, null, now());
         }
         for (const thread of snapshot.threads) {
-            if (known.has(`thread:${thread.id}`)) continue;
+            if (known.has(`thread:${thread.id}`) || skip.has(thread.id))
+                continue;
             await store.ensureJob(
                 link.id,
                 'thread',
@@ -120,7 +145,6 @@ export class HistoryImporter {
             );
         }
         await this.mapTargets(link);
-        return store.listJobs(link.id);
     }
 
     private async mapTargets(link: LinkedGuild): Promise<void> {

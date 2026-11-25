@@ -62,6 +62,8 @@ export interface GuildSyncDeps {
     readonly bridge: GuildSyncBridge;
     /** History import is on: text channels wait for it, replies are held. */
     readonly historyEnabled: boolean;
+    /** Discord channel or category IDs never synced. */
+    readonly excludedChannels: ReadonlySet<string>;
 }
 
 export type GuildSyncBridge = ChannelLinker &
@@ -140,6 +142,7 @@ function buildCycleDeps(
             discord: new DiscordAssetSource(deps.discordClient),
         },
         links: deps.bridge,
+        excludedChannels: deps.excludedChannels,
         historyReady: deps.historyEnabled
             ? historyReady(new PostgresHistoryStore(deps.sequelize))
             : undefined,

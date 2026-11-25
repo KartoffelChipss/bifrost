@@ -17,6 +17,7 @@ describe('parseAddonConfig', () => {
                 identity: false,
                 initialMode: 'dry-run',
                 allowApply: false,
+                excludedChannels: new Set(),
             },
         });
     });
@@ -69,6 +70,21 @@ describe('parseAddonConfig', () => {
         assert.equal(addonsOff.ok && addonsOff.config.allowApply, false);
         assert.equal(
             parseAddonConfig({ BF_ADDONS_ALLOW_APPLY: 'maybe' }).ok,
+            false
+        );
+    });
+
+    it('reads the excluded channel list and rejects a bad ID', () => {
+        const result = parseAddonConfig({
+            BF_ADDONS_EXCLUDE_CHANNELS:
+                '126729786981744640, 452223817377382440',
+        });
+        assert.deepEqual(result.ok && [...result.config.excludedChannels], [
+            '126729786981744640',
+            '452223817377382440',
+        ]);
+        assert.equal(
+            parseAddonConfig({ BF_ADDONS_EXCLUDE_CHANNELS: '#admins-only' }).ok,
             false
         );
     });

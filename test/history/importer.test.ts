@@ -36,7 +36,7 @@ function source(): GuildSnapshot {
     });
 }
 
-function setup(mode: HistoryMode = 'apply') {
+function setup(mode: HistoryMode = 'apply', excluded: string[] = []) {
     const store = new FakeHistoryStore();
     const ports = new FakeHistoryPorts();
     const links = new FakeLinker();
@@ -53,6 +53,7 @@ function setup(mode: HistoryMode = 'apply') {
         },
         ports,
         links,
+        excluded: new Set(excluded),
         writer: {
             async updateThread(_guild, id, patch) {
                 threadEdits.push(`${id} ${JSON.stringify(patch)}`);
@@ -101,6 +102,22 @@ describe('history jobs', () => {
             'channel:10',
             'thread:200',
         ]);
+    });
+
+    it('makes no job for an excluded channel or the threads inside it', async () => {
+        const s = setup('dry-run', ['10', '20']);
+        assert.deepEqual(await s.importer.planJobs(LINK), []);
+        assert.deepEqual(s.store.jobs, []);
+    });
+
+    it('stops running a job made before its channel was excluded', async () => {
+        const s = setup('apply', ['10']);
+        await s.store.ensureJob(LINK.id, 'channel', '10', null);
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        assert.equal(s.ports.sent.length, 0);
+        assert.equal(s.store.job('10').status, 'pending');
     });
 
     it('does nothing while read-only', async () => {

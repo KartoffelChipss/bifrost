@@ -14,6 +14,7 @@ const ALL_ON: AddonConfig = {
     identity: true,
     initialMode: 'dry-run',
     allowApply: false,
+    excludedChannels: new Set(),
 };
 
 function fakeAddon(

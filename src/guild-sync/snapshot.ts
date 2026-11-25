@@ -157,3 +157,24 @@ export function channelKind(type: number): ChannelKind | null {
     const kinds: Readonly<Record<number, ChannelKind>> = SYNCED_CHANNEL_TYPES;
     return kinds[type] ?? null;
 }
+
+/**
+ * Every channel and thread an exclusion list covers: the listed channels,
+ * the channels in a listed category, and the threads inside any of them.
+ */
+export function excludedIds(
+    snapshot: Pick<GuildSnapshot, 'channels' | 'threads'>,
+    listed: ReadonlySet<string>
+): Set<string> {
+    const out = new Set<string>();
+    if (listed.size === 0) return out;
+    for (const channel of snapshot.channels) {
+        const inCategory =
+            channel.parentId !== null && listed.has(channel.parentId);
+        if (listed.has(channel.id) || inCategory) out.add(channel.id);
+    }
+    for (const thread of snapshot.threads) {
+        if (out.has(thread.parentId)) out.add(thread.id);
+    }
+    return out;
+}
