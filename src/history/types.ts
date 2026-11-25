@@ -189,4 +189,11 @@ export interface HistoryPorts {
     pinnedMessageIds(discordId: string): Promise<string[]>;
     /** Pins a message in a Fluxer channel or thread. */
     pinCopy(fluxerChannelId: string, fluxerMessageId: string): Promise<void>;
+    /**
+     * Gives the platform side history's opt-out check, for copies made
+     * outside the importer (forum post starters). Null removes it.
+     */
+    useOptOuts?(
+        check: ((discordUserId: string) => Promise<boolean>) | null
+    ): void;
 }

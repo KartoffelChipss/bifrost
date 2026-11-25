@@ -103,7 +103,8 @@ export function fitBody(body: string, tail: readonly string[]): string {
     return `${cut(body, room - ELLIPSIS.length)}${ELLIPSIS}`;
 }
 
-function optOutBody(): RelayPayload {
+/** The copy of a message whose author opted out: no name, avatar or text. */
+export function optOutPayload(): RelayPayload {
     return {
         content: '*A message from a member who opted out of history import.*',
         username: 'Member',
@@ -124,7 +125,7 @@ export class CopyFormatter {
     async build(message: SourceMessage, linkId: string): Promise<RelayPayload> {
         const { store, ports } = this.deps;
         const base = (await store.isOptedOut(message.authorId))
-            ? optOutBody()
+            ? optOutPayload()
             : await ports.payload(message.raw, linkId, {
                   withoutReply: await this.hideReply(message),
               });

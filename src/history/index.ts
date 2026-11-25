@@ -218,6 +218,8 @@ export function createHistoryAddon(deps: HistoryDeps): Addon {
         async start(context: AddonContext) {
             const { sync, importer } = buildImporter(deps, context);
             stopMirror = startMirror(deps, context, sync);
+            const optOuts = new PostgresHistoryStore(deps.sequelize);
+            deps.ports.useOptOuts?.((id) => optOuts.isOptedOut(id));
             const holder = `${hostname()}:${process.pid}:history`;
             const throttle = new WaitThrottle(() => Date.now());
             const pass = async () => {
@@ -240,6 +242,7 @@ export function createHistoryAddon(deps: HistoryDeps): Addon {
             task.start(FIRST_DELAY_MS);
         },
         async stop() {
+            deps.ports.useOptOuts?.(null);
             stopMirror?.();
             stopMirror = null;
             await task?.stop();

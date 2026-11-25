@@ -39,6 +39,8 @@ export class HistoryMirror {
     /**
      * `load` returns the edited message, or null when the update was not an
      * edit. It runs only for a message that has a copy, as it may fetch.
+     * An opted-out author's copy becomes the opt-out placeholder: the text
+     * changes; the name and avatar a webhook edit cannot change.
      */
     async edited(
         discordMessageId: string,
@@ -46,12 +48,9 @@ export class HistoryMirror {
     ): Promise<void> {
         await this.guarded('edit', async () => {
             const found = await this.writableCopy(discordMessageId);
-            // An opted-out member's copy is a placeholder with no text.
-            if (
-                !found ||
-                (await this.deps.store.isOptedOut(found.copy.discordAuthorId))
-            )
-                return;
+            if (!found) return;
+            // For an opted-out author the formatter gives the placeholder,
+            // so an edit made to redact a message reaches the copy too.
             const raw = await load();
             if (raw === null || raw === undefined) return;
             const payload = await this.deps.formatter.build(

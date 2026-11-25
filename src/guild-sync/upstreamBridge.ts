@@ -19,7 +19,7 @@ import type {
     SendTarget,
     SourceMessage,
 } from '../history/types';
-import { defuseMentions } from '../history/format';
+import { dateNote, defuseMentions, optOutPayload } from '../history/format';
 import { copyWebhook, NO_MENTIONS } from '../history/quietWebhook';
 import type { IdentityPorts, MemberState, UserInfo } from '../identity';
 import type { Side } from '../identity/store';
@@ -238,7 +238,7 @@ export class UpstreamBridge
     // ---- ThreadSource
 
     async starter(guildId: string, threadId: string): Promise<RelayPayload> {
-        const { discordClient, linkService } = this.up;
+        const { discordClient } = this.up;
         const thread = await discordClient.channels.fetch(threadId);
         if (!thread?.isThread()) throw new Error(`${threadId} is not a thread`);
         const message = await thread.fetchStarterMessage().catch(() => null);
@@ -250,30 +250,47 @@ export class UpstreamBridge
                 avatarURL: discordClient.user?.avatarURL() ?? '',
             };
         }
-        const guildLink =
-            await linkService.getGuildLinkForDiscordGuild(guildId);
-        const relayed = await this.toFluxerPayload(
-            message as DiscordMessage,
-            guildLink?.id ?? ''
-        );
-        // An old post's first message must not ping anyone again.
-        const payload = {
-            ...relayed,
-            content: defuseMentions(relayed.content),
-        };
+        const payload = (await this.isOptedOut(message.author.id))
+            ? optOutPayload()
+            : await this.starterPayload(guildId, message as DiscordMessage);
         if (Date.now() - message.createdTimestamp < BACKFILL_AGE_MS)
             return payload;
         // Fluxer dates a message at the moment it is posted, so an older
         // post carries its original time in the text.
-        const when = message.createdAt
-            .toISOString()
-            .slice(0, 16)
-            .replace('T', ' ');
-        const note = `*Originally posted ${when} UTC*`;
+        const note = dateNote(message.createdAt);
         return {
             ...payload,
             content: payload.content ? `${payload.content}\n${note}` : note,
         };
+    }
+
+    /** A starter as the relay formats it, pinging no one. */
+    private async starterPayload(
+        guildId: string,
+        message: DiscordMessage
+    ): Promise<RelayPayload> {
+        const guildLink =
+            await this.up.linkService.getGuildLinkForDiscordGuild(guildId);
+        const relayed = await this.toFluxerPayload(
+            message,
+            guildLink?.id ?? ''
+        );
+        return { ...relayed, content: defuseMentions(relayed.content) };
+    }
+
+    private optOuts: ((discordUserId: string) => Promise<boolean>) | null =
+        null;
+
+    /**
+     * Sets history's opt-out check, so an opted-out member's first message
+     * of an old forum post shows a placeholder. Null removes it.
+     */
+    useOptOuts(check: ((discordUserId: string) => Promise<boolean>) | null) {
+        this.optOuts = check;
+    }
+
+    private async isOptedOut(discordUserId: string): Promise<boolean> {
+        return this.optOuts ? this.optOuts(discordUserId) : false;
     }
 
     /**

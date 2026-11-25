@@ -71,15 +71,22 @@ describe('HistoryMirror', () => {
         assert.equal(s.state.loads, 0);
     });
 
-    it('ignores messages without a copy, updates that are not edits and opted-out authors', async () => {
+    it('ignores messages without a copy and updates that are not edits', async () => {
         const s = await setup();
         await s.mirror.edited('99', s.load('new'));
         assert.equal(s.state.loads, 0);
         await s.mirror.edited('11', s.load(null));
-        s.store.optOuts.add('author');
-        await s.mirror.edited('11', s.load('new'));
         assert.equal(s.state.loads, 1);
         assert.deepEqual(s.ports.edits, []);
+    });
+
+    it('replaces an opted-out author edit with the placeholder', async () => {
+        const s = await setup();
+        s.store.optOuts.add('author');
+        await s.mirror.edited('11', s.load('my address is redacted'));
+        assert.deepEqual(s.ports.edits, [
+            'edit import-f10 copy-11 *A message from a member who opted out of history import.*\n*Originally posted 2024-03-01 18:22 UTC*',
+        ]);
     });
 
     it('logs a failed edit and does not throw', async () => {
