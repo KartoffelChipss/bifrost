@@ -66,6 +66,9 @@ type DiscordMessage = Parameters<
     DiscordMessageTransformer['transformMessage']
 >[0];
 
+/** Upstream names its Discord bridge webhooks with this prefix. */
+const BRIDGE_HOOK_NAME = 'Fluxer Bridge Webhook for channel';
+
 /** A first message older than this is marked with its original time. */
 const BACKFILL_AGE_MS = 10 * 60_000;
 
@@ -509,6 +512,7 @@ export class UpstreamBridge
             copyable: this.copyableTypes.has(m.type),
             attachments: m.attachments.size,
             webhookId: m.webhookId ?? null,
+            ownWebhook: this.fromOwnApp(m),
             // Discord sends the quoted message's author with a reply.
             reply:
                 m.type === MessageType.Reply
@@ -522,6 +526,36 @@ export class UpstreamBridge
             })),
             raw: m,
         };
+    }
+
+    /**
+     * Discord sets `application_id` on a message from an application-owned
+     * webhook; upstream's bridge webhooks are made by this bot.
+     */
+    private fromOwnApp(m: DiscordMessage): boolean {
+        const { discordClient } = this.up;
+        const own = discordClient.application?.id ?? discordClient.user?.id;
+        return Boolean(m.webhookId && own && m.applicationId === own);
+    }
+
+    async bridgeWebhookIds(discordChannelId: string): Promise<Set<string>> {
+        const { discordClient } = this.up;
+        const channel = await discordClient.channels
+            .fetch(discordChannelId)
+            .catch(() => null);
+        if (!channel || !('fetchWebhooks' in channel)) return new Set();
+        const hooks = await channel.fetchWebhooks().catch(() => null);
+        if (!hooks) return new Set();
+        const me = discordClient.user?.id;
+        return new Set(
+            [...hooks.values()]
+                .filter(
+                    (h) =>
+                        h.name.startsWith(BRIDGE_HOOK_NAME) ||
+                        (me !== undefined && h.owner?.id === me)
+                )
+                .map((h) => h.id)
+        );
     }
 
     async listMessages(

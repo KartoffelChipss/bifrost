@@ -226,6 +226,7 @@ export class FakeHistoryPorts implements HistoryPorts {
             copyable: true,
             attachments: 0,
             webhookId: null,
+            ownWebhook: false,
             reply: null,
             reactions: [],
             raw: { id, text: `message ${id}` },
@@ -316,6 +317,13 @@ export class FakeHistoryPorts implements HistoryPorts {
 
     async threadState(id: string) {
         return this.threadStates.get(id) ?? { archived: false, locked: false };
+    }
+
+    /** Bridge webhooks found in each Discord channel, by name or owner. */
+    readonly bridgeHooks = new Map<string, string[]>();
+
+    async bridgeWebhookIds(id: string) {
+        return new Set(this.bridgeHooks.get(id) ?? []);
     }
 
     /** When each channel was bridged; unset means far in the future. */

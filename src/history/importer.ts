@@ -118,8 +118,11 @@ interface Pass {
 /** Where a job's copies go, and the bridge whose Discord posts it skips. */
 interface Route {
     readonly target: SendTarget;
-    /** The bridge's Discord webhook: its posts are copies of Fluxer messages. */
-    readonly bridgeHook: string | null;
+    /**
+     * Discord webhooks whose posts are copies of Fluxer messages: the
+     * bridge's, and any earlier Bifröst bridge webhook in the channel.
+     */
+    readonly relayHooks: ReadonlySet<string>;
 }
 
 const later = (a: string, b: string) => BigInt(a) > BigInt(b);
@@ -462,19 +465,22 @@ export class HistoryImporter {
     private async route(job: HistoryJob): Promise<Route> {
         const fluxerId = job.fluxerId ?? '';
         if (job.kind === 'thread') {
-            const parent = await this.deps.links.byDiscordChannel(
-                job.parentDiscordId ?? ''
-            );
+            const parentId = job.parentDiscordId ?? '';
+            const parent = await this.deps.links.byDiscordChannel(parentId);
             if (!parent) throw new Error('the parent channel is not bridged');
             return {
                 target: { webhook: parent.fluxerWebhook, threadId: fluxerId },
-                bridgeHook: parent.discordWebhook.id,
+                relayHooks: await this.relayHooks(
+                    parentId,
+                    parent.discordWebhook.id
+                ),
             };
         }
+        const relayHooks = await this.relayHooks(job.discordId, null);
         if (job.importWebhook) {
             return {
                 target: { webhook: job.importWebhook, threadId: null },
-                bridgeHook: null,
+                relayHooks,
             };
         }
         const webhook = await this.deps.ports.createImportWebhook(fluxerId);
@@ -483,7 +489,17 @@ export class HistoryImporter {
             { importWebhook: webhook },
             this.deps.now()
         );
-        return { target: { webhook, threadId: null }, bridgeHook: null };
+        return { target: { webhook, threadId: null }, relayHooks };
+    }
+
+    /** The bridge webhook, if any, and earlier bridge webhooks still there. */
+    private async relayHooks(
+        discordChannelId: string,
+        bridgeHook: string | null
+    ): Promise<Set<string>> {
+        const hooks = await this.deps.ports.bridgeWebhookIds(discordChannelId);
+        if (bridgeHook) hooks.add(bridgeHook);
+        return hooks;
     }
 
     /** Sets the cutoff the import copies up to. */
@@ -624,10 +640,11 @@ export class HistoryImporter {
         if (!message.copyable) return true;
         // The sync posts a forum post's first message when it creates it.
         if (job.kind === 'thread' && message.id === job.discordId) return true;
-        // The bridge's Discord webhook posts copies of Fluxer messages.
+        // Bridge webhooks, this one's or an earlier link's, post copies of
+        // Fluxer messages; so does any webhook this bot's app owns.
         if (
             message.webhookId !== null &&
-            message.webhookId === route.bridgeHook
+            (message.ownWebhook || route.relayHooks.has(message.webhookId))
         )
             return true;
         // The thread relay copied it live, either way.
@@ -839,7 +856,10 @@ export class HistoryImporter {
             this.deps.now();
         const route: Route = {
             target: { webhook: bridge.fluxerWebhook, threadId: null },
-            bridgeHook: bridge.discordWebhook.id,
+            relayHooks: await this.relayHooks(
+                job.discordId,
+                bridge.discordWebhook.id
+            ),
         };
         await this.recover(job);
         let state = job;

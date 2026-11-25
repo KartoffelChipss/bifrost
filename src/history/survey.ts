@@ -181,7 +181,8 @@ export class HistorySurvey {
                 PAGE_SIZE
             );
             for (const m of batch) {
-                if (!m.copyable || m.id === job.discordId) continue;
+                if (!m.copyable || m.ownWebhook || m.id === job.discordId)
+                    continue;
                 messages += 1;
                 attachments += m.attachments;
             }

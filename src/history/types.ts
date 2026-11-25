@@ -88,6 +88,11 @@ export interface SourceMessage {
     /** Set when a webhook posted the message. */
     readonly webhookId: string | null;
     /**
+     * True when a webhook owned by this bot's application posted it, such
+     * as an earlier Bifröst link's copy of a Fluxer message.
+     */
+    readonly ownWebhook: boolean;
+    /**
      * For a reply: the author of the message it quotes, or null when that
      * message is gone or its author is unknown.
      */
@@ -173,6 +178,11 @@ export interface HistoryPorts {
     ): Promise<{ archived: boolean; locked: boolean }>;
     /** When the channel's bridge was made, or null when it has none. */
     linkCreatedAt(discordChannelId: string): Promise<Date | null>;
+    /**
+     * IDs of the channel's Discord webhooks that upstream's bridge made,
+     * by name or by owner. Empty when the bot cannot list webhooks there.
+     */
+    bridgeWebhookIds(discordChannelId: string): Promise<Set<string>>;
     /** True when the relay already copied this message after the link. */
     relayedLive(discordMessageId: string): Promise<boolean>;
     /** The pinned messages of a Discord channel or thread, oldest pin first. */

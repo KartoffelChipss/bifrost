@@ -195,6 +195,7 @@ describe('dry-run survey', () => {
                 copyable: true,
                 attachments: 0,
                 webhookId: null,
+                ownWebhook: false,
                 reply: null,
                 reactions: [],
                 raw: null,
@@ -416,6 +417,23 @@ describe('thread lock window', () => {
             'f200 {"locked":false}',
             'f200 {"locked":true}',
         ]);
+    });
+});
+
+describe('earlier relay copies', () => {
+    it('skips posts by an earlier bridge webhook or one this app owns', async () => {
+        const s = setup();
+        s.ports.add('10', '11');
+        s.ports.add('10', '12', { webhookId: 'old-bridge' });
+        s.ports.add('10', '13', { webhookId: 'gone-hook', ownWebhook: true });
+        s.ports.add('10', '14', { webhookId: 'someone-elses-hook' });
+        s.ports.bridgeHooks.set('10', ['old-bridge']);
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        assert.deepEqual(
+            s.ports.sent.map((m) => m.content.split('\n')[0]),
+            ['message 11', 'message 14']
+        );
     });
 });
 
