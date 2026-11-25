@@ -9,6 +9,7 @@ import type {
     ChannelPatch,
     ChannelSpec,
     EmojiSpec,
+    GuildPatch,
     GuildWriter,
     OverwriteSpec,
     PositionSpec,
@@ -149,9 +150,22 @@ export class FakeGuild implements GuildReader, GuildWriter {
         this.calls.push('channel positions');
     }
 
-    async renameGuild(_guild: string, name: string) {
-        this.patch({ name });
-        this.calls.push(`rename guild ${name}`);
+    async updateGuild(_guild: string, patch: GuildPatch) {
+        const { name, ...settings } = patch;
+        if (name !== undefined) this.patch({ name });
+        if (Object.keys(settings).length > 0 && this.snapshot.settings) {
+            this.patch({
+                settings: { ...this.snapshot.settings, ...settings },
+            });
+        }
+        this.calls.push(
+            name !== undefined ? `rename guild ${name}` : 'update guild'
+        );
+    }
+
+    /** Kept for tests that edit the destination by hand. */
+    renameGuild(guildId: string, name: string) {
+        return this.updateGuild(guildId, { name });
     }
 
     async createEmoji(_guild: string, spec: EmojiSpec): Promise<string> {

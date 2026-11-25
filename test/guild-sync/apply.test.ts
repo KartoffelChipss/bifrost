@@ -1153,3 +1153,21 @@ describe('order of new objects', () => {
         );
     });
 });
+
+describe('role icons', () => {
+    it('uploads the source image for a role icon', async () => {
+        const s = setup(
+            discordGuild({
+                roles: [
+                    role(D_GUILD),
+                    role('r1', { name: 'Mods', icon: 'h1' }),
+                ],
+            })
+        );
+        await s.cycle();
+        await s.cycle();
+        assert.ok(s.assets.requests.includes('role-icon:r1'));
+        const third = await s.cycle();
+        assert.equal(opCount(third.plan), 0);
+    });
+});

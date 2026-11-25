@@ -266,6 +266,19 @@ export class UpstreamBridge
         };
     }
 
+    /**
+     * The members of a private Discord thread. The bot joins it first:
+     * Discord sends a private thread's messages only to its members, and
+     * the thread relay needs them.
+     */
+    async members(_guildId: string, threadId: string): Promise<string[]> {
+        const thread = await this.up.discordClient.channels.fetch(threadId);
+        if (!thread?.isThread()) throw new Error(`${threadId} is not a thread`);
+        if (!thread.joined && thread.joinable) await thread.join();
+        const members = await thread.members.fetch();
+        return [...members.keys()];
+    }
+
     // ---- ThreadRelayPorts
 
     private async discordWebhook(link: LinkedChannel, threadId: string) {

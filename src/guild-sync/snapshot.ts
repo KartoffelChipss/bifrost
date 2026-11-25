@@ -30,6 +30,13 @@ export interface RoleSnap {
     readonly position: number;
     /** Bot, integration or booster role. Never synced. */
     readonly managed: boolean;
+    /** The role's unicode emoji icon. Undefined in older snapshots. */
+    readonly unicodeEmoji?: string | null;
+    /**
+     * The role's image icon, as the platform's own hash. Hashes differ
+     * across platforms, so the diff compares it only with the last write.
+     */
+    readonly icon?: string | null;
 }
 
 export interface OverwriteSnap {
@@ -60,6 +67,41 @@ export interface ChannelSnap {
      * Channel or Manage Webhooks there. Undefined when not checked.
      */
     readonly bridgeable?: boolean;
+    /** Minutes before new threads archive. Text, announcement, forum. */
+    readonly defaultAutoArchive?: number | null;
+    /** Slowmode in seconds given to new threads. */
+    readonly defaultThreadSlowmode?: number | null;
+    /** Forum settings. Undefined for other kinds and in older snapshots. */
+    readonly forum?: ForumSnap;
+}
+
+/** An emoji as both APIs give it: a custom emoji ID or a unicode name. */
+export interface EmojiRef {
+    readonly emojiId: string | null;
+    readonly emojiName: string | null;
+}
+
+export interface ForumTagSnap extends EmojiRef {
+    readonly name: string;
+    readonly moderated: boolean;
+}
+
+export interface ForumSnap {
+    readonly defaultReaction: EmojiRef | null;
+    readonly sortOrder: number | null;
+    readonly layout: number | null;
+    /** The tags with their details, in the order of `ChannelSnap.tags`. */
+    readonly tags: readonly ForumTagSnap[];
+}
+
+/** Server settings that point at channels or set member defaults. */
+export interface GuildSettingsSnap {
+    readonly systemChannelId: string | null;
+    readonly afkChannelId: string | null;
+    readonly afkTimeout: number;
+    readonly verificationLevel: number;
+    readonly defaultNotifications: number;
+    readonly explicitContentFilter: number;
 }
 
 /** Channel types that can hold threads or posts: text, announcement, forum. */
@@ -71,8 +113,11 @@ export const THREAD_PARENT_TYPES: ReadonlySet<number> = new Set([0, 5, 15]);
  */
 export const LINKED_CHANNEL_TYPES: ReadonlySet<number> = new Set([0, 2, 5, 15]);
 
-/** Thread types that are synced: announcement and public. Never private. */
-export const SYNCED_THREAD_TYPES: ReadonlySet<number> = new Set([10, 11]);
+/** Thread types that are synced: announcement, public and private. */
+export const SYNCED_THREAD_TYPES: ReadonlySet<number> = new Set([10, 11, 12]);
+
+/** A private thread, seen only by its members and moderators. */
+export const PRIVATE_THREAD_TYPE = 12;
 
 /** A thread in a text channel, or a post in a forum. */
 export interface ThreadSnap {
@@ -83,6 +128,15 @@ export interface ThreadSnap {
     readonly locked: boolean;
     /** Names of the applied forum tags, sorted. */
     readonly tags: readonly string[];
+    /** Undefined in older snapshots: treated as public. */
+    readonly private?: boolean;
+    /** Private threads: whether members may invite others. */
+    readonly invitable?: boolean;
+    /** Pinned to the top of its forum. */
+    readonly pinned?: boolean;
+    readonly rateLimitPerUser?: number;
+    /** Minutes of inactivity before it archives. */
+    readonly autoArchiveDuration?: number;
 }
 
 export interface EmojiSnap {
@@ -125,6 +179,14 @@ export interface GuildSnapshot {
      * missing, so nothing is removed on an incomplete list.
      */
     readonly threadGaps: readonly string[];
+    /**
+     * Channels whose archived private threads could not be listed (the
+     * bot needs Manage Threads). Private thread copies never count as
+     * missing while this is not empty.
+     */
+    readonly privateThreadGaps?: readonly string[];
+    /** Undefined in older snapshots. */
+    readonly settings?: GuildSettingsSnap;
     readonly bot: BotSnap | null;
 }
 

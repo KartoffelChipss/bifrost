@@ -3,6 +3,7 @@ import type { IdMap } from './idmap';
 import type { FieldChange, JsonValue, PlanOp } from './ops';
 import { bitOf, mergePermissions, NO_BITS } from './permissions';
 import {
+    managedMembers,
     projectEmoji,
     projectSourceChannel,
     projectSourceRole,
@@ -16,11 +17,14 @@ import { channelKind } from './snapshot';
 import type {
     ChannelPatch,
     ChannelSpec,
+    EmojiChoice,
+    GuildPatch,
     OverwriteSpec,
     PositionSpec,
     RolePatch,
     RoleSpec,
     StickerPatch,
+    TagMetaSpec,
     ThreadPatch,
 } from './writers/writer';
 
@@ -35,6 +39,8 @@ export interface WriteContext {
     /** The live map: it already holds objects created earlier in the plan. */
     readonly map: IdMap;
     readonly direction: SyncDirection;
+    /** Linked accounts, source user ID to destination user ID. */
+    readonly members?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -60,7 +66,7 @@ export type WriteAction =
     | { readonly type: 'create-channel'; spec: ChannelSpec; applied: Fields }
     | { readonly type: 'update-role'; patch: RolePatch; applied: Fields }
     | { readonly type: 'update-channel'; patch: ChannelPatch; applied: Fields }
-    | { readonly type: 'rename-guild'; name: string; applied: Fields }
+    | { readonly type: 'update-guild'; patch: GuildPatch; applied: Fields }
     | { readonly type: 'role-positions'; positions: PositionSpec[] }
     | { readonly type: 'channel-positions'; positions: PositionSpec[] }
     | { readonly type: 'create-emoji'; name: string; applied: Fields }
@@ -91,6 +97,8 @@ export type WriteAction =
           parentType: number;
           name: string;
           tags: string[];
+          private: boolean;
+          invitable: boolean;
           applied: Fields;
           followUp: FollowUp | null;
       }
@@ -152,6 +160,7 @@ const names = (value: JsonValue | undefined): string[] =>
 
 interface ManagedOverwrite {
     readonly id: string;
+    readonly type: 0 | 1;
     readonly allow: string;
     readonly deny: string;
 }
@@ -162,13 +171,13 @@ function managedOverwrites(value: JsonValue | undefined): ManagedOverwrite[] {
     for (const item of value) {
         if (typeof item !== 'object' || item === null || Array.isArray(item))
             continue;
-        const { id, allow, deny } = item as Record<string, JsonValue>;
+        const { id, type, allow, deny } = item as Record<string, JsonValue>;
         if (
             typeof id === 'string' &&
             typeof allow === 'string' &&
             typeof deny === 'string'
         ) {
-            list.push({ id, allow, deny });
+            list.push({ id, type: type === '1' ? 1 : 0, allow, deny });
         }
     }
     return list;
@@ -184,16 +193,19 @@ const merged = (existing: string | undefined, managed: string): string =>
 export function mergeOverwrites(
     desired: readonly ManagedOverwrite[],
     existing: ChannelSnap['overwrites'],
-    map: IdMap
+    map: IdMap,
+    members: ReadonlySet<string> = new Set()
 ): OverwriteSpec[] {
-    const kept: OverwriteSpec[] = existing.filter(
-        (o) => o.type === 1 || !map.managesDestRole(o.id)
+    const kept: OverwriteSpec[] = existing.filter((o) =>
+        o.type === 1 ? !members.has(o.id) : !map.managesDestRole(o.id)
     );
     const managed: OverwriteSpec[] = desired.map((want) => {
-        const have = existing.find((o) => o.type === 0 && o.id === want.id);
+        const have = existing.find(
+            (o) => o.type === want.type && o.id === want.id
+        );
         return {
             id: want.id,
-            type: 0,
+            type: want.type,
             allow: merged(have?.allow, want.allow),
             deny: merged(have?.deny, want.deny),
         };
@@ -201,26 +213,36 @@ export function mergeOverwrites(
     return [...kept, ...managed];
 }
 
-/** Splits off what Fluxer's role create cannot set: hoist and mentionable. */
+/** Values Fluxer's role create cannot set, and what a new role has instead. */
+const ROLE_CREATE_LATER: Readonly<Record<string, JsonValue>> = {
+    hoist: false,
+    mentionable: false,
+    unicodeEmoji: null,
+};
+
+/**
+ * Splits off what Fluxer's role create cannot set: hoist, mentionable and
+ * the emoji icon. The base records what a new role has until the
+ * follow-up sets the rest.
+ */
 function roleCreate(fields: Fields): WriteAction {
     const spec = roleSpec(fields);
-    const { hoist, mentionable, ...applied } = fields;
-    if (!spec.hoist && !spec.mentionable) {
-        return { type: 'create-role', spec, applied: fields, followUp: null };
-    }
+    const applied: Record<string, JsonValue> = { ...fields };
     const later: Record<string, JsonValue> = {};
-    if (hoist !== undefined) later.hoist = hoist;
-    if (mentionable !== undefined) later.mentionable = mentionable;
+    for (const [field, start] of Object.entries(ROLE_CREATE_LATER)) {
+        const want = fields[field];
+        if (want === undefined || want === start) continue;
+        later[field] = want;
+        applied[field] = start;
+    }
+    if (Object.keys(later).length === 0) {
+        return { type: 'create-role', spec, applied, followUp: null };
+    }
     return {
         type: 'create-role',
         spec,
-        // A new role starts with both off, which is what the base records.
-        applied: { ...applied, hoist: false, mentionable: false },
-        followUp: {
-            type: 'role',
-            patch: { hoist: spec.hoist, mentionable: spec.mentionable },
-            fields: later,
-        },
+        applied,
+        followUp: { type: 'role', patch: later as RolePatch, fields: later },
     };
 }
 
@@ -234,12 +256,58 @@ function roleSpec(fields: Fields): RoleSpec {
     };
 }
 
+function emojiChoice(value: JsonValue | undefined): EmojiChoice | null {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        return null;
+    }
+    const { id, name } = value as Record<string, JsonValue>;
+    if (typeof id === 'string') return { id };
+    return typeof name === 'string' ? { name } : null;
+}
+
+function tagMeta(value: JsonValue | undefined): TagMetaSpec[] {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((item) => {
+        if (typeof item !== 'object' || item === null || Array.isArray(item))
+            return [];
+        const tag = item as Record<string, JsonValue>;
+        if (typeof tag.name !== 'string') return [];
+        return [
+            {
+                name: tag.name,
+                moderated: tag.moderated === true,
+                emoji: emojiChoice(tag.emoji),
+            },
+        ];
+    });
+}
+
+/** Thread defaults and forum settings, for the fields present. */
+function parentSettings(fields: Fields): Partial<ChannelSpec> {
+    const out: Record<string, unknown> = {};
+    for (const field of [
+        'defaultAutoArchive',
+        'defaultThreadSlowmode',
+        'sortOrder',
+        'layout',
+    ]) {
+        if (field in fields) out[field] = count(fields[field]);
+    }
+    if ('defaultReaction' in fields) {
+        out.defaultReaction = emojiChoice(fields.defaultReaction);
+    }
+    if ('tagMeta' in fields) out.tagMeta = tagMeta(fields.tagMeta);
+    return out as Partial<ChannelSpec>;
+}
+
 function channelSpec(
     channel: ChannelSnap,
     fields: Fields,
-    map: IdMap
+    map: IdMap,
+    members: ReadonlySet<string>
 ): ChannelSpec {
     return {
+        ...parentSettings(fields),
         type: channel.type,
         name: text(fields.name, channel.name),
         parentId: typeof fields.parentId === 'string' ? fields.parentId : null,
@@ -251,7 +319,8 @@ function channelSpec(
         overwrites: mergeOverwrites(
             managedOverwrites(fields.overwrites),
             [],
-            map
+            map,
+            members
         ),
         tags: names(fields.tags),
     };
@@ -280,7 +349,7 @@ function createAction(op: CreateOp, ctx: WriteContext): WriteAction {
         const applied = projectSourceChannel(channel, projection);
         return {
             type: 'create-channel',
-            spec: channelSpec(channel, applied, ctx.map),
+            spec: channelSpec(channel, applied, ctx.map, managedMembers(ctx)),
             applied,
         };
     }
@@ -308,6 +377,10 @@ function createAction(op: CreateOp, ctx: WriteContext): WriteAction {
     return skip(`a ${op.kind} cannot be created`);
 }
 
+/**
+ * A role patch from the changed fields. An `icon` value is still the
+ * source's icon hash here; the executor swaps in the image.
+ */
 function rolePatch(
     changes: readonly FieldChange[],
     current: string
@@ -325,7 +398,7 @@ function rolePatch(
 function channelPatch(
     changes: readonly FieldChange[],
     dest: ChannelSnap,
-    map: IdMap
+    ctx: WriteContext
 ): ChannelPatch {
     const patch: Record<string, unknown> = {};
     for (const change of changes) {
@@ -333,30 +406,34 @@ function channelPatch(
             patch.overwrites = mergeOverwrites(
                 managedOverwrites(change.to),
                 dest.overwrites,
-                map
+                ctx.map,
+                managedMembers(ctx)
             );
         } else if (change.field === 'tags') patch.tags = names(change.to);
-        else patch[change.field] = change.to;
+        else if (change.field === 'tagMeta') patch.tagMeta = tagMeta(change.to);
+        else if (change.field === 'defaultReaction') {
+            patch.defaultReaction = emojiChoice(change.to);
+        } else patch[change.field] = change.to;
     }
     return patch as ChannelPatch;
 }
 
 /** A thread patch from the changed fields. The parent never changes. */
 function threadPatch(changes: readonly FieldChange[]): ThreadPatch {
-    const patch: {
-        name?: string;
-        archived?: boolean;
-        locked?: boolean;
-        tags?: string[];
-    } = {};
+    const patch: Record<string, unknown> = {};
     for (const { field, to } of changes) {
         if (field === 'name' && typeof to === 'string') patch.name = to;
-        else if (field === 'archived') patch.archived = to === true;
-        else if (field === 'locked') patch.locked = to === true;
         else if (field === 'tags') patch.tags = names(to);
+        else if (THREAD_FLAGS.has(field)) patch[field] = to === true;
+        else if (THREAD_NUMBERS.has(field) && typeof to === 'number') {
+            patch[field] = to;
+        }
     }
-    return patch;
+    return patch as ThreadPatch;
 }
+
+const THREAD_FLAGS = new Set(['archived', 'locked', 'pinned', 'invitable']);
+const THREAD_NUMBERS = new Set(['rateLimitPerUser', 'autoArchiveDuration']);
 
 function createThread(op: CreateOp, ctx: WriteContext): WriteAction {
     const thread = ctx.source.threads.find((t) => t.id === op.sourceId);
@@ -367,7 +444,7 @@ function createThread(op: CreateOp, ctx: WriteContext): WriteAction {
         return skip('the parent channel is not created yet');
     }
     const fields = projectSourceThread(thread, ctx);
-    const closed = thread.archived || thread.locked;
+    const { applied, followUp } = threadCreateSplit(fields);
     return {
         type: 'create-thread',
         parentId,
@@ -375,17 +452,53 @@ function createThread(op: CreateOp, ctx: WriteContext): WriteAction {
         parentType: parent.type,
         name: thread.name,
         tags: [...thread.tags],
-        // A new thread starts open; closing it is the follow-up.
-        applied: closed
-            ? { ...fields, archived: false, locked: false }
-            : fields,
-        followUp: closed
-            ? {
-                  type: 'thread',
-                  patch: { archived: thread.archived, locked: thread.locked },
-                  fields: { archived: thread.archived, locked: thread.locked },
-              }
-            : null,
+        private: thread.private === true,
+        invitable: thread.invitable !== false,
+        applied,
+        followUp,
+    };
+}
+
+/**
+ * What a new thread has before its follow-up: open, unpinned, no
+ * slowmode. Its archive time is unknown until the follow-up sets it.
+ */
+const THREAD_CREATE_LATER: Readonly<Record<string, JsonValue | undefined>> = {
+    archived: false,
+    locked: false,
+    pinned: false,
+    rateLimitPerUser: 0,
+    autoArchiveDuration: undefined,
+};
+
+/** Splits a new thread's fields into the create and its follow-up. */
+function threadCreateSplit(fields: Fields): {
+    applied: Fields;
+    followUp: FollowUp | null;
+} {
+    const applied: Record<string, JsonValue> = { ...fields };
+    const later: Record<string, JsonValue> = {};
+    for (const [field, start] of Object.entries(THREAD_CREATE_LATER)) {
+        const want = fields[field];
+        if (want === undefined || want === start) continue;
+        later[field] = want;
+        if (start === undefined) delete applied[field];
+        else applied[field] = start;
+    }
+    if (Object.keys(later).length === 0) return { applied, followUp: null };
+    return {
+        applied,
+        followUp: {
+            type: 'thread',
+            patch: threadPatch(
+                Object.entries(later).map(([field, to]) => ({
+                    field,
+                    from: null,
+                    to,
+                }))
+            ),
+            fields: later,
+        },
     };
 }
 
@@ -402,8 +515,20 @@ function settledFields(op: UpdateOp, unwritten: readonly string[]): Fields {
     return base;
 }
 
-/** The fields a thread patch carries. Any other change, such as the parent, is not written. */
-const THREAD_FIELDS = new Set(['name', 'archived', 'locked', 'tags']);
+/**
+ * The fields a thread patch carries. Any other change is not written: the
+ * parent, or whether the thread is private, never change after creation.
+ */
+const THREAD_FIELDS = new Set([
+    'name',
+    'archived',
+    'locked',
+    'tags',
+    'pinned',
+    'invitable',
+    'rateLimitPerUser',
+    'autoArchiveDuration',
+]);
 
 function updateAction(op: UpdateOp, ctx: WriteContext): WriteAction {
     if (op.kind === 'role') {
@@ -422,14 +547,15 @@ function updateAction(op: UpdateOp, ctx: WriteContext): WriteAction {
         if (!channel || !dest) return skip('the channel is gone on one side');
         return {
             type: 'update-channel',
-            patch: channelPatch(op.changes, dest, ctx.map),
+            patch: channelPatch(op.changes, dest, ctx),
             applied: settledFields(op, []),
         };
     }
     if (op.kind === 'guild') {
-        const name = op.changes.find((c) => c.field === 'name')?.to;
-        if (typeof name !== 'string') return skip('nothing to write');
-        return { type: 'rename-guild', name, applied: settledFields(op, []) };
+        const patch = Object.fromEntries(
+            op.changes.map((c) => [c.field, c.to])
+        ) as GuildPatch;
+        return { type: 'update-guild', patch, applied: settledFields(op, []) };
     }
     return expressionUpdate(op, ctx);
 }

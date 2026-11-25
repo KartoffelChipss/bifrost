@@ -8,7 +8,11 @@ import type { JsonValue, MapRow, PlanOp } from './ops';
 import { destIdOf, isRemoval } from './ops';
 import type { Plan } from './plan';
 import { ORDER_PENDING } from './order';
-import { projectSourceRole, type Fields } from './project';
+import {
+    projectSourceRole,
+    projectSourceSettings,
+    type Fields,
+} from './project';
 import type { GuildSnapshot } from './snapshot';
 import type { GuildSyncStore } from './store';
 import {
@@ -19,7 +23,7 @@ import {
     type WriteAction,
     type WriteContext,
 } from './writes';
-import type { GuildWriter } from './writers/writer';
+import type { GuildWriter, RolePatch } from './writers/writer';
 
 /**
  * Pauses after a write, sized to Fluxer's per-guild route limits
@@ -69,6 +73,8 @@ export interface ApplyInput {
     readonly destination: GuildSnapshot;
     /** The object map the plan was built from. */
     readonly rows: readonly MapRow[];
+    /** Linked accounts, source user ID to destination user ID. */
+    readonly members?: ReadonlyMap<string, string>;
 }
 
 export interface ApplyDeps {
@@ -205,6 +211,28 @@ async function createThread(
         tags: action.tags,
         starter,
         webhook,
+        private: action.private,
+        invitable: action.invitable,
+        members: action.private
+            ? await privateMembers(state, sourceId)
+            : undefined,
+    });
+}
+
+/** Destination accounts of the linked members of a private source thread. */
+async function privateMembers(
+    state: RunState,
+    sourceId: string
+): Promise<string[]> {
+    const { threads } = state.deps;
+    const linked = state.input.members;
+    if (!threads?.members) return [];
+    // Called even with nobody linked: reading the members also has the
+    // bot join the thread, so the relay receives its messages.
+    const ids = await threads.members(state.input.source.guildId, sourceId);
+    return ids.flatMap((id) => {
+        const dest = linked?.get(id);
+        return dest ? [dest] : [];
     });
 }
 
@@ -268,6 +296,24 @@ async function performLifecycle(
     }
 }
 
+/**
+ * Swaps the source icon hash in a role patch for the image itself. Role
+ * icon hashes differ across platforms, so only the image can be copied.
+ */
+async function withRoleIcon(
+    state: RunState,
+    patch: RolePatch,
+    op: PlanOp
+): Promise<RolePatch> {
+    if (typeof patch.icon !== 'string' || !('sourceId' in op)) return patch;
+    const image = await state.deps.assets.image(
+        state.input.source.guildId,
+        'role-icon',
+        op.sourceId
+    );
+    return { ...patch, icon: image };
+}
+
 /** Performs the write. Returns the new ID for a create, else null. */
 async function perform(
     state: RunState,
@@ -279,6 +325,12 @@ async function perform(
     const destId = 'destId' in op ? op.destId : '';
     switch (action.type) {
         case 'update-role':
+            await writer.updateRole(
+                guildId,
+                destId,
+                await withRoleIcon(state, action.patch, op)
+            );
+            return null;
         case 'archive-role':
             await writer.updateRole(guildId, destId, action.patch);
             return null;
@@ -292,8 +344,8 @@ async function perform(
             await writer.updateChannel(guildId, destId, patch);
             return null;
         }
-        case 'rename-guild':
-            await writer.renameGuild(guildId, action.name);
+        case 'update-guild':
+            await writer.updateGuild(guildId, action.patch);
             return null;
         case 'role-positions':
             await writer.setRolePositions(guildId, action.positions);
@@ -596,6 +648,7 @@ async function applyOp(
         destination,
         map: state.map,
         direction: plan.direction,
+        members: state.input.members,
     };
     const action = writeFor(op, ctx);
     const held = action.type === 'skip' ? action.reason : holdReason(state, op);
@@ -634,11 +687,17 @@ async function recordBaselines(state: RunState): Promise<void> {
         (op) => op.op === 'update' && op.baseline
     );
     const everyone = source.roles.find((r) => r.id === source.everyoneRoleId);
+    const ctx = { map: state.map, direction: plan.direction };
     const baselines: { kind: 'role' | 'guild'; applied: Fields }[] = [
-        { kind: 'guild', applied: { name: source.name } },
+        {
+            kind: 'guild',
+            applied: {
+                name: source.name,
+                ...projectSourceSettings(source.settings, ctx),
+            },
+        },
     ];
     if (everyone) {
-        const ctx = { map: state.map, direction: plan.direction };
         baselines.push({
             kind: 'role',
             applied: projectSourceRole(everyone, ctx),

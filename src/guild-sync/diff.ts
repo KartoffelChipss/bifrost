@@ -12,10 +12,13 @@ import type { Fields, ProjectionContext } from './project';
 import {
     projectDestChannel,
     projectDestRole,
+    projectDestSettings,
     projectDestThread,
     projectEmoji,
+    projectOpaqueRole,
     projectSourceChannel,
     projectSourceRole,
+    projectSourceSettings,
     projectSourceThread,
     projectSticker,
 } from './project';
@@ -43,6 +46,11 @@ export interface DiffInput {
      * is: an excluded channel is neither updated nor removed.
      */
     readonly excluded?: ReadonlySet<string>;
+    /**
+     * Linked accounts, source user ID to destination user ID. Member
+     * overwrites are synced only for these members.
+     */
+    readonly members?: ReadonlyMap<string, string>;
     /**
      * Which source channels the relay already bridges, and which must never
      * be bridged (the admin channel). Without it, no link is planned.
@@ -116,6 +124,24 @@ interface ObjectSpec<T extends { readonly id: string; readonly name: string }> {
     readonly skipReason: (item: T) => string | null;
     /** True for an object that syncs without a map row, such as @everyone. */
     readonly implicit?: (item: T) => boolean;
+    /** Fields compared only with the last write (see projectOpaqueRole). */
+    readonly projectOpaque?: (item: T) => Fields;
+}
+
+/** Source changes in fields the destination cannot be compared on. */
+function opaqueChanges(
+    opaque: Fields,
+    base: Fields | null
+): { changes: FieldChange[]; settled: Fields } {
+    const changes: FieldChange[] = [];
+    const settled: Record<string, Fields[string]> = {};
+    for (const [field, to] of Object.entries(opaque)) {
+        const was = base?.[field];
+        if (was === undefined && to === null) continue;
+        settled[field] = to;
+        if (!same(was, to)) changes.push({ field, from: was ?? null, to });
+    }
+    return { changes, settled };
 }
 
 function createOp<T extends { readonly id: string; readonly name: string }>(
@@ -158,7 +184,16 @@ function compareMapped<
         base,
         firstSync
     );
-    return { ...compared, firstSync };
+    const opaque = opaqueChanges(
+        spec.projectOpaque?.(item) ?? {},
+        map.applied(spec.kind, item.id)
+    );
+    return {
+        changes: [...compared.changes, ...opaque.changes],
+        drifted: compared.drifted,
+        settled: { ...compared.settled, ...opaque.settled },
+        firstSync,
+    };
 }
 
 function diffObjects<T extends { readonly id: string; readonly name: string }>(
@@ -268,6 +303,7 @@ function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
             sameType: () => true,
             skipReason: roleSkip,
             implicit: (r) => r.id === source.everyoneRoleId,
+            projectOpaque: projectOpaqueRole,
         },
         ctx.map,
         out
@@ -308,14 +344,25 @@ function diffExpressions(input: DiffInput, map: IdMap, out: Out) {
     );
 }
 
-function diffGuild(input: DiffInput, map: IdMap, out: Out) {
+/** The server's name and settings, in destination terms. */
+function guildFields(snapshot: GuildSnapshot, ctx: ProjectionContext | null) {
+    return {
+        name: snapshot.name,
+        ...(ctx
+            ? projectSourceSettings(snapshot.settings, ctx)
+            : projectDestSettings(snapshot.settings)),
+    };
+}
+
+function diffGuild(input: DiffInput, ctx: ProjectionContext, out: Out) {
     const { source, destination, previousSource } = input;
-    const prevName = previousSource ? { name: previousSource.name } : null;
+    const { map } = ctx;
+    const prev = previousSource ? guildFields(previousSource, ctx) : null;
     const firstSync = !map.hasRow('guild', source.guildId);
     const { changes, drifted, settled } = compareFields(
-        { name: source.name },
-        { name: destination.name },
-        map.applied('guild', source.guildId) ?? prevName,
+        guildFields(source, ctx),
+        guildFields(destination, null),
+        map.applied('guild', source.guildId) ?? prev,
         firstSync
     );
     // The server icon and banner are not synced. Each server keeps its own.
@@ -336,7 +383,7 @@ function diffGuild(input: DiffInput, map: IdMap, out: Out) {
             type: 'drift',
             kind: 'guild',
             id: destId,
-            detail: 'server name edited on the destination',
+            detail: `server settings edited on the destination: ${drifted.join(', ')}`,
         });
     }
 }
@@ -354,6 +401,33 @@ function reportPermissions(input: DiffInput, out: Out) {
             kind: 'role',
             id: role.id,
             detail: `no counterpart on the destination: ${dropped.join(', ')}`,
+        });
+    }
+}
+
+/**
+ * Member overwrites copy only for linked accounts. A deny left behind is
+ * the risky one: that member could see the channel on the destination.
+ */
+function reportMemberOverwrites(input: DiffInput, out: Out) {
+    for (const channel of input.source.channels) {
+        if (!channelKind(channel.type) || input.excluded?.has(channel.id)) {
+            continue;
+        }
+        const unlinked = channel.overwrites.filter(
+            (o) => o.type === 1 && !input.members?.has(o.id)
+        );
+        if (unlinked.length === 0) continue;
+        const denies = unlinked.filter((o) => o.deny !== '0').length;
+        out.findings.push({
+            type: 'skipped',
+            kind: 'channel',
+            id: channel.id,
+            detail:
+                `${unlinked.length} member overwrites not copied: those members have not linked accounts` +
+                (denies > 0
+                    ? `; ${denies} of them deny access, which the destination does not enforce`
+                    : ''),
         });
     }
 }
@@ -500,13 +574,18 @@ export function diff(input: DiffInput): DiffResult {
         input.source,
         input.destination
     );
-    const ctx: ProjectionContext = { map, direction: input.direction };
+    const ctx: ProjectionContext = {
+        map,
+        direction: input.direction,
+        members: input.members,
+    };
     const out: Out = { ops: [], findings: [] };
     diffStructure(input, ctx, out);
     diffExpressions(input, map, out);
     diffLinks(input, map, out);
     diffThreads(input, ctx, out);
-    diffGuild(input, map, out);
+    diffGuild(input, ctx, out);
+    reportMemberOverwrites(input, out);
     diffOrders(input, map, out);
     reportPermissions(input, out);
     reportFullCategories(input.source, out);

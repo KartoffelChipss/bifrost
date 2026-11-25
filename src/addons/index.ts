@@ -41,7 +41,7 @@ export interface AddonsHandle {
 /** What the add-ons need from Bifröst. Built once in src/index.ts. */
 export type AddonDeps = Omit<
     GuildSyncDeps,
-    'historyEnabled' | 'bridge' | 'excludedChannels'
+    'historyEnabled' | 'identityEnabled' | 'bridge' | 'excludedChannels'
 > & {
     readonly bridge: GuildSyncDeps['bridge'] & HistoryPorts & IdentityPorts;
 };
@@ -60,6 +60,7 @@ export function addonFactories(
             createGuildSyncAddon({
                 ...deps,
                 historyEnabled: config.history,
+                identityEnabled: config.identity,
                 excludedChannels: config.excludedChannels,
             }),
         history: () =>

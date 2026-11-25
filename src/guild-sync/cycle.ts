@@ -91,6 +91,21 @@ export interface CycleDeps {
      * cannot take every lookup slot for good.
      */
     readonly lookups?: Map<string, number>;
+    /**
+     * Linked accounts, Discord user ID to Fluxer user ID, when account
+     * linking is on. Member overwrites copy only for these members.
+     */
+    readonly linkedMembers?: () => Promise<ReadonlyMap<string, string>>;
+}
+
+/** Linked accounts as source user ID to destination user ID. */
+async function membersFor(
+    deps: CycleDeps,
+    direction: SyncDirection
+): Promise<ReadonlyMap<string, string> | undefined> {
+    const linked = await deps.linkedMembers?.();
+    if (!linked || direction === 'discord-to-fluxer') return linked;
+    return new Map([...linked].map(([discord, fluxer]) => [fluxer, discord]));
 }
 
 export type CycleOutcome =
@@ -310,9 +325,14 @@ async function buildBody(
     gated: Extract<GateOutcome, { ok: true }>,
     deps: CycleDeps,
     now: Date
-): Promise<{ body: PlanBody; rows: MapRow[] }> {
+): Promise<{
+    body: PlanBody;
+    rows: MapRow[];
+    members: ReadonlyMap<string, string> | undefined;
+}> {
     const { direction } = settings;
     const { source, destination } = gated;
+    const members = await membersFor(deps, direction);
     const loaded = await deps.store.loadObjectMap(link.id);
     const missing = trackMissing(loaded, source, direction, now);
     await deps.store.saveMissing(missing, now);
@@ -325,6 +345,7 @@ async function buildBody(
         rows,
         direction,
         excluded: excludedIds(source, deps.excludedChannels ?? new Set()),
+        members,
         links: await linkState(link, settings, deps),
     });
     const removals = await confirmedRemovals(link, settings, rows, deps, now);
@@ -353,7 +374,7 @@ async function buildBody(
         needsApproval: budget.needsApproval,
         approvalReason: budget.needsApproval ? budget.reason : null,
     };
-    return { body, rows };
+    return { body, rows, members };
 }
 
 function planStatus(body: PlanBody, abortReason: string | null) {
@@ -409,7 +430,10 @@ const NO_ASSETS: AssetSource = {
 async function applySaved(
     plan: Plan,
     gated: Extract<GateOutcome, { ok: true }>,
-    rows: readonly MapRow[],
+    built: {
+        rows: readonly MapRow[];
+        members: ReadonlyMap<string, string> | undefined;
+    },
     deps: CycleDeps
 ): Promise<ApplyResult | null> {
     const toFluxer = plan.direction === 'discord-to-fluxer';
@@ -424,7 +448,13 @@ async function applySaved(
         return null;
     }
     const result = await applyPlan(
-        { plan, source: gated.source, destination: gated.destination, rows },
+        {
+            plan,
+            source: gated.source,
+            destination: gated.destination,
+            rows: built.rows,
+            members: built.members,
+        },
         {
             store: deps.store,
             writer,
@@ -515,7 +545,8 @@ async function planAndApply(
 ): Promise<Planned> {
     await saveIfChanged(deps.store, link.id, gated.source, now);
     await saveIfChanged(deps.store, link.id, gated.destination, now);
-    const { body, rows } = await buildBody(link, settings, gated, deps, now);
+    const built = await buildBody(link, settings, gated, deps, now);
+    const { body } = built;
     const plan = newPlan(deps, link, settings.direction, body, null);
     await publish(plan, settings, deps, now);
     const mode = resolveMode(deps.processMode(), settings, deps.allowApply);
@@ -523,7 +554,9 @@ async function planAndApply(
         mode.mode === 'apply' &&
         body.ops.length > 0 &&
         isApproved(plan, approved);
-    const applied = runnable ? await applySaved(plan, gated, rows, deps) : null;
+    const applied = runnable
+        ? await applySaved(plan, gated, built, deps)
+        : null;
     if (!applied) return { status: 'planned', plan, more: false };
     await deps.notices.post(
         link.id,

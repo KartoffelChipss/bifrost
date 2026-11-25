@@ -20,6 +20,7 @@ import { DiscordGuildReader } from './readers/discord';
 import { FluxerGuildReader } from './readers/fluxer';
 import { DEFAULT_SCHEDULE, SyncScheduler } from './scheduler';
 import { PostgresHistoryStore } from '../history/store';
+import { PostgresIdentityStore } from '../identity/store';
 import { PostgresGuildSyncStore, type GuildSyncStore } from './store';
 import {
     followFluxerClient,
@@ -71,6 +72,20 @@ export interface GuildSyncDeps {
     readonly historyEnabled: boolean;
     /** Discord channel or category IDs never synced. */
     readonly excludedChannels: ReadonlySet<string>;
+    /** Account linking is on: member overwrites follow linked members. */
+    readonly identityEnabled?: boolean;
+}
+
+/** Linked accounts, Discord user ID to Fluxer user ID. */
+function linkedMembers(sequelize: Sequelize) {
+    const store = new PostgresIdentityStore(sequelize);
+    return async () =>
+        new Map(
+            (await store.listPairs()).map((pair) => [
+                pair.discordUserId,
+                pair.fluxerUserId,
+            ])
+        );
 }
 
 export type GuildSyncBridge = ChannelLinker &
@@ -146,7 +161,8 @@ function buildCycleDeps(
         writers: {
             fluxer: new FluxerGuildWriter(
                 deps.fluxerClientRef,
-                deps.bridge.sendViaFluxerWebhook
+                deps.bridge.sendViaFluxerWebhook,
+                (message) => context.logger.warn(message)
             ),
         },
         assets: {
@@ -171,6 +187,9 @@ function buildCycleDeps(
         newId: randomUUID,
         failures: new MemoryFailureLedger(),
         lookups: new Map(),
+        linkedMembers: deps.identityEnabled
+            ? linkedMembers(deps.sequelize)
+            : undefined,
     };
 }
 
