@@ -8,6 +8,8 @@ import {
 } from '@fluxerjs/core';
 import { Events, MessageType, type Client } from 'discord.js';
 import {
+    FLUXER_FALLBACK_WATCH_MS,
+    followFluxerClient,
     listenToDiscordThreads,
     listenToFluxerThreads,
 } from '../../src/guild-sync/threadEvents';
@@ -113,5 +115,75 @@ describe('thread relay events', () => {
         client.emit(FluxerEvents.MessageCreate, fluxerThreadMessage('2', 'ok'));
         await flush();
         assert.deepEqual(calls, ['created fluxer 2']);
+    });
+});
+
+describe('followFluxerClient', () => {
+    const client = (name: string) => ({ name }) as unknown as FluxerClient;
+
+    function follow(ref: { current: FluxerClient | null }) {
+        const log: string[] = [];
+        const stop = followFluxerClient(ref, (c) => {
+            const name = (c as unknown as { name: string }).name;
+            log.push(`attach ${name}`);
+            return () => log.push(`detach ${name}`);
+        });
+        return { log, stop };
+    }
+
+    it('re-attaches as soon as upstream assigns a new client', () => {
+        const ref: { current: FluxerClient | null } = { current: null };
+        const { log, stop } = follow(ref);
+        ref.current = client('a');
+        ref.current = client('b');
+        assert.equal((ref.current as unknown as { name: string }).name, 'b');
+        stop();
+        ref.current = client('c');
+        assert.deepEqual(log, ['attach a', 'detach a', 'attach b', 'detach b']);
+    });
+
+    it('lets two followers share one ref', () => {
+        const ref: { current: FluxerClient | null } = { current: client('a') };
+        const first = follow(ref);
+        const second = follow(ref);
+        ref.current = client('b');
+        assert.deepEqual(first.log, ['attach a', 'detach a', 'attach b']);
+        assert.deepEqual(second.log, ['attach a', 'detach a', 'attach b']);
+        first.stop();
+        second.stop();
+    });
+
+    it('never throws into the code that assigns the ref', () => {
+        const ref: { current: FluxerClient | null } = { current: null };
+        let fail = true;
+        const stop = followFluxerClient(ref, () => {
+            if (fail) throw new Error('attach failed');
+            return () => undefined;
+        });
+        assert.doesNotThrow(() => {
+            ref.current = client('a');
+        });
+        fail = false;
+        stop();
+    });
+
+    it('polls quickly when the ref cannot be observed', (t) => {
+        t.mock.timers.enable({ apis: ['setInterval'] });
+        let value: FluxerClient | null = null;
+        // A getter-only ref cannot be wrapped with a setter.
+        const ref = {
+            get current() {
+                return value;
+            },
+        };
+        const log: string[] = [];
+        const stop = followFluxerClient(ref, () => {
+            log.push('attach');
+            return () => log.push('detach');
+        });
+        value = client('a');
+        t.mock.timers.tick(FLUXER_FALLBACK_WATCH_MS);
+        assert.deepEqual(log, ['attach']);
+        stop();
     });
 });
