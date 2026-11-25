@@ -14,6 +14,8 @@ export const SYNCED_CHANNEL_TYPES = {
     2: 'voice',
     4: 'category',
     5: 'announcement',
+    // Fluxer has no stage channels; they are copied as voice channels.
+    13: 'voice',
     15: 'forum',
 } as const;
 
@@ -228,6 +230,15 @@ function sortKeys(value: unknown, depth: number): unknown {
  */
 export function stableJson(value: unknown): string {
     return JSON.stringify(sortKeys(value, 0));
+}
+
+/** Discord's stage channel type. */
+export const STAGE_TYPE = 13;
+const VOICE_TYPE = 2;
+
+/** The channel type a copy gets: a stage channel becomes a voice channel. */
+export function copyType(type: number): number {
+    return type === STAGE_TYPE ? VOICE_TYPE : type;
 }
 
 export function channelKind(type: number): ChannelKind | null {

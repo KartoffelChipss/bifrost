@@ -31,7 +31,12 @@ import type {
     RoleSnap,
     ThreadSnap,
 } from './snapshot';
-import { LINKED_CHANNEL_TYPES, channelKind } from './snapshot';
+import {
+    LINKED_CHANNEL_TYPES,
+    STAGE_TYPE,
+    channelKind,
+    copyType,
+} from './snapshot';
 
 /** Fluxer refuses a 51st channel in one category (ChannelHelpers.ts). */
 export const MAX_CHANNELS_PER_CATEGORY = 50;
@@ -340,7 +345,8 @@ function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
         previous: previousSource?.channels.filter(filter) ?? null,
         projectSource: (c: ChannelSnap) => projectSourceChannel(c, ctx),
         projectDest: (c: ChannelSnap) => projectDestChannel(c, ctx),
-        sameType: (a: ChannelSnap, b: ChannelSnap) => a.type === b.type,
+        sameType: (a: ChannelSnap, b: ChannelSnap) =>
+            copyType(a.type) === b.type,
         skipReason: (c: ChannelSnap) =>
             input.excluded?.has(c.id)
                 ? 'excluded by BF_ADDONS_EXCLUDE_CHANNELS'
@@ -489,6 +495,21 @@ function reportMemberOverwrites(input: DiffInput, out: Out) {
                 (denies > 0
                     ? `; ${denies} of them deny access, which the destination does not enforce`
                     : ''),
+        });
+    }
+}
+
+/** One finding per stage channel: Fluxer gets a voice channel instead. */
+function reportStages(input: DiffInput, out: Out) {
+    for (const channel of input.source.channels) {
+        if (channel.type !== STAGE_TYPE || input.excluded?.has(channel.id)) {
+            continue;
+        }
+        out.findings.push({
+            type: 'skipped',
+            kind: 'channel',
+            id: channel.id,
+            detail: 'stage channel: it is a voice channel on Fluxer, which has no stage channels',
         });
     }
 }
@@ -660,6 +681,7 @@ export function diff(input: DiffInput): DiffResult {
     diffOrders({ ...input, enforce: input.enforceDrift === true }, map, out);
     reportPermissions(input, out);
     reportFullCategories(input.source, out);
+    reportStages(input, out);
     reportBotPermissions(input, out);
     return out;
 }

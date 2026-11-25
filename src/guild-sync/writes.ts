@@ -14,7 +14,7 @@ import {
     type ProjectionContext,
 } from './project';
 import type { ChannelSnap, GuildSnapshot } from './snapshot';
-import { channelKind } from './snapshot';
+import { channelKind, copyType } from './snapshot';
 import { layoutGroup } from './order';
 import type {
     ChannelMove,
@@ -337,7 +337,7 @@ function channelSpec(
 ): ChannelSpec {
     return {
         ...parentSettings(fields),
-        type: channel.type,
+        type: copyType(channel.type),
         name: text(fields.name, channel.name),
         parentId: typeof fields.parentId === 'string' ? fields.parentId : null,
         topic: typeof fields.topic === 'string' ? fields.topic : null,
