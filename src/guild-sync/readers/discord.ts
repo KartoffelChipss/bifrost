@@ -7,6 +7,7 @@ import {
     type AnyThreadChannel,
     type Client,
     type ForumChannel,
+    type MediaChannel,
     type Guild,
     type GuildEmoji,
     type GuildMember,
@@ -84,7 +85,10 @@ export function discordChannel(
         tags: 'availableTags' in c ? c.availableTags.map((t) => t.name) : [],
         ...(bridgeable === undefined ? {} : { bridgeable }),
         ...threadDefaults(c),
-        ...(c.type === ChannelType.GuildForum ? { forum: forumOf(c) } : {}),
+        ...(c.type === ChannelType.GuildForum ||
+        c.type === ChannelType.GuildMedia
+            ? { forum: forumOf(c) }
+            : {}),
     };
 }
 
@@ -104,11 +108,13 @@ const emojiRef = (
 ): EmojiRef | null =>
     emoji ? { emojiId: emoji.id ?? null, emojiName: emoji.name ?? null } : null;
 
-function forumOf(c: ForumChannel): ForumSnap {
+/** Forum settings; a media channel has no layout. */
+function forumOf(c: ForumChannel | MediaChannel): ForumSnap {
     return {
         defaultReaction: emojiRef(c.defaultReactionEmoji),
         sortOrder: c.defaultSortOrder ?? null,
-        layout: c.defaultForumLayout ?? null,
+        layout:
+            'defaultForumLayout' in c ? (c.defaultForumLayout ?? null) : null,
         tags: c.availableTags.map((tag) => ({
             name: tag.name,
             moderated: tag.moderated,

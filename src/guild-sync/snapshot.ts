@@ -17,6 +17,7 @@ export const SYNCED_CHANNEL_TYPES = {
     // Fluxer has no stage channels; they are copied as voice channels.
     13: 'voice',
     15: 'forum',
+    16: 'media',
 } as const;
 
 export type ChannelKind =
@@ -106,14 +107,23 @@ export interface GuildSettingsSnap {
     readonly explicitContentFilter: number;
 }
 
-/** Channel types that can hold threads or posts: text, announcement, forum. */
-export const THREAD_PARENT_TYPES: ReadonlySet<number> = new Set([0, 5, 15]);
+/** Forum and media channels: they hold only posts, started by a message. */
+export const THREAD_ONLY_TYPES: ReadonlySet<number> = new Set([15, 16]);
+
+/**
+ * Channel types that can hold threads or posts: text, announcement,
+ * forum and media.
+ */
+export const THREAD_PARENT_TYPES: ReadonlySet<number> = new Set([0, 5, 15, 16]);
 
 /**
  * Channel types the relay bridges: text, voice (its text chat),
- * announcement, and forum (whose webhook starts posts).
+ * announcement, and forum and media (whose webhook starts posts; Fluxer
+ * allows webhooks there, WEBHOOK_CHANNEL_TYPES in ThreadConstants.ts).
  */
-export const LINKED_CHANNEL_TYPES: ReadonlySet<number> = new Set([0, 2, 5, 15]);
+export const LINKED_CHANNEL_TYPES: ReadonlySet<number> = new Set([
+    0, 2, 5, 15, 16,
+]);
 
 /** Thread types that are synced: announcement, public and private. */
 export const SYNCED_THREAD_TYPES: ReadonlySet<number> = new Set([10, 11, 12]);

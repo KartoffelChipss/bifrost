@@ -17,7 +17,7 @@ import {
     projectSourceSettings,
     type Fields,
 } from './project';
-import type { GuildSnapshot } from './snapshot';
+import { THREAD_ONLY_TYPES, type GuildSnapshot } from './snapshot';
 import type { GuildSyncStore } from './store';
 import {
     ARCHIVE_CATEGORY,
@@ -243,7 +243,6 @@ async function createArchiveCategory(
 }
 
 const CATEGORY_TYPE = 4;
-const FORUM_TYPE = 15;
 
 /** A write that must wait for an earlier one, such as a channel link. */
 export class NotReadyError extends Error {}
@@ -269,7 +268,7 @@ async function createThread(
     const { writer, links, threads } = state.deps;
     let starter = null;
     let webhook = null;
-    if (action.parentType === FORUM_TYPE) {
+    if (THREAD_ONLY_TYPES.has(action.parentType)) {
         const toFluxer = plan.direction === 'discord-to-fluxer';
         const link = toFluxer
             ? await links?.byDiscordChannel(action.parentSourceId)

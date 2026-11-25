@@ -354,7 +354,7 @@ function kindFields(
         topic: channel.topic,
         rateLimitPerUser: channel.rateLimitPerUser,
     };
-    if (kind === 'forum') fields.tags = [...channel.tags];
+    if (kind === 'forum' || kind === 'media') fields.tags = [...channel.tags];
     return { ...fields, ...threadParentFields(channel, emoji) };
 }
 

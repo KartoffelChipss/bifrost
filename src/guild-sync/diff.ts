@@ -34,6 +34,7 @@ import type {
 import {
     LINKED_CHANNEL_TYPES,
     STAGE_TYPE,
+    THREAD_ONLY_TYPES,
     channelKind,
     copyType,
 } from './snapshot';
@@ -594,7 +595,7 @@ function diffLinks(input: DiffInput, map: IdMap, out: Out) {
         const ready = input.links.historyReady;
         if (
             ready &&
-            channelKind(channel.type) !== 'forum' &&
+            !THREAD_ONLY_TYPES.has(channel.type) &&
             !ready.has(channel.id)
         ) {
             continue;

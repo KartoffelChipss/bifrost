@@ -3,12 +3,14 @@ import {
     Routes,
     ThreadChannel,
     ForumChannel,
+    MediaChannel,
     type Client,
     type Guild,
     type ThreadEditOptions,
     type Webhook,
 } from '@fluxerjs/core';
 import type { RelayPayload } from '../links';
+import { THREAD_ONLY_TYPES } from '../snapshot';
 import { fluxerThreadWebhook } from '../threadWebhook';
 import {
     timedWrite,
@@ -119,7 +121,6 @@ function tagList(
     });
 }
 
-const FORUM_TYPE = 15;
 const PRIVATE_THREAD = 12;
 /** The forum-post pinned flag (ThreadConstants.ts: PINNED = 1 << 1). */
 const PINNED_FLAG = 1 << 1;
@@ -132,9 +133,16 @@ export type FluxerWebhookSend = (
     payload: RelayPayload
 ) => Promise<{ messageId: string }>;
 
+/** Forum and media channels, which offer tags for their posts. */
+function postParent(
+    channel: GuildChannel
+): channel is ForumChannel | MediaChannel {
+    return channel instanceof ForumChannel || channel instanceof MediaChannel;
+}
+
 /** Tag IDs for tag names. A name the forum does not offer is left out. */
 function tagIds(parent: GuildChannel, names: readonly string[]): string[] {
-    if (!(parent instanceof ForumChannel)) return [];
+    if (!postParent(parent)) return [];
     const ids: string[] = [];
     for (const name of names) {
         const tag = parent.availableTags.find((t) => t.name === name);
@@ -156,7 +164,7 @@ function createOptions(spec: ChannelSpec): CreateOptions {
     };
     if (spec.parentId !== null) options.parentId = spec.parentId;
     if (spec.type === CATEGORY_TYPE) return options;
-    if (spec.type === FORUM_TYPE) {
+    if (THREAD_ONLY_TYPES.has(spec.type)) {
         options.availableTags = tagList(spec.tags, spec.tagMeta, []);
         if (spec.defaultReaction !== undefined) {
             options.defaultReactionEmoji = spec.defaultReaction
@@ -304,7 +312,7 @@ export class FluxerGuildWriter implements GuildWriter {
                 channel.client.rest.patch(Routes.channel(channelId), { body })
             );
         }
-        if ((patch.tags || patch.tagMeta) && channel instanceof ForumChannel) {
+        if ((patch.tags || patch.tagMeta) && postParent(channel)) {
             // A known name keeps its tag ID, so posts keep their tags.
             const names =
                 patch.tags ?? channel.availableTags.map((t) => t.name);
@@ -467,7 +475,7 @@ export class FluxerGuildWriter implements GuildWriter {
 
     async createThread(guildId: string, spec: ThreadSpec): Promise<string> {
         const parent = await this.channel(guildId, spec.parentId);
-        if (spec.parentType === FORUM_TYPE) {
+        if (THREAD_ONLY_TYPES.has(spec.parentType)) {
             return this.createPost(parent, spec);
         }
         const manager = (

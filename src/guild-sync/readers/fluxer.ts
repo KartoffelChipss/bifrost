@@ -20,7 +20,11 @@ import type {
     StickerSnap,
     ThreadSnap,
 } from '../snapshot';
-import { SYNCED_THREAD_TYPES, THREAD_PARENT_TYPES } from '../snapshot';
+import {
+    SYNCED_THREAD_TYPES,
+    THREAD_ONLY_TYPES,
+    THREAD_PARENT_TYPES,
+} from '../snapshot';
 import {
     READ_TIMEOUT_MS,
     guardedLookup,
@@ -67,9 +71,6 @@ interface OptionalChannelFields {
     };
 }
 
-const FORUM_TYPE = 15;
-/** Forum and media channels: their threads are posts, never private. */
-const THREAD_ONLY_TYPES: ReadonlySet<number> = new Set([FORUM_TYPE, 16]);
 const PRIVATE_THREAD = 12;
 /** The forum-post pinned flag, the same bit on both platforms. */
 const PINNED_FLAG = 1 << 1;
@@ -125,7 +126,9 @@ export function fluxerChannel(c: GuildChannel): ChannelSnap {
         overwrites,
         tags: (extra.availableTags ?? []).map((tag) => tag.name),
         ...threadDefaults(Number(c.type), extra),
-        ...(Number(c.type) === FORUM_TYPE ? { forum: forumOf(extra) } : {}),
+        ...(THREAD_ONLY_TYPES.has(Number(c.type))
+            ? { forum: forumOf(extra) }
+            : {}),
     };
 }
 

@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Client as DiscordClient } from 'discord.js';
 import type { Client as FluxerClient } from '@fluxerjs/core';
+import type { NonThreadGuildBasedChannel } from 'discord.js';
 import {
     DiscordGuildReader,
     MAX_ARCHIVE_PAGES,
+    discordChannel,
 } from '../../src/guild-sync/readers/discord';
 import { FluxerGuildReader } from '../../src/guild-sync/readers/fluxer';
 
@@ -160,5 +162,43 @@ describe('archived private threads', () => {
         }).read('g1');
         assert.ok(deep.ok);
         assert.deepEqual(deep.snapshot.privateThreadGaps, ['c1']);
+    });
+});
+
+describe('media channels on Discord', () => {
+    it('reads their tags and post settings, without a layout', () => {
+        const media = {
+            id: 'm1',
+            type: 16,
+            name: 'gallery',
+            rawPosition: 0,
+            parentId: null,
+            topic: null,
+            nsfw: false,
+            rateLimitPerUser: 0,
+            permissionOverwrites: { cache: { map: () => [] } },
+            availableTags: [
+                { id: 't1', name: 'art', moderated: false, emoji: null },
+            ],
+            defaultReactionEmoji: { id: null, name: '🔥' },
+            defaultSortOrder: 1,
+            defaultAutoArchiveDuration: 4320,
+            defaultThreadRateLimitPerUser: 0,
+        } as unknown as NonThreadGuildBasedChannel;
+        const snap = discordChannel(media);
+        assert.deepEqual(snap.tags, ['art']);
+        assert.deepEqual(snap.forum, {
+            defaultReaction: { emojiId: null, emojiName: '🔥' },
+            sortOrder: 1,
+            layout: null,
+            tags: [
+                {
+                    name: 'art',
+                    moderated: false,
+                    emojiId: null,
+                    emojiName: null,
+                },
+            ],
+        });
     });
 });

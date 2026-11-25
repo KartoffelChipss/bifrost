@@ -6,6 +6,7 @@ import type {
     RoleSnap,
 } from '../../src/guild-sync/snapshot';
 import { layoutGroup } from '../../src/guild-sync/order';
+import { THREAD_ONLY_TYPES } from '../../src/guild-sync/snapshot';
 import type {
     ChannelMove,
     ChannelPatch,
@@ -279,7 +280,10 @@ export class FakeGuild implements GuildReader, GuildWriter {
     }
 
     async createThread(_guild: string, spec: ThreadSpec): Promise<string> {
-        if (spec.parentType === 15 && (!spec.starter || !spec.webhook)) {
+        if (
+            THREAD_ONLY_TYPES.has(spec.parentType) &&
+            (!spec.starter || !spec.webhook)
+        ) {
             throw new Error('a forum post needs its first message');
         }
         const id = `f-thread-${++this.seq}`;
