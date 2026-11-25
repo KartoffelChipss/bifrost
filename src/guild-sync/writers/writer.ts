@@ -130,9 +130,15 @@ export interface StickerSpec extends EmojiSpec {
     readonly tags: readonly string[];
 }
 
+/**
+ * A sticker's full editable state. Fluxer's sticker update requires the
+ * name and resets a missing description to null and missing tags to []
+ * (GuildStickerUpdateRequest), so every update sends all three.
+ */
 export interface StickerPatch {
-    readonly name?: string;
-    readonly description?: string;
+    readonly name: string;
+    readonly description: string;
+    readonly tags: readonly string[];
 }
 
 export interface GuildWriter {

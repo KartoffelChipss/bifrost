@@ -46,6 +46,8 @@ export interface WriteContext {
     readonly members?: ReadonlyMap<string, string>;
     /** The source @everyone lacks View Channel (see ProjectionContext). */
     readonly hiddenFromEveryone?: boolean;
+    /** The destination's voice bitrate cap (see ProjectionContext). */
+    readonly maxBitrate?: number;
 }
 
 /**
@@ -97,7 +99,7 @@ export type WriteAction =
           move: boolean;
       }
     | { readonly type: 'archive-emoji'; name: string }
-    | { readonly type: 'archive-sticker'; name: string }
+    | { readonly type: 'archive-sticker'; patch: StickerPatch }
     | { readonly type: 'delete' }
     | { readonly type: 'link' }
     /** Records an object an earlier create made (adopt.ts). No write. */
@@ -159,6 +161,10 @@ export function lockOverwrites(
 }
 
 const skip = (reason: string): WriteAction => ({ type: 'skip', reason });
+
+/** A sticker's comma-separated tags as a list. */
+const stickerTags = (tags: string): string[] =>
+    tags.split(',').filter((tag) => tag !== '');
 
 const text = (value: JsonValue | undefined, fallback: string): string =>
     typeof value === 'string' ? value : fallback;
@@ -386,7 +392,7 @@ function createAction(op: CreateOp, ctx: WriteContext): WriteAction {
             type: 'create-sticker',
             name: sticker.name,
             description: sticker.description,
-            tags: sticker.tags.split(',').filter((tag) => tag !== ''),
+            tags: stickerTags(sticker.tags),
             applied: projectSticker(sticker),
         };
     }
@@ -592,20 +598,15 @@ function expressionUpdate(op: UpdateOp, ctx: WriteContext): WriteAction {
     if (op.kind === 'sticker') {
         const sticker = ctx.source.stickers.find((s) => s.id === op.sourceId);
         if (!sticker) return skip('the source sticker is gone');
-        const name = changed('name');
-        const description = changed('description');
-        const patch: StickerPatch = {
-            ...(typeof name === 'string' ? { name } : {}),
-            ...(typeof description === 'string' ? { description } : {}),
-        };
-        // Fluxer has no call that changes a sticker's tags.
-        if (Object.keys(patch).length === 0) {
-            return skip('sticker tags cannot be changed on the destination');
-        }
+        // Fluxer clears what an update leaves out, so all fields go.
         return {
             type: 'update-sticker',
-            patch,
-            applied: settledFields(op, ['tags']),
+            patch: {
+                name: sticker.name,
+                description: sticker.description,
+                tags: stickerTags(sticker.tags),
+            },
+            applied: settledFields(op, []),
         };
     }
     if (op.kind === 'thread') {
@@ -672,7 +673,11 @@ function archiveAction(op: ArchiveOp, ctx: WriteContext): WriteAction {
         if (!sticker) return { type: 'gone' };
         return {
             type: 'archive-sticker',
-            name: archivedExpression(sticker.name, STICKER_NAME_MAX),
+            patch: {
+                name: archivedExpression(sticker.name, STICKER_NAME_MAX),
+                description: sticker.description,
+                tags: stickerTags(sticker.tags),
+            },
         };
     }
     if (op.kind === 'thread') {

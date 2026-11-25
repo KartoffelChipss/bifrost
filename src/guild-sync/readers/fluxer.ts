@@ -288,6 +288,7 @@ async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
         threads,
         threadGaps: gaps,
         settings: settingsOf(guild),
+        features: [...(guild.features ?? [])],
         bot: {
             userId: me.id,
             roleIds: [...me.roles.roleIds],

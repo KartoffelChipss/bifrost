@@ -45,6 +45,39 @@ export interface ProjectionContext {
      * the destination @everyone holds at that moment.
      */
     readonly hiddenFromEveryone?: boolean;
+    /** The highest voice bitrate the destination accepts, if capped. */
+    readonly maxBitrate?: number;
+}
+
+/**
+ * Fluxer's voice bitrate limits (packages/constants LimitConstants.ts and
+ * GuildConstants.ts getMaxVoiceChannelBitrate): 96 kbps, raised by an
+ * AUDIO_BITRATE_* server feature. Fluxer clamps a higher value, so the
+ * copy is compared against what Fluxer can hold, not Discord's value.
+ */
+const FLUXER_BITRATE_MIN = 8_000;
+const FLUXER_BITRATE_STANDARD = 96_000;
+const FLUXER_BITRATE_FEATURES: Readonly<Record<string, number>> = {
+    AUDIO_BITRATE_128_KBPS: 128_000,
+    AUDIO_BITRATE_256_KBPS: 256_000,
+    AUDIO_BITRATE_384_KBPS: 384_000,
+};
+
+/** The voice bitrate cap of a destination, or undefined when not Fluxer. */
+export function maxBitrateOf(
+    destination: Pick<GuildSnapshot, 'side' | 'features'>
+): number | undefined {
+    if (destination.side !== 'fluxer') return undefined;
+    let max = FLUXER_BITRATE_STANDARD;
+    for (const feature of destination.features ?? []) {
+        max = Math.max(max, FLUXER_BITRATE_FEATURES[feature] ?? 0);
+    }
+    return max;
+}
+
+function clampBitrate(bitrate: number | null, max: number | undefined) {
+    if (bitrate === null || max === undefined) return bitrate;
+    return Math.min(Math.max(bitrate, FLUXER_BITRATE_MIN), max);
 }
 
 const VIEW_CHANNEL = bitOf(10);
@@ -244,14 +277,15 @@ function threadParentFields(
 
 function kindFields(
     channel: ChannelSnap,
-    emoji: EmojiProjection
+    emoji: EmojiProjection,
+    maxBitrate?: number
 ): Record<string, JsonValue> {
     const kind = channelKind(channel.type);
     if (kind === 'category') return {};
     if (kind === 'voice') {
         return {
             nsfw: channel.nsfw,
-            bitrate: channel.bitrate,
+            bitrate: clampBitrate(channel.bitrate, maxBitrate),
             userLimit: channel.userLimit,
         };
     }
@@ -270,7 +304,7 @@ export function projectSourceChannel(
 ): Fields {
     const fields: Record<string, JsonValue> = {
         name: channel.name,
-        ...kindFields(channel, sourceEmoji(ctx)),
+        ...kindFields(channel, sourceEmoji(ctx), ctx.maxBitrate),
         overwrites: sourceOverwrites(channel.overwrites, ctx),
     };
     if (channel.parentId === null) fields.parentId = null;

@@ -188,6 +188,8 @@ export interface GuildSnapshot {
     readonly privateThreadGaps?: readonly string[];
     /** Undefined in older snapshots. */
     readonly settings?: GuildSettingsSnap;
+    /** The server's feature flags. Read on Fluxer only; undefined otherwise. */
+    readonly features?: readonly string[];
     readonly bot: BotSnap | null;
 }
 

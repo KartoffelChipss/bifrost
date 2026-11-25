@@ -11,6 +11,7 @@ import type { Plan } from './plan';
 import { ORDER_PENDING } from './order';
 import {
     everyoneHidden,
+    maxBitrateOf,
     projectSourceRole,
     projectSourceSettings,
     type Fields,
@@ -373,7 +374,7 @@ async function perform(
             await writer.updateSticker(guildId, destId, action.patch);
             return null;
         case 'archive-sticker':
-            await writer.updateSticker(guildId, destId, { name: action.name });
+            await writer.updateSticker(guildId, destId, action.patch);
             return null;
         case 'update-thread':
         case 'archive-thread':
@@ -763,6 +764,7 @@ async function applyOp(
         direction: plan.direction,
         members: state.input.members,
         hiddenFromEveryone: everyoneHidden(source, plan.direction),
+        maxBitrate: maxBitrateOf(destination),
     };
     const action = writeFor(op, ctx);
     const held = action.type === 'skip' ? action.reason : holdReason(state, op);

@@ -244,7 +244,7 @@ export class FakeGuild implements GuildReader, GuildWriter {
     async updateSticker(_guild: string, id: string, patch: StickerPatch) {
         this.patch({
             stickers: this.snapshot.stickers.map((s) =>
-                s.id === id ? { ...s, ...patch } : s
+                s.id === id ? { ...s, ...patch, tags: patch.tags.join(',') } : s
             ),
         });
         this.calls.push(`update sticker ${id}`);

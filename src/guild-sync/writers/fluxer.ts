@@ -386,11 +386,18 @@ export class FluxerGuildWriter implements GuildWriter {
         patch: StickerPatch
     ) {
         const guild = await this.guild(guildId);
-        const sticker = await timedWrite(
-            'Fluxer sticker fetch',
-            guild.fetchSticker(stickerId)
+        // The library's sticker edit cannot send tags; the API takes them.
+        const body = {
+            name: patch.name,
+            description: patch.description === '' ? null : patch.description,
+            tags: [...patch.tags],
+        };
+        await timedWrite(
+            'Fluxer sticker edit',
+            guild.client.rest.patch(Routes.guildSticker(guildId, stickerId), {
+                body,
+            })
         );
-        await timedWrite('Fluxer sticker edit', sticker.edit({ ...patch }));
     }
 
     async deleteRole(guildId: string, roleId: string): Promise<void> {
