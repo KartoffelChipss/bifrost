@@ -13,7 +13,12 @@ import {
     RESTJSONErrorCodes,
     type Client as DiscordClient,
 } from 'discord.js';
-import type { HistoryPorts, SendTarget, SourceMessage } from '../history/types';
+import type {
+    HistoryPorts,
+    PayloadOptions,
+    SendTarget,
+    SourceMessage,
+} from '../history/types';
 import type { IdentityPorts, MemberState, UserInfo } from '../identity';
 import type { Side } from '../identity/store';
 import type { SnapshotSide } from '../addons/db/schema';
@@ -467,6 +472,38 @@ export class UpstreamBridge
         return channel;
     }
 
+    /** What a person writes, including slash-command and app replies. */
+    private readonly copyableTypes: ReadonlySet<MessageType> = new Set([
+        MessageType.Default,
+        MessageType.Reply,
+        MessageType.ChatInputCommand,
+        MessageType.ContextMenuCommand,
+    ]);
+
+    describe(raw: unknown): SourceMessage {
+        const m = raw as DiscordMessage;
+        return {
+            id: m.id,
+            authorId: m.author.id,
+            createdAt: m.createdAt,
+            copyable: this.copyableTypes.has(m.type),
+            attachments: m.attachments.size,
+            webhookId: m.webhookId ?? null,
+            // Discord sends the quoted message's author with a reply.
+            reply:
+                m.type === MessageType.Reply
+                    ? { authorId: m.mentions.repliedUser?.id ?? null }
+                    : null,
+            reactions: m.reactions.cache.map((r) => ({
+                name: r.emoji.id
+                    ? `:${r.emoji.name ?? 'emoji'}:`
+                    : (r.emoji.name ?? '?'),
+                count: r.count,
+            })),
+            raw: m,
+        };
+    }
+
     async listMessages(
         discordId: string,
         afterId: string,
@@ -480,16 +517,7 @@ export class UpstreamBridge
         });
         return [...page.values()]
             .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
-            .map((m) => ({
-                id: m.id,
-                authorId: m.author.id,
-                createdAt: m.createdAt,
-                copyable:
-                    m.type === MessageType.Default ||
-                    m.type === MessageType.Reply,
-                attachments: m.attachments.size,
-                raw: m,
-            }));
+            .map((m) => this.describe(m));
     }
 
     async newestMessageId(discordId: string): Promise<string | null> {
@@ -498,8 +526,49 @@ export class UpstreamBridge
         return page.first()?.id ?? null;
     }
 
-    payload(raw: unknown, guildLinkId: string): Promise<RelayPayload> {
-        return this.toFluxerPayload(raw as DiscordMessage, guildLinkId);
+    payload(
+        raw: unknown,
+        guildLinkId: string,
+        options: PayloadOptions = {}
+    ): Promise<RelayPayload> {
+        const message = raw as DiscordMessage;
+        // The transformer quotes a reply only when the message has a
+        // reference, so a view without one leaves the quote out.
+        const source = options.withoutReply
+            ? (Object.create(message, {
+                  reference: { value: null },
+              }) as DiscordMessage)
+            : message;
+        return this.toFluxerPayload(source, guildLinkId);
+    }
+
+    /** Discord returns at most 50 pins per page. */
+    private static readonly PIN_PAGE = 50;
+    private static readonly MAX_PIN_PAGES = 5;
+
+    async pinnedMessageIds(discordId: string): Promise<string[]> {
+        const channel = await this.discordHistory(discordId);
+        const pins: { id: string; at: number }[] = [];
+        let before: number | undefined;
+        for (let page = 0; page < UpstreamBridge.MAX_PIN_PAGES; page++) {
+            const result = await channel.messages.fetchPins({
+                before,
+                limit: UpstreamBridge.PIN_PAGE,
+                cache: false,
+            });
+            for (const pin of result.items) {
+                pins.push({ id: pin.message.id, at: pin.pinnedTimestamp });
+            }
+            if (!result.hasMore || result.items.length === 0) break;
+            before = result.items[result.items.length - 1].pinnedTimestamp;
+        }
+        return pins.sort((a, b) => a.at - b.at).map((p) => p.id);
+    }
+
+    async pinCopy(fluxerChannelId: string, fluxerMessageId: string) {
+        await this.fluxer().rest.put(
+            Routes.channelPinMessage(fluxerChannelId, fluxerMessageId)
+        );
     }
 
     private copyWebhook(target: SendTarget) {

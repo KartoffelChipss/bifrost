@@ -34,9 +34,20 @@ export interface HistoryStore {
     importedByFluxerId(
         fluxerMessageId: string
     ): Promise<ImportedMessage | null>;
+    importedByDiscordId(
+        discordMessageId: string
+    ): Promise<ImportedMessage | null>;
+    /** True when the thread relay copied this Discord message, either way. */
+    relayedInThread(discordMessageId: string): Promise<boolean>;
     isOptedOut(discordUserId: string): Promise<boolean>;
     setOptOut(discordUserId: string, out: boolean, now: Date): Promise<void>;
-    /** True while a thread's history is still being copied. */
+    /**
+     * True while a thread's history is still to be copied: its job is
+     * pending or importing. A job whose fluxerId is not filled in yet
+     * counts when the active thread pair for this Fluxer thread names its
+     * Discord thread. The next history pass maps it and copies its
+     * history, so a new reply waits for that instead of landing above it.
+     */
     threadImporting(fluxerThreadId: string): Promise<boolean>;
 }
 
@@ -261,6 +272,18 @@ export class PostgresHistoryStore implements HistoryStore {
         return this.oneMessage(`"fluxerMessageId" = $1`, fluxerMessageId);
     }
 
+    importedByDiscordId(discordMessageId: string) {
+        return this.oneMessage(`"discordMessageId" = $1`, discordMessageId);
+    }
+
+    async relayedInThread(discordMessageId: string): Promise<boolean> {
+        const rows = await this.db.query<Row>(
+            `SELECT 1 FROM ${TABLES.threadMessages} WHERE "discordMessageId" = $1 LIMIT 1`,
+            { bind: [discordMessageId], type: QueryTypes.SELECT }
+        );
+        return rows.length > 0;
+    }
+
     async isOptedOut(discordUserId: string): Promise<boolean> {
         const rows = await this.db.query<Row>(
             `SELECT 1 FROM ${TABLES.historyOptOuts} WHERE "discordUserId" = $1`,
@@ -280,8 +303,12 @@ export class PostgresHistoryStore implements HistoryStore {
 
     async threadImporting(fluxerThreadId: string): Promise<boolean> {
         const rows = await this.db.query<Row>(
-            `SELECT 1 FROM ${TABLES.historyJobs}
-             WHERE kind = 'thread' AND "fluxerId" = $1 AND status IN ('pending', 'importing') LIMIT 1`,
+            `SELECT 1 FROM ${TABLES.historyJobs} j
+             WHERE j.kind = 'thread' AND j.status IN ('pending', 'importing')
+               AND (j."fluxerId" = $1 OR (j."fluxerId" IS NULL AND j."discordId" IN (
+                   SELECT m."discordId" FROM ${TABLES.objectMap} m
+                   WHERE m.kind = 'thread' AND m.state = 'active' AND m."fluxerId" = $1)))
+             LIMIT 1`,
             { bind: [fluxerThreadId], type: QueryTypes.SELECT }
         );
         return rows.length > 0;
