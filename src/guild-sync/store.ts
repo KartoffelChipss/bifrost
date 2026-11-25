@@ -125,6 +125,12 @@ export interface GuildSyncStore {
     savePlan(plan: Plan, now: Date): Promise<void>;
     removalsSince(guildLinkId: string, since: Date): Promise<number>;
     pruneSnapshots(before: Date): Promise<void>;
+    /**
+     * Deletes plans saved before `before`, keeping per link the newest
+     * PLANS_KEPT_PER_LINK plans and the newest pending-approval plan, and
+     * the plan an admin approved. Returns how many went.
+     */
+    prunePlans(before: Date): Promise<number>;
     /** Create intents recorded since `since`, newest first, bounded. */
     createIntents(guildLinkId: string, since: Date): Promise<CreateIntent[]>;
     /**
@@ -328,6 +334,9 @@ export function parseSnapshot(payload: unknown): GuildSnapshot {
         threadGaps: Array.isArray(snap.threadGaps) ? snap.threadGaps : [],
     } as unknown as GuildSnapshot;
 }
+
+/** Plans kept per link however old: `sync status` and debugging use them. */
+export const PLANS_KEPT_PER_LINK = 20;
 
 /**
  * Upper bound on map rows per guild link: roles, channels, expressions and
@@ -564,6 +573,27 @@ export class PostgresGuildSyncStore
             { bind: [guildLinkId, since, MAX_INTENTS], type: QueryTypes.SELECT }
         );
         return rows.flatMap(parseIntent);
+    }
+
+    async prunePlans(before: Date): Promise<number> {
+        const [, meta] = await this.db.query(
+            `DELETE FROM ${TABLES.plans} WHERE "createdAt" < $1
+               AND id NOT IN (
+                 SELECT "approvedPlanId" FROM ${TABLES.settings}
+                 WHERE "approvedPlanId" IS NOT NULL)
+               AND id NOT IN (
+                 SELECT id FROM (
+                   SELECT id, row_number() OVER (
+                     PARTITION BY "guildLinkId" ORDER BY "createdAt" DESC) AS n
+                   FROM ${TABLES.plans}) ranked
+                 WHERE n <= $2)
+               AND id NOT IN (
+                 SELECT DISTINCT ON ("guildLinkId") id FROM ${TABLES.plans}
+                 WHERE status = 'pending-approval'
+                 ORDER BY "guildLinkId", "createdAt" DESC)`,
+            { bind: [before, PLANS_KEPT_PER_LINK] }
+        );
+        return rowCount(meta);
     }
 
     async pruneTombstoned(before: Date): Promise<number> {

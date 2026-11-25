@@ -135,6 +135,7 @@ export async function runAll(
         }
         const now = cycleDeps.now().getTime();
         await store.pruneSnapshots(new Date(now - SNAPSHOT_RETENTION_MS));
+        await store.prunePlans(new Date(now - SNAPSHOT_RETENTION_MS));
         await store.pruneTombstoned(cycleDeps.now());
     });
     if (!result.ran) {

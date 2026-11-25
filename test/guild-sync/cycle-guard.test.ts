@@ -78,7 +78,13 @@ describe('cycle errors', () => {
         const deps = {
             listGuildLinks: async () => links,
         } as unknown as GuildSyncDeps;
+        const pruned: string[] = [];
+        s.store.prunePlans = async () => {
+            pruned.push('plans');
+            return 0;
+        };
         await runAll(s.store, deps, s.depsFor(), 'me', new CycleBackoff());
+        assert.deepEqual(pruned, ['plans']);
         assert.ok(s.store.plans.some((p) => p.guildLinkId === 'good'));
         assert.ok(!s.store.plans.some((p) => p.guildLinkId === 'bad'));
     });

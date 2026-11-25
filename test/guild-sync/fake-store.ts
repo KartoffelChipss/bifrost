@@ -120,6 +120,10 @@ export class FakeStore implements GuildSyncStore {
 
     async pruneSnapshots() {}
 
+    async prunePlans() {
+        return 0;
+    }
+
     async pruneTombstoned() {
         const before = this.rows.length;
         this.rows = this.rows.filter((row) => row.state !== 'tombstoned');

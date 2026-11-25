@@ -8,6 +8,7 @@ import { EMPTY_BODY } from '../../src/guild-sync/plan';
 import { stableJson } from '../../src/guild-sync/snapshot';
 import {
     HISTORY_LOCK_KEY,
+    PLANS_KEPT_PER_LINK,
     PostgresGuildSyncStore,
 } from '../../src/guild-sync/store';
 import { PostgresHistoryStore } from '../../src/history/store';
@@ -519,5 +520,54 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         );
         assert.equal(intents[0].at.getTime(), at.getTime());
         assert.equal(await store.removalsSince(linkId, new Date(0)), 1);
+    });
+
+    it('prunes old plans but keeps recent, pending and approved ones', async () => {
+        const link = randomUUID();
+        await db.query(
+            `INSERT INTO guild_links (id, "discordGuildId", "fluxerGuildId", "createdAt") VALUES ($1, 'd2', 'f2', now())`,
+            { bind: [link] }
+        );
+        const old = new Date('2020-01-01T00:00:00Z');
+        const save = async (
+            status: 'dry-run' | 'pending-approval',
+            at: Date
+        ) => {
+            const id = randomUUID();
+            await store.savePlan(
+                {
+                    id,
+                    guildLinkId: link,
+                    direction: 'discord-to-fluxer',
+                    status,
+                    body: EMPTY_BODY,
+                    abortReason: null,
+                },
+                at
+            );
+            return id;
+        };
+        const approved = await save('pending-approval', old);
+        await store.setApprovedPlan(link, approved, new Date());
+        const stalePending = await save('pending-approval', old);
+        const pending = await save(
+            'pending-approval',
+            new Date(old.getTime() + 1)
+        );
+        const stale: string[] = [];
+        for (let i = 0; i < PLANS_KEPT_PER_LINK + 3; i++) {
+            stale.push(
+                await save('dry-run', new Date(old.getTime() + 100 + i))
+            );
+        }
+        const pruned = await store.prunePlans(new Date('2021-01-01T00:00:00Z'));
+        assert.ok(pruned >= 4);
+        assert.ok(await store.getPlan(approved));
+        assert.ok(await store.getPlan(pending));
+        assert.equal(await store.getPlan(stalePending), null);
+        // The newest plans stay; the oldest dry-runs past the limit go.
+        assert.equal(await store.getPlan(stale[0]), null);
+        assert.ok(await store.getPlan(stale[stale.length - 1]));
+        await store.setApprovedPlan(link, null, new Date());
     });
 });
