@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ThreadMessage } from '../../src/guild-sync/store';
+import { historyPair } from '../../src/relay-extras/historyPairs';
 import { excludingChannels, pairFinder } from '../../src/relay-extras/pairs';
 import { KeyedQueue } from '../../src/relay-extras/queue';
 import { PAIR } from './fakes';
@@ -44,6 +45,46 @@ describe('pairFinder', () => {
 
     it('returns null for a message that was not relayed', async () => {
         assert.equal(await find('discord', 'nope'), null);
+    });
+
+    it('falls back to an imported history copy', async () => {
+        const IMPORTED = {
+            guildLinkId: 'link-3',
+            discord: { channelId: 'd-old', messageId: 'd-past' },
+            fluxer: { channelId: 'f-old', messageId: 'f-past' },
+        };
+        const withHistory = pairFinder({
+            bridgedMessage: async () => null,
+            threadMessage: async () => null,
+            historyMessage: async (side, id) =>
+                IMPORTED[side].messageId === id ? IMPORTED : null,
+        });
+        assert.equal(await withHistory('fluxer', 'f-past'), IMPORTED);
+        assert.equal(await withHistory('discord', 'd-past'), IMPORTED);
+        assert.equal(await withHistory('discord', 'nope'), null);
+    });
+});
+
+describe('historyPair', () => {
+    const row = {
+        guildLinkId: 'gl',
+        discordId: 'd-chan',
+        discordMessageId: 'd-msg',
+        fluxerTargetId: 'f-thread',
+        fluxerMessageId: 'f-msg',
+    };
+
+    it('pairs the original in its job channel with the copy in its target', () => {
+        assert.deepEqual(historyPair(row), {
+            guildLinkId: 'gl',
+            discord: { channelId: 'd-chan', messageId: 'd-msg' },
+            fluxer: { channelId: 'f-thread', messageId: 'f-msg' },
+        });
+    });
+
+    it('skips a copy that was never finished', () => {
+        assert.equal(historyPair({ ...row, fluxerMessageId: null }), null);
+        assert.equal(historyPair({ ...row, fluxerTargetId: '' }), null);
     });
 });
 

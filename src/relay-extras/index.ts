@@ -6,6 +6,7 @@ import { PostgresGuildSyncStore } from '../guild-sync/store';
 import { followFluxerClient } from '../guild-sync/threadEvents';
 import { EmojiTranslator } from './emojiMap';
 import { listenToDiscord, listenToFluxer, type Wrap } from './events';
+import { PostgresHistoryPairs } from './historyPairs';
 import { excludingChannels, pairFinder } from './pairs';
 import { PinRelay } from './pinRelay';
 import { ClientPlatform } from './platform';
@@ -13,7 +14,9 @@ import { ReactionRelay } from './reactionRelay';
 import type { RelayLookupPorts, Side } from './types';
 
 /**
- * Live reactions and pins, started with the guild-sync add-on.
+ * Live reactions and pins, started with the guild-sync add-on. They are
+ * mirrored on every message pair the fork knows: channel relay copies,
+ * thread relay copies and imported history copies (pairs.ts).
  *
  * Mode: like guild-sync's thread relay, this runs in dry-run and apply and
  * stops in read-only. Dry-run governs structure plans, not live relaying;
@@ -47,10 +50,12 @@ function buildRelays(deps: RelayExtrasDeps, context: AddonContext) {
     const store = new PostgresGuildSyncStore(deps.sequelize);
     const { lookups, discordClient, fluxerClientRef } = deps;
     const platform = new ClientPlatform(discordClient, fluxerClientRef);
+    const history = new PostgresHistoryPairs(deps.sequelize);
     const findPair = excludingChannels(
         pairFinder({
             bridgedMessage: (side, id) => lookups.bridgedMessage(side, id),
             threadMessage: (side, id) => store.findThreadMessage(side, id),
+            historyMessage: (side, id) => history.historyMessage(side, id),
         }),
         deps.excludedChannels ?? new Set(),
         (id) => platform.discordLineage(id)
