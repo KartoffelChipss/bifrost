@@ -2,6 +2,7 @@ import type { SyncDirection } from '../addons/db/schema';
 import type { AddonLogger } from '../addons/isolation';
 import type { AddonMode } from '../addons/config';
 import { applyPlan, type ApplyResult } from './apply';
+import type { FailureLedger } from './failures';
 import type { AssetSource } from './assets';
 import { diff, type DiffInput } from './diff';
 import {
@@ -80,6 +81,31 @@ export interface CycleDeps {
     readonly logger: AddonLogger;
     readonly now: () => Date;
     readonly newId: () => string;
+    /** False once the leader lock is lost; checked before every write. */
+    readonly stillLeader?: () => Promise<boolean>;
+    /** Ops that keep failing wait out a backoff (failures.ts). */
+    readonly failures?: FailureLedger;
+    /**
+     * When each removal candidate was last looked up, by map row ID. The
+     * longest-unchecked go first, so candidates that never confirm gone
+     * cannot take every lookup slot for good.
+     */
+    readonly lookups?: Map<string, number>;
+    /**
+     * Linked accounts, Discord user ID to Fluxer user ID, when account
+     * linking is on. Member overwrites copy only for these members.
+     */
+    readonly linkedMembers?: () => Promise<ReadonlyMap<string, string>>;
+}
+
+/** Linked accounts as source user ID to destination user ID. */
+async function membersFor(
+    deps: CycleDeps,
+    direction: SyncDirection
+): Promise<ReadonlyMap<string, string> | undefined> {
+    const linked = await deps.linkedMembers?.();
+    if (!linked || direction === 'discord-to-fluxer') return linked;
+    return new Map([...linked].map(([discord, fluxer]) => [fluxer, discord]));
 }
 
 export type CycleOutcome =
@@ -196,17 +222,38 @@ async function saveIfChanged(
     await store.saveSnapshot(linkId, snapshot, true, takenAt);
 }
 
-/** Runs guard 4's direct lookups for up to MAX_LOOKUPS_PER_CYCLE rows. */
-async function confirmGone(
+/**
+ * The candidates to look up this cycle: never-checked first, then the
+ * longest-unchecked, then the longest missing. Bounded by
+ * MAX_LOOKUPS_PER_CYCLE.
+ */
+export function lookupBatch(
     candidates: readonly MapRow[],
+    lastChecked: ReadonlyMap<string, number>
+): MapRow[] {
+    const missing = (row: MapRow) => row.missingSince?.getTime() ?? 0;
+    return [...candidates]
+        .sort(
+            (a, b) =>
+                (lastChecked.get(a.id) ?? 0) - (lastChecked.get(b.id) ?? 0) ||
+                missing(a) - missing(b)
+        )
+        .slice(0, MAX_LOOKUPS_PER_CYCLE);
+}
+
+/** Runs guard 4's direct lookups for one batch of rows. */
+async function confirmGone(
+    batch: readonly MapRow[],
     reader: GuildReader,
     guildId: string,
-    direction: SyncDirection
+    direction: SyncDirection,
+    record: (rowId: string) => void
 ): Promise<Set<string>> {
     const gone = new Set<string>();
-    for (const row of candidates.slice(0, MAX_LOOKUPS_PER_CYCLE)) {
+    for (const row of batch) {
         const sourceId = sourceIdOf(row, direction);
         if (!sourceId || row.kind === 'overwrite') continue;
+        record(row.id);
         if ((await reader.isGone(guildId, row.kind, sourceId)) === true)
             gone.add(row.id);
     }
@@ -230,21 +277,21 @@ async function confirmedRemovals(
     now: Date
 ) {
     const { direction } = settings;
+    const lookups = deps.lookups ?? new Map<string, number>();
     const candidates = removalCandidates(rows, settings, now);
+    for (const id of lookups.keys()) {
+        if (!candidates.some((row) => row.id === id)) lookups.delete(id);
+    }
+    const batch = lookupBatch(candidates, lookups);
     const s = sides(link, direction);
     const gone = await confirmGone(
-        candidates,
+        batch,
         deps.readers[s.source],
         s.sourceGuildId,
-        direction
-    );
-    return planRemovals(
-        candidates.slice(0, MAX_LOOKUPS_PER_CYCLE),
-        gone,
         direction,
-        settings,
-        now
+        (rowId) => lookups.set(rowId, now.getTime())
     );
+    return planRemovals(batch, gone, direction, settings, now);
 }
 
 /**
@@ -278,9 +325,14 @@ async function buildBody(
     gated: Extract<GateOutcome, { ok: true }>,
     deps: CycleDeps,
     now: Date
-): Promise<{ body: PlanBody; rows: MapRow[] }> {
+): Promise<{
+    body: PlanBody;
+    rows: MapRow[];
+    members: ReadonlyMap<string, string> | undefined;
+}> {
     const { direction } = settings;
     const { source, destination } = gated;
+    const members = await membersFor(deps, direction);
     const loaded = await deps.store.loadObjectMap(link.id);
     const missing = trackMissing(loaded, source, direction, now);
     await deps.store.saveMissing(missing, now);
@@ -293,6 +345,7 @@ async function buildBody(
         rows,
         direction,
         excluded: excludedIds(source, deps.excludedChannels ?? new Set()),
+        members,
         links: await linkState(link, settings, deps),
     });
     const removals = await confirmedRemovals(link, settings, rows, deps, now);
@@ -321,7 +374,7 @@ async function buildBody(
         needsApproval: budget.needsApproval,
         approvalReason: budget.needsApproval ? budget.reason : null,
     };
-    return { body, rows };
+    return { body, rows, members };
 }
 
 function planStatus(body: PlanBody, abortReason: string | null) {
@@ -377,7 +430,10 @@ const NO_ASSETS: AssetSource = {
 async function applySaved(
     plan: Plan,
     gated: Extract<GateOutcome, { ok: true }>,
-    rows: readonly MapRow[],
+    built: {
+        rows: readonly MapRow[];
+        members: ReadonlyMap<string, string> | undefined;
+    },
     deps: CycleDeps
 ): Promise<ApplyResult | null> {
     const toFluxer = plan.direction === 'discord-to-fluxer';
@@ -392,7 +448,13 @@ async function applySaved(
         return null;
     }
     const result = await applyPlan(
-        { plan, source: gated.source, destination: gated.destination, rows },
+        {
+            plan,
+            source: gated.source,
+            destination: gated.destination,
+            rows: built.rows,
+            members: built.members,
+        },
         {
             store: deps.store,
             writer,
@@ -400,6 +462,8 @@ async function applySaved(
             links: deps.links,
             threads: deps.threadSources[sourceSide] ?? null,
             canWrite: () => deps.processMode() !== 'read-only',
+            stillLeader: deps.stillLeader,
+            failures: deps.failures,
             pause: deps.pause,
             now: deps.now,
             logger: deps.logger,
@@ -428,14 +492,25 @@ async function loadApproval(
     return plan?.status === 'pending-approval' ? plan : null;
 }
 
-/** True when the admin approved exactly what this plan would do. */
+/** What an approval covers: the writes and the reason, not the findings. */
+function approvedScope(plan: Plan) {
+    const { ops, deferred, approvalReason } = plan.body;
+    return stableJson({
+        ops,
+        deferred,
+        approvalReason,
+        abort: plan.abortReason,
+    });
+}
+
+/**
+ * True when the admin approved exactly what this plan would do. Findings
+ * are left out of the match: a lookup that timed out changes them, not
+ * what the plan writes.
+ */
 function isApproved(plan: Plan, approved: Plan | null): boolean {
     if (!plan.body.needsApproval) return true;
-    return (
-        approved !== null &&
-        stableJson(approved.body) === stableJson(plan.body) &&
-        approved.abortReason === plan.abortReason
-    );
+    return approved !== null && approvedScope(approved) === approvedScope(plan);
 }
 
 /** Saves, logs and posts a plan. */
@@ -470,7 +545,8 @@ async function planAndApply(
 ): Promise<Planned> {
     await saveIfChanged(deps.store, link.id, gated.source, now);
     await saveIfChanged(deps.store, link.id, gated.destination, now);
-    const { body, rows } = await buildBody(link, settings, gated, deps, now);
+    const built = await buildBody(link, settings, gated, deps, now);
+    const { body } = built;
     const plan = newPlan(deps, link, settings.direction, body, null);
     await publish(plan, settings, deps, now);
     const mode = resolveMode(deps.processMode(), settings, deps.allowApply);
@@ -478,7 +554,9 @@ async function planAndApply(
         mode.mode === 'apply' &&
         body.ops.length > 0 &&
         isApproved(plan, approved);
-    const applied = runnable ? await applySaved(plan, gated, rows, deps) : null;
+    const applied = runnable
+        ? await applySaved(plan, gated, built, deps)
+        : null;
     if (!applied) return { status: 'planned', plan, more: false };
     await deps.notices.post(
         link.id,
@@ -492,7 +570,7 @@ async function planAndApply(
         applied.applied > 0 &&
         applied.failed === 0 &&
         applied.stopped === null &&
-        body.deferred.length > 0;
+        (body.deferred.length > 0 || applied.postponed > 0);
     return { status: 'planned', plan, applied, more };
 }
 
@@ -512,11 +590,14 @@ export async function runCycle(
 
     const now = deps.now();
     const approved = await loadApproval(settings, deps);
-    // An approval is used by this cycle or dropped: it never carries over.
-    if (settings.approvedPlanId) {
+    const gated = await readAndGate(link, settings, deps, now, approved);
+    // A failed read keeps the approval for the next cycle, unless the read
+    // used it (an approved shrink). Past the gate, it is used or dropped
+    // here: it never carries over to a later plan.
+    const usedByGate = !gated.ok && gated.needsApproval;
+    if (settings.approvedPlanId && (gated.ok || usedByGate)) {
         await deps.store.setApprovedPlan(link.id, null, now);
     }
-    const gated = await readAndGate(link, settings, deps, now, approved);
     if (!gated.ok) {
         const plan = await abortedPlan(link, settings, gated, deps, now);
         return { status: 'planned', plan, more: false };

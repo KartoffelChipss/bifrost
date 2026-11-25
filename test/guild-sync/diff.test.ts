@@ -45,7 +45,11 @@ describe('compareFields', () => {
 
     it('reports drift when there is no earlier snapshot', () => {
         const result = compareFields({ name: 'a' }, { name: 'b' }, null);
-        assert.deepEqual(result, { changes: [], drifted: ['name'] });
+        assert.deepEqual(result, {
+            changes: [],
+            drifted: ['name'],
+            settled: {},
+        });
     });
 });
 
@@ -112,15 +116,12 @@ describe('diff', () => {
                 rows: [mapRow('channel', 'c1', 'f1')],
             })
         );
-        assert.deepEqual(opsOf(result, 'update'), [
-            {
-                op: 'update',
-                kind: 'channel',
-                sourceId: 'c1',
-                destId: 'f1',
-                changes: [{ field: 'name', from: 'old', to: 'new' }],
-            },
+        const [update] = opsOf(result, 'update');
+        assert.ok(update?.op === 'update');
+        assert.deepEqual(update.changes, [
+            { field: 'name', from: 'old', to: 'new' },
         ]);
+        assert.equal(update.settled?.name, 'new');
     });
 
     it('reports a destination edit as drift and does not revert it', () => {

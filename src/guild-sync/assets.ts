@@ -5,12 +5,10 @@ import { withTimeout } from '../addons/host';
  * Emoji and sticker images, read from the source so they can be uploaded
  * to the destination. An image is returned as a base64 data URI.
  */
+export type AssetKind = 'emoji' | 'sticker' | 'role-icon';
+
 export interface AssetSource {
-    image(
-        guildId: string,
-        kind: 'emoji' | 'sticker',
-        id: string
-    ): Promise<string>;
+    image(guildId: string, kind: AssetKind, id: string): Promise<string>;
 }
 
 /** Fluxer refuses a larger emoji or sticker (AssetFormatPolicy.ts). */
@@ -67,10 +65,16 @@ export class DiscordAssetSource implements AssetSource {
 
     private async url(
         guildId: string,
-        kind: 'emoji' | 'sticker',
+        kind: AssetKind,
         id: string
     ): Promise<string> {
         const guild = await this.client.guilds.fetch(guildId);
+        if (kind === 'role-icon') {
+            const role = await guild.roles.fetch(id);
+            const url = role?.iconURL({ extension: 'png' });
+            if (!url) throw new Error(`role ${id} has no icon`);
+            return url;
+        }
         if (kind === 'emoji') {
             const emoji = await guild.emojis.fetch(id);
             return emoji.imageURL({
@@ -84,11 +88,7 @@ export class DiscordAssetSource implements AssetSource {
         return sticker.url;
     }
 
-    async image(
-        guildId: string,
-        kind: 'emoji' | 'sticker',
-        id: string
-    ): Promise<string> {
+    async image(guildId: string, kind: AssetKind, id: string): Promise<string> {
         const url = await withTimeout(
             this.url(guildId, kind, id),
             ASSET_TIMEOUT_MS,

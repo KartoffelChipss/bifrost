@@ -76,15 +76,29 @@ export async function runAddonMigrations(
     return names;
 }
 
+/** Whether the add-on tables are ready: off, ready, or failed to migrate. */
+export type AddonDatabaseState = 'off' | 'ready' | 'failed';
+
 /**
  * Prepares the add-on tables at startup. Does nothing when add-ons are off,
- * so a plain Bifröst install never gets them.
+ * so a plain Bifröst install never gets them. A failed migration is logged
+ * and reported as 'failed', never thrown: upstream awaits this before the
+ * relay starts, and the relay must start without the add-ons.
  */
 export async function initAddonDatabase(
     config: AddonConfig,
     sequelize: Sequelize,
     logger: AddonLogger
-): Promise<void> {
-    if (!config.enabled) return;
-    await runAddonMigrations(sequelize, logger);
+): Promise<AddonDatabaseState> {
+    if (!config.enabled) return 'off';
+    try {
+        await runAddonMigrations(sequelize, logger);
+        return 'ready';
+    } catch (error) {
+        logger.error(
+            '[addons] Add-on migrations failed. Add-ons stay off; the relay keeps running.',
+            error
+        );
+        return 'failed';
+    }
 }

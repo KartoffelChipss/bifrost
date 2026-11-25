@@ -46,4 +46,6 @@ export interface ThreadSource {
      * Returns a placeholder when the message was deleted.
      */
     starter(guildId: string, threadId: string): Promise<RelayPayload>;
+    /** The user IDs of a private thread's members. */
+    members?(guildId: string, threadId: string): Promise<string[]>;
 }

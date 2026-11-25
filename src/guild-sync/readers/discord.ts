@@ -1,10 +1,15 @@
 import {
+    ChannelFlags,
+    ChannelType,
     DiscordAPIError,
+    PermissionFlagsBits,
     RESTJSONErrorCodes,
     type AnyThreadChannel,
     type Client,
+    type ForumChannel,
     type Guild,
     type GuildEmoji,
+    type GuildMember,
     type NonThreadGuildBasedChannel,
     type PermissionOverwrites,
     type Role,
@@ -14,7 +19,10 @@ import type { ReadResult } from '../health';
 import type { SyncKind } from '../ops';
 import type {
     ChannelSnap,
+    EmojiRef,
     EmojiSnap,
+    ForumSnap,
+    GuildSettingsSnap,
     GuildSnapshot,
     OverwriteSnap,
     RoleSnap,
@@ -49,7 +57,17 @@ function overwrite(o: PermissionOverwrites): OverwriteSnap {
     };
 }
 
-export function discordChannel(c: NonThreadGuildBasedChannel): ChannelSnap {
+/** What a link needs: the relay reads the channel and owns a webhook. */
+const BRIDGE_BITS = [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.ManageWebhooks,
+];
+
+export function discordChannel(
+    c: NonThreadGuildBasedChannel,
+    me: GuildMember | null = null
+): ChannelSnap {
+    const bridgeable = me ? c.permissionsFor(me).has(BRIDGE_BITS) : undefined;
     return {
         id: c.id,
         type: c.type,
@@ -64,11 +82,46 @@ export function discordChannel(c: NonThreadGuildBasedChannel): ChannelSnap {
         userLimit: 'userLimit' in c ? c.userLimit : null,
         overwrites: c.permissionOverwrites.cache.map(overwrite),
         tags: 'availableTags' in c ? c.availableTags.map((t) => t.name) : [],
+        ...(bridgeable === undefined ? {} : { bridgeable }),
+        ...threadDefaults(c),
+        ...(c.type === ChannelType.GuildForum ? { forum: forumOf(c) } : {}),
     };
 }
 
-/** Archived threads are read 100 at a time, up to this many pages a channel. */
-export const MAX_ARCHIVE_PAGES = 5;
+/** What new threads get by default, for channels that hold threads. */
+function threadDefaults(
+    c: NonThreadGuildBasedChannel
+): Pick<ChannelSnap, 'defaultAutoArchive' | 'defaultThreadSlowmode'> {
+    if (!('defaultThreadRateLimitPerUser' in c)) return {};
+    return {
+        defaultAutoArchive: c.defaultAutoArchiveDuration ?? null,
+        defaultThreadSlowmode: c.defaultThreadRateLimitPerUser ?? null,
+    };
+}
+
+const emojiRef = (
+    emoji: { id: string | null; name: string | null } | null
+): EmojiRef | null =>
+    emoji ? { emojiId: emoji.id ?? null, emojiName: emoji.name ?? null } : null;
+
+function forumOf(c: ForumChannel): ForumSnap {
+    return {
+        defaultReaction: emojiRef(c.defaultReactionEmoji),
+        sortOrder: c.defaultSortOrder ?? null,
+        layout: c.defaultForumLayout ?? null,
+        tags: c.availableTags.map((tag) => ({
+            name: tag.name,
+            moderated: tag.moderated,
+            ...(emojiRef(tag.emoji) ?? { emojiId: null, emojiName: null }),
+        })),
+    };
+}
+
+/**
+ * Archived threads are read 100 at a time, up to this many pages a channel.
+ * A channel with more is reported as a gap rather than cut off silently.
+ */
+export const MAX_ARCHIVE_PAGES = 20;
 
 function discordThread(
     t: AnyThreadChannel,
@@ -79,6 +132,7 @@ function discordThread(
         const name = tagNames.get(id);
         if (name !== undefined) tags.push(name);
     }
+    const isPrivate = t.type === ChannelType.PrivateThread;
     return {
         id: t.id,
         parentId: t.parentId ?? '',
@@ -86,14 +140,47 @@ function discordThread(
         archived: t.archived ?? false,
         locked: t.locked ?? false,
         tags: tags.sort(),
+        private: isPrivate,
+        ...(isPrivate ? { invitable: t.invitable ?? true } : {}),
+        pinned: t.flags.has(ChannelFlags.Pinned),
+        rateLimitPerUser: t.rateLimitPerUser ?? 0,
+        autoArchiveDuration: t.autoArchiveDuration ?? 1440,
     };
 }
 
-/** The archived public threads of one channel, newest first. */
+/**
+ * The archived private threads of a text channel. Listing them needs
+ * Manage Threads, so a refusal is reported, not thrown.
+ */
+async function archivedPrivate(
+    parent: NonThreadGuildBasedChannel
+): Promise<{ threads: AnyThreadChannel[]; readable: boolean }> {
+    if (parent.type !== ChannelType.GuildText) {
+        return { threads: [], readable: true };
+    }
+    try {
+        const result = await parent.threads.fetchArchived(
+            { type: 'private', limit: 100 },
+            false
+        );
+        // More than one page counts as incomplete, like an unreadable list.
+        return {
+            threads: [...result.threads.values()],
+            readable: !result.hasMore,
+        };
+    } catch {
+        return { threads: [], readable: false };
+    }
+}
+
+/**
+ * The archived public threads of one channel, newest first. `complete` is
+ * false when more pages remain after MAX_ARCHIVE_PAGES.
+ */
 async function archivedThreads(
     parent: NonThreadGuildBasedChannel
-): Promise<AnyThreadChannel[]> {
-    if (!('threads' in parent)) return [];
+): Promise<{ threads: AnyThreadChannel[]; complete: boolean }> {
+    if (!('threads' in parent)) return { threads: [], complete: true };
     const found: AnyThreadChannel[] = [];
     let before: AnyThreadChannel | undefined;
     for (let page = 0; page < MAX_ARCHIVE_PAGES; page++) {
@@ -103,9 +190,11 @@ async function archivedThreads(
         );
         found.push(...result.threads.values());
         before = result.threads.last();
-        if (!result.hasMore || !before) break;
+        if (!result.hasMore || !before) {
+            return { threads: found, complete: true };
+        }
     }
-    return found;
+    return { threads: found, complete: false };
 }
 
 /**
@@ -115,7 +204,7 @@ async function archivedThreads(
 async function readThreads(
     guild: Guild,
     channels: readonly NonThreadGuildBasedChannel[]
-): Promise<{ threads: ThreadSnap[]; gaps: string[] }> {
+): Promise<{ threads: ThreadSnap[]; gaps: string[]; privateGaps: string[] }> {
     const tagNames = new Map<string, string>();
     for (const channel of channels) {
         if (!('availableTags' in channel)) continue;
@@ -125,20 +214,24 @@ async function readThreads(
     const active = await guild.channels.fetchActiveThreads(false);
     for (const thread of active.threads.values()) all.set(thread.id, thread);
     const gaps: string[] = [];
+    const privateGaps: string[] = [];
     for (const parent of channels) {
         if (!THREAD_PARENT_TYPES.has(parent.type)) continue;
         try {
-            for (const thread of await archivedThreads(parent)) {
-                all.set(thread.id, thread);
-            }
+            const archived = await archivedThreads(parent);
+            for (const thread of archived.threads) all.set(thread.id, thread);
+            if (!archived.complete) gaps.push(parent.id);
         } catch {
             gaps.push(parent.id);
         }
+        const hidden = await archivedPrivate(parent);
+        for (const thread of hidden.threads) all.set(thread.id, thread);
+        if (!hidden.readable) privateGaps.push(parent.id);
     }
     const threads = [...all.values()]
         .filter((t) => SYNCED_THREAD_TYPES.has(t.type) && t.parentId !== null)
         .map((t) => discordThread(t, tagNames));
-    return { threads, gaps };
+    return { threads, gaps, privateGaps };
 }
 
 export function discordRole(r: Role): RoleSnap {
@@ -151,6 +244,19 @@ export function discordRole(r: Role): RoleSnap {
         permissions: r.permissions.bitfield.toString(),
         position: r.rawPosition,
         managed: r.managed,
+        unicodeEmoji: r.unicodeEmoji ?? null,
+        icon: r.icon ?? null,
+    };
+}
+
+function settingsOf(guild: Guild): GuildSettingsSnap {
+    return {
+        systemChannelId: guild.systemChannelId,
+        afkChannelId: guild.afkChannelId,
+        afkTimeout: guild.afkTimeout,
+        verificationLevel: guild.verificationLevel,
+        defaultNotifications: guild.defaultMessageNotifications,
+        explicitContentFilter: guild.explicitContentFilter,
     };
 }
 
@@ -169,16 +275,17 @@ const discordSticker = (s: Sticker): StickerSnap => ({
 
 async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
     const force = { force: true };
-    const [channels, roles, emojis, stickers] = await Promise.all([
+    const [channels, roles, emojis, stickers, me] = await Promise.all([
         guild.channels.fetch(undefined, force),
         guild.roles.fetch(undefined, force),
         guild.emojis.fetch(undefined, force),
         guild.stickers.fetch(undefined, force),
+        guild.members.fetchMe(),
     ]);
     const listed = [...channels.values()].filter(
         (c): c is NonThreadGuildBasedChannel => c !== null
     );
-    const { threads, gaps } = await readThreads(guild, listed);
+    const { threads, gaps, privateGaps } = await readThreads(guild, listed);
     return {
         side: 'discord',
         guildId: guild.id,
@@ -187,11 +294,13 @@ async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
         banner: guild.banner,
         everyoneRoleId: guild.id,
         roles: roles.map(discordRole),
-        channels: listed.map(discordChannel),
+        channels: listed.map((c) => discordChannel(c, me)),
         emojis: emojis.map(discordEmoji),
         stickers: stickers.map(discordSticker),
         threads,
         threadGaps: gaps,
+        privateThreadGaps: privateGaps,
+        settings: settingsOf(guild),
         bot: null,
     };
 }

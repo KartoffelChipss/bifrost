@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { PermissionFlagsBits } from 'discord.js';
-import { roleChanges, syncableRoles } from '../../src/identity/roles';
-import { D_GUILD, discordGuild, mapRow, role } from '../guild-sync/fixtures';
+import {
+    PRIVILEGED_BITS,
+    roleChanges,
+    syncableRoles,
+} from '../../src/identity/roles';
+import {
+    D_GUILD,
+    channel,
+    discordGuild,
+    mapRow,
+    role,
+} from '../guild-sync/fixtures';
 
 const bits = (value: bigint) => value.toString();
 
@@ -28,6 +38,93 @@ describe('syncableRoles', () => {
         assert.deepEqual(
             [...syncableRoles(source, rows)],
             [['gamer', 'f-gamer']]
+        );
+    });
+});
+
+describe('syncableRoles moderator rights', () => {
+    const MODERATOR_FLAGS = [
+        'ManageMessages',
+        'ManageWebhooks',
+        'ManageNicknames',
+        'MentionEveryone',
+        'ManageThreads',
+        'ManageEvents',
+        'ManageGuildExpressions',
+        'ViewAuditLog',
+        'MuteMembers',
+        'DeafenMembers',
+        'MoveMembers',
+        'ModerateMembers',
+        'KickMembers',
+        'BanMembers',
+        'Administrator',
+        'ManageChannels',
+        'ManageGuild',
+        'ManageRoles',
+    ] as const;
+
+    it('treats every moderator flag as privileged', () => {
+        for (const flag of MODERATOR_FLAGS) {
+            const bit = PermissionFlagsBits[flag];
+            assert.notEqual(bit & PRIVILEGED_BITS, BigInt(0), flag);
+        }
+        const plain =
+            PermissionFlagsBits.SendMessages |
+            PermissionFlagsBits.ViewChannel |
+            PermissionFlagsBits.AddReactions;
+        assert.equal(plain & PRIVILEGED_BITS, BigInt(0));
+    });
+
+    it('drops a role with a moderator flag', () => {
+        const source = discordGuild({
+            roles: [
+                role(D_GUILD),
+                role('helper', {
+                    permissions: bits(PermissionFlagsBits.ManageMessages),
+                }),
+            ],
+        });
+        assert.equal(
+            syncableRoles(source, [mapRow('role', 'helper', 'f-helper')]).size,
+            0
+        );
+    });
+
+    it('drops a role that a channel overwrite gives a moderator flag', () => {
+        const source = discordGuild({
+            roles: [role(D_GUILD), role('vip'), role('reader')],
+            channels: [
+                channel('101', {
+                    overwrites: [
+                        {
+                            id: 'vip',
+                            type: 0,
+                            allow: bits(PermissionFlagsBits.ManageMessages),
+                            deny: '0',
+                        },
+                        {
+                            id: 'reader',
+                            type: 0,
+                            allow: bits(PermissionFlagsBits.ViewChannel),
+                            deny: bits(PermissionFlagsBits.ManageMessages),
+                        },
+                        {
+                            id: 'reader',
+                            type: 1,
+                            allow: bits(PermissionFlagsBits.Administrator),
+                            deny: '0',
+                        },
+                    ],
+                }),
+            ],
+        });
+        const rows = ['vip', 'reader'].map((id) =>
+            mapRow('role', id, `f-${id}`)
+        );
+        assert.deepEqual(
+            [...syncableRoles(source, rows)],
+            [['reader', 'f-reader']]
         );
     });
 });

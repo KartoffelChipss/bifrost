@@ -12,6 +12,8 @@ import type { SyncKind } from '../ops';
 import type {
     ChannelSnap,
     EmojiSnap,
+    ForumSnap,
+    GuildSettingsSnap,
     GuildSnapshot,
     OverwriteSnap,
     RoleSnap,
@@ -32,6 +34,14 @@ function isUnknown(error: unknown): boolean {
     return (error as { statusCode?: unknown }).statusCode === 404;
 }
 
+interface FluxerTag {
+    readonly id: string;
+    readonly name: string;
+    readonly moderated?: boolean;
+    readonly emoji_id?: string | null;
+    readonly emoji_name?: string | null;
+}
+
 /** Fields only some channel classes have. */
 interface OptionalChannelFields {
     readonly topic?: string | null;
@@ -39,13 +49,52 @@ interface OptionalChannelFields {
     readonly rateLimitPerUser?: number;
     readonly bitrate?: number | null;
     readonly userLimit?: number | null;
-    readonly availableTags?: readonly { id: string; name: string }[];
+    readonly availableTags?: readonly FluxerTag[];
+    readonly defaultAutoArchiveDuration?: number | null;
+    readonly defaultThreadRateLimitPerUser?: number | null;
+    readonly defaultReactionEmoji?: {
+        emoji_id: string | null;
+        emoji_name: string | null;
+    } | null;
+    readonly defaultSortOrder?: number | null;
+    readonly defaultForumLayout?: number | null;
     readonly threads?: {
         fetchArchived(options: {
-            type: 'public';
+            type: 'public' | 'private';
             limit: number;
             before?: string;
         }): Promise<{ threads: ThreadChannel[]; hasMore: boolean }>;
+    };
+}
+
+const FORUM_TYPE = 15;
+const PRIVATE_THREAD = 12;
+/** The forum-post pinned flag, the same bit on both platforms. */
+const PINNED_FLAG = 1 << 1;
+
+function forumOf(extra: OptionalChannelFields): ForumSnap {
+    const reaction = extra.defaultReactionEmoji;
+    return {
+        defaultReaction: reaction
+            ? { emojiId: reaction.emoji_id, emojiName: reaction.emoji_name }
+            : null,
+        sortOrder: extra.defaultSortOrder ?? null,
+        layout: extra.defaultForumLayout ?? null,
+        tags: (extra.availableTags ?? []).map((tag) => ({
+            name: tag.name,
+            moderated: tag.moderated ?? false,
+            emojiId: tag.emoji_id ?? null,
+            emojiName: tag.emoji_name ?? null,
+        })),
+    };
+}
+
+/** Thread defaults, for the channel kinds that hold threads. */
+function threadDefaults(type: number, extra: OptionalChannelFields) {
+    if (!THREAD_PARENT_TYPES.has(type)) return {};
+    return {
+        defaultAutoArchive: extra.defaultAutoArchiveDuration ?? null,
+        defaultThreadSlowmode: extra.defaultThreadRateLimitPerUser ?? null,
     };
 }
 
@@ -73,11 +122,16 @@ export function fluxerChannel(c: GuildChannel): ChannelSnap {
         userLimit: extra.userLimit ?? null,
         overwrites,
         tags: (extra.availableTags ?? []).map((tag) => tag.name),
+        ...threadDefaults(Number(c.type), extra),
+        ...(Number(c.type) === FORUM_TYPE ? { forum: forumOf(extra) } : {}),
     };
 }
 
-/** Archived threads are read 100 at a time, up to this many pages a channel. */
-const MAX_ARCHIVE_PAGES = 5;
+/**
+ * Archived threads are read 100 at a time, up to this many pages a channel.
+ * A channel with more is reported as a gap rather than cut off silently.
+ */
+const MAX_ARCHIVE_PAGES = 20;
 
 function fluxerThread(
     t: ThreadChannel,
@@ -88,6 +142,7 @@ function fluxerThread(
         const name = tagNames.get(id);
         if (name !== undefined) tags.push(name);
     }
+    const isPrivate = Number(t.type) === PRIVATE_THREAD;
     return {
         id: t.id,
         parentId: t.parentId ?? '',
@@ -95,12 +150,30 @@ function fluxerThread(
         archived: t.archived,
         locked: t.locked,
         tags: tags.sort(),
+        private: isPrivate,
+        ...(isPrivate ? { invitable: t.invitable ?? true } : {}),
+        pinned: (t.flags & PINNED_FLAG) !== 0,
+        rateLimitPerUser: t.rateLimitPerUser ?? 0,
+        autoArchiveDuration: t.autoArchiveDuration,
     };
 }
 
-async function archivedThreads(parent: GuildChannel): Promise<ThreadChannel[]> {
+/** Archived private threads; the bot is an administrator on Fluxer. */
+async function archivedPrivate(parent: GuildChannel): Promise<ThreadChannel[]> {
     const manager = (parent as GuildChannel & OptionalChannelFields).threads;
-    if (!manager) return [];
+    if (!manager || Number(parent.type) === FORUM_TYPE) return [];
+    const result = await manager
+        .fetchArchived({ type: 'private', limit: 100 })
+        .catch(() => ({ threads: [] as ThreadChannel[] }));
+    return result.threads;
+}
+
+/** `complete` is false when more pages remain after MAX_ARCHIVE_PAGES. */
+async function archivedThreads(
+    parent: GuildChannel
+): Promise<{ threads: ThreadChannel[]; complete: boolean }> {
+    const manager = (parent as GuildChannel & OptionalChannelFields).threads;
+    if (!manager) return { threads: [], complete: true };
     const found: ThreadChannel[] = [];
     let before: string | undefined;
     for (let page = 0; page < MAX_ARCHIVE_PAGES; page++) {
@@ -112,9 +185,11 @@ async function archivedThreads(parent: GuildChannel): Promise<ThreadChannel[]> {
         found.push(...result.threads);
         const last = result.threads[result.threads.length - 1];
         before = last?.archiveTimestamp ?? undefined;
-        if (!result.hasMore || !before) break;
+        if (!result.hasMore || !before) {
+            return { threads: found, complete: true };
+        }
     }
-    return found;
+    return { threads: found, complete: false };
 }
 
 /** Lists active and archived threads. An unreadable archive is a gap. */
@@ -135,11 +210,14 @@ async function readThreads(
     for (const parent of channels) {
         if (!THREAD_PARENT_TYPES.has(Number(parent.type))) continue;
         try {
-            for (const thread of await archivedThreads(parent)) {
-                all.set(thread.id, thread);
-            }
+            const archived = await archivedThreads(parent);
+            for (const thread of archived.threads) all.set(thread.id, thread);
+            if (!archived.complete) gaps.push(parent.id);
         } catch {
             gaps.push(parent.id);
+        }
+        for (const thread of await archivedPrivate(parent)) {
+            all.set(thread.id, thread);
         }
     }
     const threads = [...all.values()]
@@ -159,6 +237,18 @@ export function fluxerRole(r: Role): RoleSnap {
         position: r.position,
         // Fluxer has no managed roles.
         managed: false,
+        unicodeEmoji: r.unicodeEmoji ?? null,
+    };
+}
+
+function settingsOf(guild: Guild): GuildSettingsSnap {
+    return {
+        systemChannelId: guild.systemChannelId,
+        afkChannelId: guild.afkChannelId,
+        afkTimeout: guild.afkTimeout,
+        verificationLevel: Number(guild.verificationLevel),
+        defaultNotifications: Number(guild.defaultMessageNotifications),
+        explicitContentFilter: Number(guild.explicitContentFilter),
     };
 }
 
@@ -197,6 +287,7 @@ async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
         stickers: stickers.map(fluxerSticker),
         threads,
         threadGaps: gaps,
+        settings: settingsOf(guild),
         bot: {
             userId: me.id,
             roleIds: [...me.roles.roleIds],

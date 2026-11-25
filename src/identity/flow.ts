@@ -1,5 +1,6 @@
 import { createHash, randomInt } from 'node:crypto';
 import type { HistoryEditor } from '../history/editor';
+import type { UserInfo } from './ports';
 import type { AccountPair, IdentityStore, Side } from './store';
 
 /**
@@ -32,7 +33,7 @@ export interface DmInput {
 
 export interface FlowDeps {
     readonly store: IdentityStore;
-    /** A display name, for the confirmation question. */
+    /** Who the user is, for the confirmation question: see describeUser. */
     readonly nameOf: (side: Side, userId: string) => Promise<string>;
     /** Present when history import is on. */
     readonly history: {
@@ -59,6 +60,25 @@ export function generateCode(): string {
 
 export function hashCode(code: string): string {
     return createHash('sha256').update(code).digest('hex');
+}
+
+/**
+ * Escapes inline Markdown (bold, italic, code, strike, spoiler, masked
+ * links) and folds whitespace, so a name renders as plain text.
+ */
+function plainText(text: string): string {
+    return text.replace(/\s+/g, ' ').replace(/[\\*_`~|[\]]/g, '\\$&');
+}
+
+/**
+ * The user as the confirmation question shows them: the unique username
+ * and ID first, so a display name cannot pose as another account.
+ */
+export function describeUser(user: UserInfo): string {
+    const id = `@${user.username} (ID ${user.id})`;
+    const shown = user.displayName?.trim();
+    const text = shown ? `${id}, display name "${shown}"` : id;
+    return plainText(text);
 }
 
 const other = (side: Side): Side => (side === 'discord' ? 'fluxer' : 'discord');
@@ -189,7 +209,11 @@ async function confirm(
             'One of the two accounts was linked in the meantime. Nothing changed.'
         );
     }
-    await store.savePair(pair, now());
+    if (!(await store.savePair(pair, now()))) {
+        return both(
+            'One of the two accounts was linked in the meantime. Nothing changed.'
+        );
+    }
     await deps.onLinked(pair);
     return both('Your accounts are linked. Your synced roles will follow you.');
 }

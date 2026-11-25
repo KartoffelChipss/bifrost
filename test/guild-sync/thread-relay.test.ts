@@ -22,6 +22,12 @@ import { FakeLinker } from './fake-store';
 class FakeThreadStore implements ThreadRelayStore {
     pairs: { guildLinkId: string; discordId: string; fluxerId: string }[] = [];
     messages: ThreadMessage[] = [];
+    /** Discord replies history import copied, as `thread message`. */
+    covered = new Set<string>();
+
+    async historyCovers(threadId: string, messageId: string) {
+        return this.covered.has(`${threadId} ${messageId}`);
+    }
 
     async findThreadPair(side: SnapshotSide, threadId: string) {
         const key = side === 'discord' ? 'discordId' : 'fluxerId';
@@ -223,6 +229,48 @@ describe('ThreadRelay', () => {
         importing.clear();
         await relay.flush();
         assert.deepEqual(calls, ['send fluxer f-post new reply']);
+    });
+
+    async function importingRelay() {
+        const s = await setup();
+        const importing = new Set(['f-post']);
+        const relay = new ThreadRelay({
+            store: s.store,
+            links: s.links,
+            ports: {
+                async send(to, _l, threadId, raw) {
+                    s.calls.push(`send ${to} ${threadId} ${String(raw)}`);
+                    return `copy-${raw}`;
+                },
+                async edit() {},
+                async remove() {},
+            },
+            active: () => true,
+            importing: async (id) => importing.has(id),
+            now: () => new Date(0),
+            logger: createRecordingLogger(),
+        });
+        return { ...s, relay, importing };
+    }
+
+    it('relays Fluxer replies at once while the history is copied', async () => {
+        const { relay, calls } = await importingRelay();
+        const event = inPost('f1', {
+            channelId: 'f-post',
+            parentId: 'f-forum',
+        });
+        await relay.created('fluxer', event, 'hi');
+        assert.deepEqual(calls, ['send discord d-post hi']);
+    });
+
+    it('drops held replies the history import covered', async () => {
+        const { relay, calls, store, importing } = await importingRelay();
+        await relay.created('discord', inPost('m1'), 'old');
+        await relay.created('discord', inPost('m2'), 'new');
+        store.covered.add('d-post m1');
+        importing.clear();
+        await relay.flush();
+        assert.deepEqual(calls, ['send fluxer f-post new']);
     });
 
     it('does nothing while add-ons are read-only', async () => {

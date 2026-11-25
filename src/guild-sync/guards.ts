@@ -58,11 +58,14 @@ export function trackMissing(
     now: Date
 ): MissingUpdate[] {
     const present = presentSourceIds(source);
+    // Without Manage Threads, archived private threads cannot be listed.
+    const privateHidden = (source.privateThreadGaps ?? []).length > 0;
     const updates: MissingUpdate[] = [];
     for (const row of rows) {
         const ids = present.get(row.kind as SyncKind);
         const sourceId = sourceIdOf(row, direction);
         if (!ids || !sourceId || row.state === 'tombstoned') continue;
+        if (privateHidden && row.appliedFields?.private === true) continue;
         if (ids.has(sourceId)) {
             if (row.missingCount > 0 || row.missingSince) {
                 updates.push({

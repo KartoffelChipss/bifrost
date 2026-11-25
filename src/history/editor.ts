@@ -41,7 +41,11 @@ export class HistoryEditor {
     }
 
     async edit(copy: ImportedMessage, text: string): Promise<void> {
-        const content = `${text}\n*Edited by its author*`;
+        await this.replace(copy, `${text}\n*Edited by its author*`);
+    }
+
+    /** Sets the copy's text as given. */
+    async replace(copy: ImportedMessage, content: string): Promise<void> {
         await this.ports.editCopy(
             await this.target(copy),
             copy.fluxerMessageId ?? '',

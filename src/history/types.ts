@@ -60,16 +60,35 @@ export type JobPatch = Partial<
     >
 >;
 
+/** One reaction on a Discord message: the emoji as text, and its count. */
+export interface Reaction {
+    readonly name: string;
+    readonly count: number;
+}
+
 /** One Discord message, as the importer reads it. */
 export interface SourceMessage {
     readonly id: string;
     readonly authorId: string;
     readonly createdAt: Date;
-    /** Default or reply. System messages are never copied. */
+    /** Written by a person or an app command. System messages are never copied. */
     readonly copyable: boolean;
     readonly attachments: number;
+    /** Set when a webhook posted the message. */
+    readonly webhookId: string | null;
+    /**
+     * For a reply: the author of the message it quotes, or null when that
+     * message is gone or its author is unknown.
+     */
+    readonly reply: { readonly authorId: string | null } | null;
+    readonly reactions: readonly Reaction[];
     /** The platform message, for the payload builder. */
     readonly raw: unknown;
+}
+
+export interface PayloadOptions {
+    /** Leaves out the quote of the message replied to. */
+    readonly withoutReply?: boolean;
 }
 
 /** Where a copy is sent: a channel, or a thread inside the webhook's channel. */
@@ -100,7 +119,13 @@ export interface HistoryPorts {
     /** The newest message in a channel or thread, or null when empty. */
     newestMessageId(discordId: string): Promise<string | null>;
     /** The relay's payload for a message: text, author name and avatar. */
-    payload(raw: unknown, guildLinkId: string): Promise<RelayPayload>;
+    payload(
+        raw: unknown,
+        guildLinkId: string,
+        options?: PayloadOptions
+    ): Promise<RelayPayload>;
+    /** Reads a platform message from a gateway event, as listMessages does. */
+    describe(raw: unknown): SourceMessage;
     /** Sends a copy. Returns the new Fluxer message ID. */
     sendCopy(target: SendTarget, payload: RelayPayload): Promise<string>;
     /** Edits or deletes a copy through the webhook that sent it. */
@@ -121,4 +146,8 @@ export interface HistoryPorts {
     ): Promise<{ archived: boolean; locked: boolean }>;
     /** True when the relay already copied this message after the link. */
     relayedLive(discordMessageId: string): Promise<boolean>;
+    /** The pinned messages of a Discord channel or thread, oldest pin first. */
+    pinnedMessageIds(discordId: string): Promise<string[]>;
+    /** Pins a message in a Fluxer channel or thread. */
+    pinCopy(fluxerChannelId: string, fluxerMessageId: string): Promise<void>;
 }

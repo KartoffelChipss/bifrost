@@ -232,7 +232,7 @@ describe('mergeOverwrites', () => {
 
     it('replaces managed role overwrites and keeps the rest', () => {
         const merged = mergeOverwrites(
-            [{ id: 'fr1', allow: '1024', deny: '0' }],
+            [{ id: 'fr1', type: 0, allow: '1024', deny: '0' }],
             [
                 { id: 'member', type: 1, allow: '1', deny: '0' },
                 { id: 'hand-made-role', type: 0, allow: '2', deny: '0' },

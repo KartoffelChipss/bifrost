@@ -1,9 +1,11 @@
 import {
     GuildChannel,
+    Routes,
     ThreadChannel,
     ForumChannel,
     type Client,
     type Guild,
+    type ThreadEditOptions,
     type Webhook,
 } from '@fluxerjs/core';
 import type { RelayPayload } from '../links';
@@ -12,7 +14,9 @@ import {
     timedWrite,
     type ChannelPatch,
     type ChannelSpec,
+    type EmojiChoice,
     type EmojiSpec,
+    type GuildPatch,
     type GuildWriter,
     type OverwriteSpec,
     type PositionSpec,
@@ -20,6 +24,7 @@ import {
     type RoleSpec,
     type StickerPatch,
     type StickerSpec,
+    type TagMetaSpec,
     type ThreadPatch,
     type ThreadSpec,
 } from './writer';
@@ -33,18 +38,92 @@ function toOverwrites(overwrites: readonly OverwriteSpec[]) {
     }));
 }
 
+/** Thread defaults and forum settings, sent apart in the API's own names. */
+const PARENT_FIELDS = [
+    'defaultAutoArchive',
+    'defaultThreadSlowmode',
+    'defaultReaction',
+    'sortOrder',
+    'layout',
+    'tagMeta',
+] as const;
+
 /** Channel fields for an edit, in the library's names. Tags go apart. */
 function channelFields(patch: ChannelPatch) {
     const fields: Record<string, unknown> = { ...patch };
     delete fields.tags;
     delete fields.overwrites;
+    for (const field of PARENT_FIELDS) delete fields[field];
     if (patch.overwrites !== undefined) {
         fields.permissionOverwrites = toOverwrites(patch.overwrites);
     }
     return fields as Parameters<GuildChannel['edit']>[0];
 }
 
+const emojiBody = (emoji: EmojiChoice | null) => ({
+    emoji_id: emoji && 'id' in emoji ? emoji.id : null,
+    emoji_name: emoji && 'name' in emoji ? emoji.name : null,
+});
+
+/**
+ * The PATCH body for thread defaults and forum settings, with field names
+ * from Fluxer's ChannelRequestSchemas and ForumRequestSchemas. The library
+ * has no text-channel option for thread defaults.
+ */
+function parentBody(patch: ChannelPatch): Record<string, unknown> {
+    const body: Record<string, unknown> = {};
+    if (patch.defaultAutoArchive !== undefined) {
+        body.default_auto_archive_duration = patch.defaultAutoArchive;
+    }
+    if (patch.defaultThreadSlowmode !== undefined) {
+        body.default_thread_rate_limit_per_user = patch.defaultThreadSlowmode;
+    }
+    if (patch.defaultReaction !== undefined) {
+        body.default_reaction_emoji = patch.defaultReaction
+            ? emojiBody(patch.defaultReaction)
+            : null;
+    }
+    if (patch.sortOrder !== undefined)
+        body.default_sort_order = patch.sortOrder;
+    if (patch.layout !== undefined) body.default_forum_layout = patch.layout;
+    return body;
+}
+
+/** Forum tags with their details. A known name keeps its tag ID. */
+function tagList(
+    names: readonly string[],
+    meta: readonly TagMetaSpec[] | undefined,
+    known: readonly { id: string; name: string }[]
+) {
+    return names.map((name) => {
+        const id = known.find((t) => t.name === name)?.id;
+        const detail = meta?.find((t) => t.name === name);
+        return {
+            ...(id ? { id } : {}),
+            name,
+            ...(detail
+                ? {
+                      moderated: detail.moderated,
+                      emojiId:
+                          detail.emoji && 'id' in detail.emoji
+                              ? detail.emoji.id
+                              : null,
+                      emojiName:
+                          detail.emoji && 'name' in detail.emoji
+                              ? detail.emoji.name
+                              : null,
+                  }
+                : {}),
+        };
+    });
+}
+
 const FORUM_TYPE = 15;
+const PRIVATE_THREAD = 12;
+/** The forum-post pinned flag (ThreadConstants.ts: PINNED = 1 << 1). */
+const PINNED_FLAG = 1 << 1;
+/** Bound on members added to one new private thread. */
+const MAX_THREAD_MEMBERS = 100;
 
 /** Sends a relay payload through a Fluxer webhook (upstream's helper). */
 export type FluxerWebhookSend = (
@@ -77,7 +156,27 @@ function createOptions(spec: ChannelSpec): CreateOptions {
     if (spec.parentId !== null) options.parentId = spec.parentId;
     if (spec.type === CATEGORY_TYPE) return options;
     if (spec.type === FORUM_TYPE) {
-        options.availableTags = spec.tags.map((name) => ({ name }));
+        options.availableTags = tagList(spec.tags, spec.tagMeta, []);
+        if (spec.defaultReaction !== undefined) {
+            options.defaultReactionEmoji = spec.defaultReaction
+                ? {
+                      emojiId: emojiBody(spec.defaultReaction).emoji_id,
+                      emojiName: emojiBody(spec.defaultReaction).emoji_name,
+                  }
+                : null;
+        }
+        if (spec.sortOrder !== undefined) {
+            options.defaultSortOrder = spec.sortOrder as never;
+        }
+        if (spec.layout !== undefined) {
+            options.defaultForumLayout = spec.layout as never;
+        }
+    }
+    if (spec.defaultAutoArchive !== undefined) {
+        options.defaultAutoArchiveDuration = spec.defaultAutoArchive as never;
+    }
+    if (spec.defaultThreadSlowmode !== undefined) {
+        options.defaultThreadRateLimitPerUser = spec.defaultThreadSlowmode;
     }
     options.nsfw = spec.nsfw;
     if (spec.topic !== null) options.topic = spec.topic;
@@ -95,7 +194,8 @@ export class FluxerGuildWriter implements GuildWriter {
     constructor(
         private readonly clientRef: { readonly current: Client | null },
         /** Needed for forum posts, which start with a webhook message. */
-        private readonly sendViaWebhook: FluxerWebhookSend | null = null
+        private readonly sendViaWebhook: FluxerWebhookSend | null = null,
+        private readonly warn: (message: string) => void = () => undefined
     ) {}
 
     private async guild(guildId: string): Promise<Guild> {
@@ -106,6 +206,8 @@ export class FluxerGuildWriter implements GuildWriter {
 
     async createRole(guildId: string, spec: RoleSpec): Promise<string> {
         const guild = await this.guild(guildId);
+        // Fluxer's create call takes no hoist or mentionable value; the
+        // apply step sends those as a follow-up once the role is owned.
         const role = await timedWrite(
             'Fluxer role create',
             guild.createRole({
@@ -114,13 +216,6 @@ export class FluxerGuildWriter implements GuildWriter {
                 permissions: spec.permissions,
             })
         );
-        // Fluxer's create call takes no hoist or mentionable value.
-        if (spec.hoist || spec.mentionable) {
-            await timedWrite(
-                'Fluxer role edit',
-                role.edit({ hoist: spec.hoist, mentionable: spec.mentionable })
-            );
-        }
         return role.id;
     }
 
@@ -130,11 +225,26 @@ export class FluxerGuildWriter implements GuildWriter {
         patch: RolePatch
     ): Promise<void> {
         const guild = await this.guild(guildId);
-        const role = await timedWrite(
-            'Fluxer role fetch',
-            guild.fetchRole(roleId)
+        const { unicodeEmoji, icon, ...fields } = patch;
+        if (Object.keys(fields).length > 0) {
+            const role = await timedWrite(
+                'Fluxer role fetch',
+                guild.fetchRole(roleId)
+            );
+            await timedWrite('Fluxer role edit', role.edit(fields));
+        }
+        if (unicodeEmoji === undefined && icon === undefined) return;
+        // The library treats the role icon as read-only; Fluxer's role
+        // update takes `icon` and `unicode_emoji` (GuildRequestSchemas.ts).
+        const body: Record<string, unknown> = {};
+        if (unicodeEmoji !== undefined) body.unicode_emoji = unicodeEmoji;
+        if (icon !== undefined) body.icon = icon;
+        await timedWrite(
+            'Fluxer role icon',
+            guild.client.rest.patch(Routes.guildRole(guildId, roleId), {
+                body,
+            })
         );
-        await timedWrite('Fluxer role edit', role.edit(patch));
     }
 
     async setRolePositions(
@@ -186,17 +296,22 @@ export class FluxerGuildWriter implements GuildWriter {
                 channel.edit(channelFields(patch))
             );
         }
-        if (patch.tags && channel instanceof ForumChannel) {
+        const body = parentBody(patch);
+        if (Object.keys(body).length > 0) {
+            await timedWrite(
+                'Fluxer channel settings',
+                channel.client.rest.patch(Routes.channel(channelId), { body })
+            );
+        }
+        if ((patch.tags || patch.tagMeta) && channel instanceof ForumChannel) {
             // A known name keeps its tag ID, so posts keep their tags.
-            const tags = patch.tags.map((name) => {
-                const known = channel.availableTags.find(
-                    (t) => t.name === name
-                );
-                return known ? { id: known.id, name } : { name };
-            });
+            const names =
+                patch.tags ?? channel.availableTags.map((t) => t.name);
             await timedWrite(
                 'Fluxer forum tags',
-                channel.setAvailableTags(tags)
+                channel.setAvailableTags(
+                    tagList(names, patch.tagMeta, channel.availableTags)
+                )
             );
         }
     }
@@ -212,9 +327,18 @@ export class FluxerGuildWriter implements GuildWriter {
         );
     }
 
-    async renameGuild(guildId: string, name: string): Promise<void> {
+    async updateGuild(guildId: string, patch: GuildPatch): Promise<void> {
         const guild = await this.guild(guildId);
-        await timedWrite('Fluxer guild edit', guild.edit({ name }));
+        const { defaultNotifications, ...rest } = patch;
+        await timedWrite(
+            'Fluxer guild edit',
+            guild.edit({
+                ...rest,
+                ...(defaultNotifications === undefined
+                    ? {}
+                    : { defaultMessageNotifications: defaultNotifications }),
+            } as Parameters<Guild['edit']>[0])
+        );
     }
 
     async createEmoji(guildId: string, spec: EmojiSpec): Promise<string> {
@@ -322,29 +446,62 @@ export class FluxerGuildWriter implements GuildWriter {
             this.sendViaWebhook(webhook, spec.starter)
         );
         // Fluxer gives a post's first message the ID of the post itself
-        // (MessageSendService.ts). createThread checks that it is a thread.
+        // (MessageSendService.ts). No second call checks it: a failure
+        // there would leave a post with no map row.
         return sent.messageId;
     }
 
     async createThread(guildId: string, spec: ThreadSpec): Promise<string> {
         const parent = await this.channel(guildId, spec.parentId);
         if (spec.parentType === FORUM_TYPE) {
-            const id = await this.createPost(parent, spec);
-            return (await this.thread(guildId, id)).id;
+            return this.createPost(parent, spec);
         }
         const manager = (
             parent as GuildChannel & {
                 threads?: {
-                    create(o: { name: string }): Promise<ThreadChannel>;
+                    create(o: {
+                        name: string;
+                        type?: number;
+                        invitable?: boolean;
+                    }): Promise<ThreadChannel>;
                 };
             }
         ).threads;
         if (!manager) throw new Error('this channel cannot hold threads');
         const thread = await timedWrite(
             'Fluxer thread create',
-            manager.create({ name: spec.name })
+            manager.create(
+                spec.private
+                    ? {
+                          name: spec.name,
+                          type: PRIVATE_THREAD,
+                          invitable: spec.invitable,
+                      }
+                    : { name: spec.name }
+            )
         );
+        await this.addMembers(thread, spec.members ?? []);
         return thread.id;
+    }
+
+    /**
+     * Adds linked members to a new private thread. A refused member is
+     * logged and skipped: failing here would leave the thread unowned.
+     */
+    private async addMembers(thread: ThreadChannel, ids: readonly string[]) {
+        for (const id of ids.slice(0, MAX_THREAD_MEMBERS)) {
+            try {
+                await timedWrite(
+                    'Fluxer thread member',
+                    thread.members.add(id)
+                );
+            } catch (error) {
+                const detail = error instanceof Error ? error.message : error;
+                this.warn(
+                    `[guild-sync] Could not add ${id} to private thread ${thread.id}: ${detail}`
+                );
+            }
+        }
     }
 
     async updateThread(
@@ -353,8 +510,13 @@ export class FluxerGuildWriter implements GuildWriter {
         patch: ThreadPatch
     ): Promise<void> {
         const thread = await this.thread(guildId, threadId);
-        const { tags, ...fields } = patch;
-        const edit: Parameters<ThreadChannel['edit']>[0] = { ...fields };
+        const { tags, pinned, ...fields } = patch;
+        const edit: ThreadEditOptions = { ...fields };
+        if (pinned !== undefined) {
+            edit.flags = pinned
+                ? thread.flags | PINNED_FLAG
+                : thread.flags & ~PINNED_FLAG;
+        }
         if (tags && thread.parentId) {
             const parent = await this.channel(guildId, thread.parentId);
             Object.assign(edit, { appliedTags: tagIds(parent, tags) });

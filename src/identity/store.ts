@@ -20,7 +20,11 @@ export interface PendingLink extends AccountPair {
 /** The database access account linking needs. */
 export interface IdentityStore {
     pairFor(side: Side, userId: string): Promise<AccountPair | null>;
-    savePair(pair: AccountPair, now: Date): Promise<void>;
+    /**
+     * Saves a confirmed pair. Returns false, and saves nothing, when either
+     * account was linked in the meantime.
+     */
+    savePair(pair: AccountPair, now: Date): Promise<boolean>;
     deletePair(side: Side, userId: string): Promise<AccountPair | null>;
     /** Every linked pair, for the role sweep. */
     listPairs(): Promise<AccountPair[]>;
@@ -41,6 +45,11 @@ export interface IdentityStore {
     ): Promise<PendingLink | null>;
     recordFailure(side: Side, userId: string, now: Date): Promise<void>;
     failuresSince(side: Side, userId: string, since: Date): Promise<number>;
+    /**
+     * Deletes used or expired codes, expired pending links, and failures
+     * recorded before `failuresBefore`.
+     */
+    purgeExpired(now: Date, failuresBefore: Date): Promise<void>;
 }
 
 export class IdentityDataError extends Error {}
@@ -78,11 +87,18 @@ export class PostgresIdentityStore implements IdentityStore {
         return rows[0] ? parsePair(rows[0]) : null;
     }
 
-    async savePair(pair: AccountPair, now: Date): Promise<void> {
-        await this.db.query(
-            `INSERT INTO ${TABLES.identityLinks} ("discordUserId", "fluxerUserId", "linkedAt") VALUES ($1, $2, $3)`,
-            { bind: [pair.discordUserId, pair.fluxerUserId, now] }
+    async savePair(pair: AccountPair, now: Date): Promise<boolean> {
+        // Both user columns are unique. Two confirmations racing for one
+        // account insert once; the other gets no row back.
+        const rows = await this.db.query<Row>(
+            `INSERT INTO ${TABLES.identityLinks} ("discordUserId", "fluxerUserId", "linkedAt") VALUES ($1, $2, $3)
+             ON CONFLICT DO NOTHING RETURNING "discordUserId"`,
+            {
+                bind: [pair.discordUserId, pair.fluxerUserId, now],
+                type: QueryTypes.SELECT,
+            }
         );
+        return rows.length === 1;
     }
 
     async deletePair(side: Side, userId: string): Promise<AccountPair | null> {
@@ -187,5 +203,20 @@ export class PostgresIdentityStore implements IdentityStore {
         if (!Number.isInteger(count))
             throw new IdentityDataError('failure count is not a number');
         return count;
+    }
+
+    async purgeExpired(now: Date, failuresBefore: Date): Promise<void> {
+        await this.db.query(
+            `DELETE FROM ${TABLES.identityCodes} WHERE "usedAt" IS NOT NULL OR "expiresAt" <= $1`,
+            { bind: [now] }
+        );
+        await this.db.query(
+            `DELETE FROM ${TABLES.identityPending} WHERE "expiresAt" <= $1`,
+            { bind: [now] }
+        );
+        await this.db.query(
+            `DELETE FROM ${TABLES.identityFailures} WHERE at < $1`,
+            { bind: [failuresBefore] }
+        );
     }
 }

@@ -5,7 +5,6 @@ import {
     Events,
     Message,
     PartialMessage,
-    TextChannel,
 } from '@fluxerjs/core';
 import CommandRegistry from './commands/CommandRegistry';
 import {
@@ -45,6 +44,8 @@ import StatsFluxerCommandHandler from './commands/fluxer/handlers/StatsFluxerCom
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import FluxerStatsService from './services/statsService/FluxerStatsService';
 import { DbStatsService } from './services/DbStatsService';
+// Fork: the relay's channel check (src/relay-extras/channels.ts).
+import { isRelayedFluxerChannel } from './relay-extras/channels';
 
 const startFluxerClient = async ({
     linkService,
@@ -336,7 +337,9 @@ const startFluxerClient = async ({
 
         if (
             message.guildId &&
-            message.channel instanceof TextChannel &&
+            // Fork: voice-channel chat relays too. VoiceChannel is not a
+            // TextChannel (AnnouncementChannel is); threads are neither.
+            isRelayedFluxerChannel(message.channel) &&
             !isCommandString(message.content, COMMAND_PREFIX)
         ) {
             await messageRelay.relayMessage(message);

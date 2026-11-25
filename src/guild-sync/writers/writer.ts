@@ -37,6 +37,25 @@ export interface ChannelSpec {
     readonly overwrites: readonly OverwriteSpec[];
     /** Names of the tags a forum offers, in order. */
     readonly tags: readonly string[];
+    /** Minutes before new threads archive; null clears it. */
+    readonly defaultAutoArchive?: number | null;
+    /** Slowmode in seconds for new threads; null clears it. */
+    readonly defaultThreadSlowmode?: number | null;
+    /** Forum only. */
+    readonly defaultReaction?: EmojiChoice | null;
+    readonly sortOrder?: number | null;
+    readonly layout?: number | null;
+    /** Forum only: the details of the tags in `tags`, matched by name. */
+    readonly tagMeta?: readonly TagMetaSpec[];
+}
+
+/** An emoji in destination terms: a custom emoji ID or a unicode name. */
+export type EmojiChoice = { readonly id: string } | { readonly name: string };
+
+export interface TagMetaSpec {
+    readonly name: string;
+    readonly moderated: boolean;
+    readonly emoji: EmojiChoice | null;
 }
 
 export interface ThreadSpec {
@@ -49,6 +68,11 @@ export interface ThreadSpec {
     /** The first message and the parent's webhook, for a forum post. */
     readonly starter: RelayPayload | null;
     readonly webhook: WebhookRef | null;
+    /** A private thread in a text channel, and who may invite to it. */
+    readonly private?: boolean;
+    readonly invitable?: boolean;
+    /** Destination user IDs to add to a private thread. */
+    readonly members?: readonly string[];
 }
 
 export interface ThreadPatch {
@@ -56,9 +80,29 @@ export interface ThreadPatch {
     readonly archived?: boolean;
     readonly locked?: boolean;
     readonly tags?: readonly string[];
+    readonly pinned?: boolean;
+    readonly rateLimitPerUser?: number;
+    readonly autoArchiveDuration?: number;
+    readonly invitable?: boolean;
 }
 
-export type RolePatch = Partial<RoleSpec>;
+export type RolePatch = Partial<RoleSpec> & {
+    /** A unicode emoji icon; null removes it. */
+    readonly unicodeEmoji?: string | null;
+    /** An image icon as a base64 data URI; null removes it. */
+    readonly icon?: string | null;
+};
+
+/** Server settings. Channel IDs are destination IDs. */
+export interface GuildPatch {
+    readonly name?: string;
+    readonly systemChannelId?: string | null;
+    readonly afkChannelId?: string | null;
+    readonly afkTimeout?: number;
+    readonly verificationLevel?: number;
+    readonly defaultNotifications?: number;
+    readonly explicitContentFilter?: number;
+}
 export type ChannelPatch = Partial<Omit<ChannelSpec, 'type'>>;
 
 export interface PositionSpec {
@@ -105,7 +149,7 @@ export interface GuildWriter {
         guildId: string,
         positions: readonly PositionSpec[]
     ): Promise<void>;
-    renameGuild(guildId: string, name: string): Promise<void>;
+    updateGuild(guildId: string, patch: GuildPatch): Promise<void>;
     /** Returns the new emoji's ID. */
     createEmoji(guildId: string, spec: EmojiSpec): Promise<string>;
     renameEmoji(guildId: string, emojiId: string, name: string): Promise<void>;

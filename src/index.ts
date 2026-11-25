@@ -37,6 +37,7 @@ import {
 import logger from './utils/logging/logger';
 import {
     addonDiscordIntents,
+    addonDiscordPartials,
     addonFactories,
     initAddonDatabase,
     requireAddonConfig,
@@ -233,6 +234,7 @@ const main = async () => {
             fluxerStatsService,
             dbStatsService,
             extraIntents: addonDiscordIntents(addonConfig),
+            extraPartials: addonDiscordPartials(addonConfig),
             extraCommands: addonDiscordCommands(addonConfig, {
                 sequelize,
                 findGuildLink: (id) =>

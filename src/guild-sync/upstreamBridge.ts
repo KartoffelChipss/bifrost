@@ -1,17 +1,25 @@
 import {
+    ForumChannel as FluxerForumChannel,
     Routes,
+    ThreadChannel as FluxerThreadChannel,
     Webhook as FluxerWebhook,
     type Client as FluxerClient,
     type Message as FluxerMessage,
 } from '@fluxerjs/core';
 import {
+    ChannelType,
     DiscordAPIError,
     MessageType,
     RESTJSONErrorCodes,
     type Client as DiscordClient,
 } from 'discord.js';
-import type { HistoryPorts, SendTarget, SourceMessage } from '../history/types';
-import type { IdentityPorts } from '../identity';
+import type {
+    HistoryPorts,
+    PayloadOptions,
+    SendTarget,
+    SourceMessage,
+} from '../history/types';
+import type { IdentityPorts, MemberState, UserInfo } from '../identity';
 import type { Side } from '../identity/store';
 import type { SnapshotSide } from '../addons/db/schema';
 import type { ChannelLink } from '../db/entities/ChannelLink';
@@ -27,8 +35,13 @@ import type {
     RelayPayload,
     ThreadSource,
 } from './links';
+import type { FluxerThreadInfo, ThreadMirrorPorts } from './threadMirror';
 import type { ThreadRelayPorts } from './threadRelay';
-import { discordThreadWebhook, fluxerThreadWebhook } from './threadWebhook';
+import {
+    discordPostWebhook,
+    discordThreadWebhook,
+    fluxerThreadWebhook,
+} from './threadWebhook';
 import type { FluxerWebhookSend } from './writers/fluxer';
 
 /**
@@ -76,6 +89,7 @@ export class UpstreamBridge
         ChannelLinker,
         ThreadSource,
         ThreadRelayPorts,
+        ThreadMirrorPorts,
         HistoryPorts,
         IdentityPorts
 {
@@ -252,6 +266,19 @@ export class UpstreamBridge
         };
     }
 
+    /**
+     * The members of a private Discord thread. The bot joins it first:
+     * Discord sends a private thread's messages only to its members, and
+     * the thread relay needs them.
+     */
+    async members(_guildId: string, threadId: string): Promise<string[]> {
+        const thread = await this.up.discordClient.channels.fetch(threadId);
+        if (!thread?.isThread()) throw new Error(`${threadId} is not a thread`);
+        if (!thread.joined && thread.joinable) await thread.join();
+        const members = await thread.members.fetch();
+        return [...members.keys()];
+    }
+
     // ---- ThreadRelayPorts
 
     private async discordWebhook(link: LinkedChannel, threadId: string) {
@@ -347,6 +374,107 @@ export class UpstreamBridge
         await this.fluxer().rest.delete(route, { auth: false });
     }
 
+    // ---- ThreadMirrorPorts
+
+    fluxerBotId(): string | null {
+        return this.up.fluxerClientRef.current?.user?.id ?? null;
+    }
+
+    async fluxerThread(threadId: string): Promise<FluxerThreadInfo | null> {
+        const client = this.fluxer();
+        const thread = await client.channels.fetch(threadId);
+        if (!(thread instanceof FluxerThreadChannel) || !thread.parentId) {
+            return null;
+        }
+        const parent = await client.channels.fetch(thread.parentId);
+        const forum = parent instanceof FluxerForumChannel;
+        const tagNames = forum
+            ? thread.appliedTags.flatMap((id) => {
+                  const tag = parent.availableTags.find((t) => t.id === id);
+                  return tag ? [tag.name] : [];
+              })
+            : [];
+        return {
+            id: thread.id,
+            parentId: thread.parentId,
+            name: thread.name ?? '',
+            ownerId: thread.ownerId,
+            forum,
+            tags: tagNames.sort(),
+            archived: thread.archived,
+            locked: thread.locked,
+        };
+    }
+
+    /** The Fluxer post's first message, or a placeholder when it is gone. */
+    private async fluxerStarter(
+        info: FluxerThreadInfo,
+        guildLinkId: string
+    ): Promise<RelayPayload> {
+        const message = await this.fluxer()
+            .channels.fetchMessage(info.id, info.id)
+            .catch(() => null);
+        if (message) return this.toDiscordPayload(message, guildLinkId);
+        const me = this.up.discordClient.user;
+        return {
+            content: '*The first message of this post is no longer available.*',
+            username: me?.username ?? 'Bifröst',
+            avatarURL: me?.avatarURL() ?? '',
+        };
+    }
+
+    async createDiscordPost(
+        link: LinkedChannel,
+        info: FluxerThreadInfo,
+        starter: unknown | null
+    ): Promise<string> {
+        const forum = await this.up.discordClient.channels.fetch(
+            link.discordChannelId
+        );
+        if (forum?.type !== ChannelType.GuildForum) {
+            throw new Error(`${link.discordChannelId} is not a forum`);
+        }
+        const appliedTags = info.tags.flatMap((name) => {
+            const tag = forum.availableTags.find((t) => t.name === name);
+            return tag ? [tag.id] : [];
+        });
+        const payload = starter
+            ? await this.toDiscordPayload(
+                  starter as FluxerMessage,
+                  link.guildLinkId
+              )
+            : await this.fluxerStarter(info, link.guildLinkId);
+        const { client } = await this.discordWebhook(link, '');
+        const post = discordPostWebhook(client, {
+            threadName: info.name,
+            appliedTags,
+        });
+        await this.up.webhookService.sendMessageViaDiscordWebhook(
+            post.client,
+            payload
+        );
+        const threadId = post.threadId();
+        if (!threadId) throw new Error('Discord did not name the new post');
+        return threadId;
+    }
+
+    async createDiscordThread(
+        link: LinkedChannel,
+        info: FluxerThreadInfo
+    ): Promise<string> {
+        const parent = await this.up.discordClient.channels.fetch(
+            link.discordChannelId
+        );
+        if (
+            parent?.type !== ChannelType.GuildText &&
+            parent?.type !== ChannelType.GuildAnnouncement
+        ) {
+            throw new Error(`${link.discordChannelId} cannot hold threads`);
+        }
+        const thread = await parent.threads.create({ name: info.name });
+        return thread.id;
+    }
+
     // ---- HistoryPorts
 
     private async discordHistory(discordId: string) {
@@ -355,6 +483,38 @@ export class UpstreamBridge
             throw new Error(`${discordId} has no message history`);
         }
         return channel;
+    }
+
+    /** What a person writes, including slash-command and app replies. */
+    private readonly copyableTypes: ReadonlySet<MessageType> = new Set([
+        MessageType.Default,
+        MessageType.Reply,
+        MessageType.ChatInputCommand,
+        MessageType.ContextMenuCommand,
+    ]);
+
+    describe(raw: unknown): SourceMessage {
+        const m = raw as DiscordMessage;
+        return {
+            id: m.id,
+            authorId: m.author.id,
+            createdAt: m.createdAt,
+            copyable: this.copyableTypes.has(m.type),
+            attachments: m.attachments.size,
+            webhookId: m.webhookId ?? null,
+            // Discord sends the quoted message's author with a reply.
+            reply:
+                m.type === MessageType.Reply
+                    ? { authorId: m.mentions.repliedUser?.id ?? null }
+                    : null,
+            reactions: m.reactions.cache.map((r) => ({
+                name: r.emoji.id
+                    ? `:${r.emoji.name ?? 'emoji'}:`
+                    : (r.emoji.name ?? '?'),
+                count: r.count,
+            })),
+            raw: m,
+        };
     }
 
     async listMessages(
@@ -370,16 +530,7 @@ export class UpstreamBridge
         });
         return [...page.values()]
             .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
-            .map((m) => ({
-                id: m.id,
-                authorId: m.author.id,
-                createdAt: m.createdAt,
-                copyable:
-                    m.type === MessageType.Default ||
-                    m.type === MessageType.Reply,
-                attachments: m.attachments.size,
-                raw: m,
-            }));
+            .map((m) => this.describe(m));
     }
 
     async newestMessageId(discordId: string): Promise<string | null> {
@@ -388,8 +539,49 @@ export class UpstreamBridge
         return page.first()?.id ?? null;
     }
 
-    payload(raw: unknown, guildLinkId: string): Promise<RelayPayload> {
-        return this.toFluxerPayload(raw as DiscordMessage, guildLinkId);
+    payload(
+        raw: unknown,
+        guildLinkId: string,
+        options: PayloadOptions = {}
+    ): Promise<RelayPayload> {
+        const message = raw as DiscordMessage;
+        // The transformer quotes a reply only when the message has a
+        // reference, so a view without one leaves the quote out.
+        const source = options.withoutReply
+            ? (Object.create(message, {
+                  reference: { value: null },
+              }) as DiscordMessage)
+            : message;
+        return this.toFluxerPayload(source, guildLinkId);
+    }
+
+    /** Discord returns at most 50 pins per page. */
+    private static readonly PIN_PAGE = 50;
+    private static readonly MAX_PIN_PAGES = 5;
+
+    async pinnedMessageIds(discordId: string): Promise<string[]> {
+        const channel = await this.discordHistory(discordId);
+        const pins: { id: string; at: number }[] = [];
+        let before: number | undefined;
+        for (let page = 0; page < UpstreamBridge.MAX_PIN_PAGES; page++) {
+            const result = await channel.messages.fetchPins({
+                before,
+                limit: UpstreamBridge.PIN_PAGE,
+                cache: false,
+            });
+            for (const pin of result.items) {
+                pins.push({ id: pin.message.id, at: pin.pinnedTimestamp });
+            }
+            if (!result.hasMore || result.items.length === 0) break;
+            before = result.items[result.items.length - 1].pinnedTimestamp;
+        }
+        return pins.sort((a, b) => a.at - b.at).map((p) => p.id);
+    }
+
+    async pinCopy(fluxerChannelId: string, fluxerMessageId: string) {
+        await this.fluxer().rest.put(
+            Routes.channelPinMessage(fluxerChannelId, fluxerMessageId)
+        );
     }
 
     private copyWebhook(target: SendTarget) {
@@ -499,28 +691,43 @@ export class UpstreamBridge
         await user.send({ content: text });
     }
 
-    async userName(side: Side, userId: string): Promise<string> {
+    async userInfo(side: Side, userId: string): Promise<UserInfo> {
         if (side === 'discord') {
             const user = await this.up.discordClient.users.fetch(userId);
-            return user.globalName ?? user.username;
+            return {
+                id: user.id,
+                username: user.username,
+                displayName: user.globalName,
+            };
         }
         const user = await this.fluxer().users.fetch(userId);
-        return user.globalName ?? user.username;
+        // Fluxer keeps legacy discriminators; all zeros means none.
+        const tag = /^0*$/.test(user.discriminator)
+            ? ''
+            : `#${user.discriminator}`;
+        return {
+            id: user.id,
+            username: `${user.username}${tag}`,
+            displayName: user.globalName,
+        };
     }
 
-    async discordMemberRoles(
+    async discordMember(
         guildId: string,
         userId: string
-    ): Promise<string[] | null> {
+    ): Promise<MemberState | null> {
         const guild = await this.up.discordClient.guilds.fetch(guildId);
         try {
             const member = await guild.members.fetch({
                 user: userId,
                 force: true,
             });
-            return [...member.roles.cache.keys()].filter(
-                (id) => id !== guildId
-            );
+            return {
+                roleIds: [...member.roles.cache.keys()].filter(
+                    (id) => id !== guildId
+                ),
+                nick: member.nickname,
+            };
         } catch (error) {
             const unknown =
                 error instanceof DiscordAPIError &&
@@ -531,14 +738,14 @@ export class UpstreamBridge
         }
     }
 
-    async fluxerMemberRoles(
+    async fluxerMember(
         guildId: string,
         userId: string
-    ): Promise<string[] | null> {
+    ): Promise<MemberState | null> {
         const guild = await this.fluxer().guilds.fetch(guildId);
         try {
             const member = await guild.fetchMember(userId);
-            return [...member.roles.roleIds];
+            return { roleIds: [...member.roles.roleIds], nick: member.nick };
         } catch (error) {
             if ((error as { statusCode?: unknown }).statusCode === 404) {
                 return null;
@@ -555,5 +762,70 @@ export class UpstreamBridge
         const guild = await this.fluxer().guilds.fetch(guildId);
         const member = await guild.fetchMember(userId);
         await member.roles.set(roleIds);
+    }
+
+    async setFluxerMemberNick(
+        guildId: string,
+        userId: string,
+        nick: string | null
+    ): Promise<void> {
+        const guild = await this.fluxer().guilds.fetch(guildId);
+        const member = await guild.fetchMember(userId);
+        await member.edit({ nick });
+    }
+
+    // ---- ReactionPorts (src/relay-extras: live reactions and pins)
+
+    /** The message_links pair of a message relayed in a bridged channel. */
+    async bridgedMessage(side: SnapshotSide, messageId: string) {
+        const { linkService } = this.up;
+        const link =
+            side === 'discord'
+                ? await linkService.getMessageLinkByDiscordMessageId(messageId)
+                : await linkService.getMessageLinkByFluxerMessageId(messageId);
+        if (!link) return null;
+        const channel = await linkService.getChannelLinkById(
+            link.channelLinkId
+        );
+        if (!channel) return null;
+        return {
+            guildLinkId: link.guildLinkId,
+            discord: {
+                channelId: channel.discordChannelId,
+                messageId: link.discordMessageId,
+            },
+            fluxer: {
+                channelId: channel.fluxerChannelId,
+                messageId: link.fluxerMessageId,
+            },
+        };
+    }
+
+    /** A custom emoji of the guild link's server on `side`, if it is there. */
+    async guildEmoji(side: SnapshotSide, guildLinkId: string, emojiId: string) {
+        const { linkService, discordEntityResolver, fluxerEntityResolver } =
+            this.up;
+        const guildLink = await linkService.getGuildLinkById(guildLinkId);
+        if (!guildLink) return null;
+        // Both resolvers cache a guild's emoji list for a minute.
+        const emojis: readonly {
+            id: string;
+            name: string | null;
+            animated: boolean | null;
+        }[] =
+            side === 'discord'
+                ? await discordEntityResolver.fetchEmojis(
+                      guildLink.discordGuildId
+                  )
+                : await fluxerEntityResolver.fetchEmojis(
+                      guildLink.fluxerGuildId
+                  );
+        const found = emojis.find((emoji) => emoji.id === emojiId);
+        if (!found?.name) return null;
+        return {
+            id: found.id,
+            name: found.name,
+            animated: found.animated ?? false,
+        };
     }
 }

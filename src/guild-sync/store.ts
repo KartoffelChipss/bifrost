@@ -84,6 +84,14 @@ export interface ThreadRelayStore {
         messageId: string
     ): Promise<ThreadMessage | null>;
     deleteThreadMessage(side: SnapshotSide, messageId: string): Promise<void>;
+    /**
+     * True when history import copied this Discord reply, or covered it:
+     * it is at or before the cutoff of the thread's finished history job.
+     */
+    historyCovers?(
+        discordThreadId: string,
+        discordMessageId: string
+    ): Promise<boolean>;
 }
 
 /** The database access one cycle needs. The cycle depends only on this. */
@@ -91,10 +99,11 @@ export interface GuildSyncStore {
     /**
      * Runs `fn` while holding a leader lock (guard 12), or not at all. Each
      * add-on loop uses its own key, so they never wait on one another.
+     * `fn` gets a check that the lock is still held, for long runs.
      */
     withLeaderLock<T>(
         holder: string,
-        fn: () => Promise<T>,
+        fn: (held: () => Promise<boolean>) => Promise<T>,
         key?: number
     ): Promise<{ ran: true; value: T } | { ran: false }>;
     loadSettings(guildLinkId: string): Promise<SyncSettings>;
@@ -325,12 +334,21 @@ export class PostgresGuildSyncStore
 
     async withLeaderLock<T>(
         holder: string,
-        fn: () => Promise<T>,
+        fn: (held: () => Promise<boolean>) => Promise<T>,
         key = LEADER_LOCK_KEY
     ): Promise<{ ran: true; value: T } | { ran: false }> {
         // A transaction-scoped advisory lock is released on commit, on
         // rollback and when the connection dies, so it never goes stale.
         return this.db.transaction(async (transaction) => {
+            // The lock lives on this transaction's connection. If that
+            // connection is gone, so is the lock, and writes must stop.
+            const held = () =>
+                this.db
+                    .query('SELECT 1', { type: QueryTypes.SELECT, transaction })
+                    .then(
+                        () => true,
+                        () => false
+                    );
             const [row] = await this.db.query<{ locked: boolean }>(
                 'SELECT pg_try_advisory_xact_lock($1) AS locked',
                 {
@@ -341,14 +359,14 @@ export class PostgresGuildSyncStore
             );
             if (!row?.locked) return { ran: false as const };
             if (key !== LEADER_LOCK_KEY) {
-                return { ran: true as const, value: await fn() };
+                return { ran: true as const, value: await fn(held) };
             }
             await this.db.query(
                 `INSERT INTO ${TABLES.leaderLock} (id, holder, "acquiredAt", "heartbeatAt") VALUES (1, $1, now(), now())
                  ON CONFLICT (id) DO UPDATE SET holder = $1, "acquiredAt" = now(), "heartbeatAt" = now()`,
                 { bind: [holder] }
             );
-            return { ran: true as const, value: await fn() };
+            return { ran: true as const, value: await fn(held) };
         });
     }
 
@@ -708,5 +726,25 @@ export class PostgresGuildSyncStore
             `DELETE FROM ${TABLES.threadMessages} WHERE "${column}" = $1`,
             { bind: [messageId] }
         );
+    }
+
+    /** Snowflakes compare as numbers: left-padded to 20 digits, as text. */
+    async historyCovers(
+        discordThreadId: string,
+        discordMessageId: string
+    ): Promise<boolean> {
+        const rows = await this.db.query<Row>(
+            `SELECT 1 FROM ${TABLES.historyMessages} WHERE "discordMessageId" = $1
+             UNION ALL
+             SELECT 1 FROM ${TABLES.historyJobs}
+             WHERE kind = 'thread' AND "discordId" = $2 AND status = 'done'
+               AND lpad("cutoffId", 20, '0') >= lpad($3, 20, '0')
+             LIMIT 1`,
+            {
+                bind: [discordMessageId, discordThreadId, discordMessageId],
+                type: QueryTypes.SELECT,
+            }
+        );
+        return rows.length > 0;
     }
 }

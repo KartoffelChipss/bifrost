@@ -2,6 +2,7 @@ import type { SnapshotSide } from '../addons/db/schema';
 import type { AddonLogger } from '../addons/isolation';
 import type { ChannelLinker, LinkedChannel } from './links';
 import type { ThreadRelayStore } from './store';
+import type { ThreadMirror } from './threadMirror';
 
 /**
  * Relays messages posted inside synced threads and forum posts. Upstream's
@@ -53,10 +54,15 @@ export interface ThreadRelayDeps {
     /** False while add-ons are read-only (guards 10 and 15). */
     readonly active: () => boolean;
     /**
-     * True while a Fluxer thread's history is being copied. New replies
-     * wait, so they land below the history.
+     * True while a Fluxer thread's history is being copied. New Discord
+     * replies wait, so they land below the history.
      */
     readonly importing?: (fluxerThreadId: string) => Promise<boolean>;
+    /**
+     * Creates the Discord copy of a thread started on Fluxer (see
+     * threadMirror.ts). Without it, such a thread's replies wait and expire.
+     */
+    readonly mirror?: ThreadMirror['mirror'];
     readonly now: () => Date;
     readonly logger: AddonLogger;
 }
@@ -120,9 +126,17 @@ export class ThreadRelay {
         if (!event.parentId) return 'ignored';
         const link = await this.linkFor(from, event.parentId);
         if (!link || this.isOwn(from, event, link)) return 'ignored';
-        const pair = await store.findThreadPair(from, event.channelId);
+        let pair = await store.findThreadPair(from, event.channelId);
+        if (!pair && from === 'fluxer' && this.deps.mirror) {
+            const mirrored = await this.deps.mirror(link, event, raw);
+            if (mirrored?.starterCopied) return 'relayed';
+            pair = mirrored?.pair ?? null;
+        }
         if (!pair) return 'unmapped';
-        if (await this.deps.importing?.(pair.fluxerId)) return 'unmapped';
+        // History copies Discord to Fluxer only, so only Discord replies
+        // wait for it. A Fluxer reply is never in the history it copies.
+        if (from === 'discord' && (await this.deps.importing?.(pair.fluxerId)))
+            return 'unmapped';
         const to = other(from);
         const threadId = to === 'fluxer' ? pair.fluxerId : pair.discordId;
         const copyId = await ports.send(to, link, threadId, raw);
@@ -172,6 +186,7 @@ export class ThreadRelay {
         this.parked = [];
         for (const parked of waiting) {
             await this.guarded('send', async () => {
+                if (await this.coveredByHistory(parked)) return;
                 const result = await this.relay(
                     parked.from,
                     parked.event,
@@ -180,6 +195,13 @@ export class ThreadRelay {
                 if (result === 'unmapped') this.parked.push(parked);
             });
         }
+    }
+
+    /** A held Discord reply that the history import copied already. */
+    private async coveredByHistory(parked: Parked): Promise<boolean> {
+        if (parked.from !== 'discord') return false;
+        const { channelId, id } = parked.event;
+        return (await this.deps.store.historyCovers?.(channelId, id)) ?? false;
     }
 
     async edited(

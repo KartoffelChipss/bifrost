@@ -5,7 +5,14 @@ import type { Client as FluxerClient } from '@fluxerjs/core';
 import type { Sequelize } from 'sequelize';
 import type { Addon, AddonContext } from '../addons/host';
 import { DiscordAssetSource } from './assets';
-import { runCycle, type CycleDeps, type LinkedGuild } from './cycle';
+import {
+    resolveMode,
+    runCycle,
+    type CycleDeps,
+    type LinkedGuild,
+} from './cycle';
+import { MemoryFailureLedger } from './failures';
+import { ThreadMirror, type ThreadMirrorPorts } from './threadMirror';
 import type { ChannelLinker, ThreadSource } from './links';
 import { NoticeBoard } from './notices';
 import { discordNoticeSender } from './notifier';
@@ -13,6 +20,7 @@ import { DiscordGuildReader } from './readers/discord';
 import { FluxerGuildReader } from './readers/fluxer';
 import { DEFAULT_SCHEDULE, SyncScheduler } from './scheduler';
 import { PostgresHistoryStore } from '../history/store';
+import { PostgresIdentityStore } from '../identity/store';
 import { PostgresGuildSyncStore, type GuildSyncStore } from './store';
 import {
     followFluxerClient,
@@ -64,11 +72,26 @@ export interface GuildSyncDeps {
     readonly historyEnabled: boolean;
     /** Discord channel or category IDs never synced. */
     readonly excludedChannels: ReadonlySet<string>;
+    /** Account linking is on: member overwrites follow linked members. */
+    readonly identityEnabled?: boolean;
+}
+
+/** Linked accounts, Discord user ID to Fluxer user ID. */
+function linkedMembers(sequelize: Sequelize) {
+    const store = new PostgresIdentityStore(sequelize);
+    return async () =>
+        new Map(
+            (await store.listPairs()).map((pair) => [
+                pair.discordUserId,
+                pair.fluxerUserId,
+            ])
+        );
 }
 
 export type GuildSyncBridge = ChannelLinker &
     ThreadSource &
-    ThreadRelayPorts & { readonly sendViaFluxerWebhook: FluxerWebhookSend };
+    ThreadRelayPorts &
+    ThreadMirrorPorts & { readonly sendViaFluxerWebhook: FluxerWebhookSend };
 
 /**
  * Runs one cycle per linked guild while holding the leader lock. Returns
@@ -81,7 +104,7 @@ async function runAll(
     holder: string
 ): Promise<boolean> {
     let more = false;
-    const result = await store.withLeaderLock(holder, async () => {
+    const result = await store.withLeaderLock(holder, async (held) => {
         const links = await deps.listGuildLinks();
         if (links.length > MAX_LINKS_PER_RUN) {
             cycleDeps.logger.warn(
@@ -89,7 +112,10 @@ async function runAll(
             );
         }
         for (const link of links.slice(0, MAX_LINKS_PER_RUN)) {
-            const outcome = await runCycle(link, cycleDeps);
+            const outcome = await runCycle(link, {
+                ...cycleDeps,
+                stillLeader: held,
+            });
             if (outcome.status === 'planned' && outcome.more) more = true;
         }
         await store.pruneSnapshots(
@@ -135,7 +161,8 @@ function buildCycleDeps(
         writers: {
             fluxer: new FluxerGuildWriter(
                 deps.fluxerClientRef,
-                deps.bridge.sendViaFluxerWebhook
+                deps.bridge.sendViaFluxerWebhook,
+                (message) => context.logger.warn(message)
             ),
         },
         assets: {
@@ -158,6 +185,11 @@ function buildCycleDeps(
         logger: context.logger,
         now: () => new Date(),
         newId: randomUUID,
+        failures: new MemoryFailureLedger(),
+        lookups: new Map(),
+        linkedMembers: deps.identityEnabled
+            ? linkedMembers(deps.sequelize)
+            : undefined,
     };
 }
 
@@ -167,6 +199,23 @@ function startThreadRelay(
     context: AddonContext,
     store: PostgresGuildSyncStore
 ): { relay: ThreadRelay; stop: () => void } {
+    const mirror = new ThreadMirror({
+        store,
+        ports: deps.bridge,
+        // Creating a Discord thread is a structure write: apply mode only.
+        mayWrite: async (linkId) => {
+            const settings = await store.loadSettings(linkId);
+            if (settings.direction !== 'discord-to-fluxer') return false;
+            const mode = resolveMode(
+                context.mode.mode,
+                settings,
+                context.allowApply
+            );
+            return mode.mode === 'apply';
+        },
+        now: () => new Date(),
+        logger: context.logger,
+    });
     const relay = new ThreadRelay({
         store,
         links: deps.bridge,
@@ -176,6 +225,7 @@ function startThreadRelay(
             ? (id) =>
                   new PostgresHistoryStore(deps.sequelize).threadImporting(id)
             : undefined,
+        mirror: (link, event, raw) => mirror.mirror(link, event, raw),
         now: () => new Date(),
         logger: context.logger,
     });
