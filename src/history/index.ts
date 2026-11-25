@@ -27,6 +27,7 @@ export interface HistoryDeps {
     readonly ports: HistoryPorts;
     readonly writer: Pick<GuildWriter, 'updateThread'>;
     readonly sendNotice: SendNotice;
+    readonly excludedChannels: ReadonlySet<string>;
 }
 
 const pause = (ms: number) =>
@@ -44,6 +45,7 @@ function buildImporter(deps: HistoryDeps, context: AddonContext) {
         ports: deps.ports,
         links: deps.links,
         writer: deps.writer,
+        excluded: deps.excludedChannels,
         mode: async (id) => {
             const settings = await sync.loadSettings(id);
             // History is copied from Discord to Fluxer only.

@@ -18,7 +18,10 @@ export interface AddonsHandle {
 }
 
 /** What the add-ons need from Bifröst. Built once in src/index.ts. */
-export type AddonDeps = Omit<GuildSyncDeps, 'historyEnabled' | 'bridge'> & {
+export type AddonDeps = Omit<
+    GuildSyncDeps,
+    'historyEnabled' | 'bridge' | 'excludedChannels'
+> & {
     readonly bridge: GuildSyncDeps['bridge'] & HistoryPorts & IdentityPorts;
 };
 
@@ -33,7 +36,11 @@ export function addonFactories(
     );
     return {
         guildSync: () =>
-            createGuildSyncAddon({ ...deps, historyEnabled: config.history }),
+            createGuildSyncAddon({
+                ...deps,
+                historyEnabled: config.history,
+                excludedChannels: config.excludedChannels,
+            }),
         history: () =>
             createHistoryAddon({
                 sequelize: deps.sequelize,
@@ -42,6 +49,7 @@ export function addonFactories(
                 ports: deps.bridge,
                 writer: new FluxerGuildWriter(deps.fluxerClientRef),
                 sendNotice,
+                excludedChannels: config.excludedChannels,
             }),
         identity: () =>
             createIdentityAddon({

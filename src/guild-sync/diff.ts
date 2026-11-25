@@ -38,6 +38,12 @@ export interface DiffInput {
     readonly rows: readonly MapRow[];
     readonly direction: SyncDirection;
     /**
+     * Source channels and threads never synced (BF_ADDONS_EXCLUDE_CHANNELS,
+     * expanded with excludedIds). A copy that already exists stays as it
+     * is: an excluded channel is neither updated nor removed.
+     */
+    readonly excluded?: ReadonlySet<string>;
+    /**
      * Which source channels the relay already bridges, and which must never
      * be bridged (the admin channel). Without it, no link is planned.
      */
@@ -233,7 +239,10 @@ function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
         projectSource: (c: ChannelSnap) => projectSourceChannel(c, ctx),
         projectDest: (c: ChannelSnap) => projectDestChannel(c, ctx),
         sameType: (a: ChannelSnap, b: ChannelSnap) => a.type === b.type,
-        skipReason: channelSkip,
+        skipReason: (c: ChannelSnap) =>
+            input.excluded?.has(c.id)
+                ? 'excluded by BF_ADDONS_EXCLUDE_CHANNELS'
+                : channelSkip(c),
     });
     diffObjects(
         {
@@ -401,6 +410,7 @@ function diffLinks(input: DiffInput, map: IdMap, out: Out) {
         if (!THREAD_PARENT_TYPES.has(channel.type)) continue;
         if (input.links.linked.has(channel.id)) continue;
         if (input.links.never.has(channel.id)) continue;
+        if (input.excluded?.has(channel.id)) continue;
         const ready = input.links.historyReady;
         if (
             ready &&
@@ -436,10 +446,13 @@ function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
         return;
     }
     const mapped = (t: ThreadSnap) => ctx.map.dest('channel', t.parentId);
+    const included = (t: ThreadSnap) => !input.excluded?.has(t.id);
     diffObjects(
         {
             kind: 'thread',
-            sources: source.threads.filter((t) => mapped(t) !== null),
+            sources: source.threads.filter(
+                (t) => included(t) && mapped(t) !== null
+            ),
             dests: destination.threads,
             previous: previousSource?.threads ?? null,
             projectSource: (t) => projectSourceThread(t, ctx),

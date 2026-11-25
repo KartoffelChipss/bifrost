@@ -17,6 +17,11 @@ export interface AddonConfig {
     readonly initialMode: Exclude<AddonMode, 'apply'>;
     /** BF_ADDONS_ALLOW_APPLY. Without it, no add-on writes to a server. */
     readonly allowApply: boolean;
+    /**
+     * BF_ADDONS_EXCLUDE_CHANNELS: Discord channel or category IDs the
+     * add-ons never copy, bridge or import. A category covers its channels.
+     */
+    readonly excludedChannels: ReadonlySet<string>;
 }
 
 export type AddonConfigResult =
@@ -66,6 +71,24 @@ function parseMode(
     return { ok: true, value: mode };
 }
 
+const SNOWFLAKE = /^\d{15,25}$/;
+
+/** Parses a comma- or space-separated list of Discord IDs. */
+function parseIdList(
+    name: string,
+    value: string | undefined
+): { ok: true; value: ReadonlySet<string> } | { ok: false; error: string } {
+    const ids = (value ?? '').split(/[\s,]+/).filter((id) => id !== '');
+    const bad = ids.find((id) => !SNOWFLAKE.test(id));
+    if (bad !== undefined) {
+        return {
+            ok: false,
+            error: `${name} has an invalid Discord ID: ${bad}`,
+        };
+    }
+    return { ok: true, value: new Set(ids) };
+}
+
 const BOOL_KEYS = {
     enabled: 'BF_ADDONS_ENABLED',
     guildSync: 'BF_ADDON_GUILD_SYNC',
@@ -92,6 +115,12 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
     const mode = parseMode(env.BF_ADDONS_MODE);
     if (!mode.ok) return { ok: false, error: mode.error };
 
+    const excluded = parseIdList(
+        'BF_ADDONS_EXCLUDE_CHANNELS',
+        env.BF_ADDONS_EXCLUDE_CHANNELS
+    );
+    if (!excluded.ok) return { ok: false, error: excluded.error };
+
     // Read exactly as upstream does (src/utils/env.ts, src/db/sequelize.ts):
     // only the literal 'postgres' selects Postgres. The add-on tables use
     // JSONB and an advisory lock, so add-ons refuse to start without it.
@@ -112,6 +141,7 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
             identity: flags.enabled && flags.identity,
             initialMode: mode.value,
             allowApply: flags.enabled && flags.allowApply,
+            excludedChannels: excluded.value,
         },
     };
 }

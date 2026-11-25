@@ -66,6 +66,7 @@ function setup(source: GuildSnapshot, mode: AddonMode = 'dry-run') {
     const wiring = {
         links: null as FakeLinker | null,
         ready: undefined as ReadonlySet<string> | undefined,
+        excluded: new Set<string>() as ReadonlySet<string>,
     };
     const notices = recordingNotices();
     const pauses: number[] = [];
@@ -77,6 +78,7 @@ function setup(source: GuildSnapshot, mode: AddonMode = 'dry-run') {
         writers: { fluxer: guild },
         assets: { discord: assets },
         links: wiring.links,
+        excludedChannels: wiring.excluded,
         historyReady: wiring.ready
             ? async () => wiring.ready ?? new Set<string>()
             : undefined,
@@ -111,6 +113,10 @@ function setup(source: GuildSnapshot, mode: AddonMode = 'dry-run') {
         /** Turns on channel linking, as the running bot has it. */
         useLinks: () => {
             wiring.links = linker;
+        },
+        /** Sets BF_ADDONS_EXCLUDE_CHANNELS. */
+        exclude: (ids: string[]) => {
+            wiring.excluded = new Set(ids);
         },
         /** Turns on history gating with this set of copied channels. */
         historyReady: (ready: ReadonlySet<string>) => {
@@ -802,5 +808,89 @@ describe('bridging after history', () => {
             'forum',
             'text',
         ]);
+    });
+});
+
+describe('excluded channels', () => {
+    const ADMIN = '126729786981744640';
+    const STAFF = '452223817377382440';
+    const guild = () =>
+        discordGuild({
+            channels: [
+                channel(STAFF, { type: 4, name: 'Staff' }),
+                channel(ADMIN, { name: 'admins-only', parentId: STAFF }),
+                channel('general', { name: 'general' }),
+            ],
+            threads: [
+                {
+                    id: 'side',
+                    parentId: ADMIN,
+                    name: 'Secret',
+                    archived: false,
+                    locked: false,
+                    tags: [],
+                },
+            ],
+        });
+
+    function excluding(ids: string[]) {
+        const s = setup(guild());
+        s.useLinks();
+        s.exclude(ids);
+        return s;
+    }
+
+    it('never creates, bridges or threads an excluded channel', async () => {
+        const s = excluding([ADMIN]);
+        await s.cycle();
+        await s.cycle();
+        assert.equal(named(s.guild, 'admins-only'), undefined);
+        assert.ok(named(s.guild, 'Staff'));
+        assert.deepEqual(
+            s.linker.links.map((l) => l.discordChannelId),
+            ['general']
+        );
+        assert.equal(s.guild.posts.length, 0);
+        const { plan } = await s.cycle();
+        assert.ok(
+            plan.body.findings.some(
+                (f) =>
+                    f.id === ADMIN &&
+                    /BF_ADDONS_EXCLUDE_CHANNELS/.test(f.detail)
+            )
+        );
+    });
+
+    it('excludes every channel in an excluded category', async () => {
+        const s = excluding([STAFF]);
+        await s.cycle();
+        assert.equal(named(s.guild, 'Staff'), undefined);
+        assert.equal(named(s.guild, 'admins-only'), undefined);
+        assert.ok(named(s.guild, 'general'));
+    });
+
+    it('leaves an existing copy alone when its channel is excluded later', async () => {
+        const s = setup(guild());
+        await s.cycle();
+        const copy = named(s.guild, 'admins-only');
+        assert.ok(copy);
+        s.exclude([ADMIN]);
+        const renamed = guild();
+        s.discord.result = {
+            ok: true,
+            snapshot: {
+                ...renamed,
+                channels: renamed.channels.map((c) =>
+                    c.id === ADMIN ? { ...c, name: 'renamed' } : c
+                ),
+            },
+        };
+        for (let i = 0; i < 4; i++) {
+            await s.cycle();
+            s.wait(20);
+        }
+        assert.equal(named(s.guild, 'admins-only')?.id, copy.id);
+        const row = s.store.rows.find((r) => r.fluxerId === copy.id);
+        assert.equal(row?.state, 'active');
     });
 });

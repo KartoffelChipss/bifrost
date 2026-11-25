@@ -27,7 +27,7 @@ import { sourceIdOf } from './ops';
 import { EMPTY_BODY, summarizePlan, type Plan, type PlanBody } from './plan';
 import type { GuildReader } from './readers/reader';
 import type { GuildSnapshot } from './snapshot';
-import { countObjects, stableJson } from './snapshot';
+import { countObjects, excludedIds, stableJson } from './snapshot';
 import type { GuildSyncStore, SyncSettings } from './store';
 import type { GuildWriter } from './writers/writer';
 
@@ -56,6 +56,8 @@ export interface CycleDeps {
     };
     /** Bifröst's channel links, or null when the relay is not wired in. */
     readonly links: ChannelLinker | null;
+    /** Discord channel or category IDs never synced (BF_ADDONS_EXCLUDE_CHANNELS). */
+    readonly excludedChannels?: ReadonlySet<string>;
     /**
      * With history import on: Discord channels whose history is copied and
      * may be bridged. Undefined when history import is off.
@@ -290,6 +292,7 @@ async function buildBody(
         previousSource: gated.lastHealthy,
         rows,
         direction,
+        excluded: excludedIds(source, deps.excludedChannels ?? new Set()),
         links: await linkState(link, settings, deps),
     });
     const removals = await confirmedRemovals(link, settings, rows, deps, now);
