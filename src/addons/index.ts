@@ -3,6 +3,11 @@ import { AddonHost, selectAddons, type AddonFactories } from './host';
 import { IsolationBoundary, type AddonLogger } from './isolation';
 import { AddonModeController } from './mode';
 import { createGuildSyncAddon, type GuildSyncDeps } from '../guild-sync';
+import { discordNoticeSender } from '../guild-sync/notifier';
+import { FluxerGuildWriter } from '../guild-sync/writers/fluxer';
+import { createHistoryAddon } from '../history';
+import type { HistoryPorts } from '../history/types';
+import { createIdentityAddon, type IdentityPorts } from '../identity';
 
 export { requireAddonConfig } from './config';
 export { addonDiscordIntents } from './intents';
@@ -13,11 +18,44 @@ export interface AddonsHandle {
 }
 
 /** What the add-ons need from Bifröst. Built once in src/index.ts. */
-export type AddonDeps = GuildSyncDeps;
+export type AddonDeps = Omit<GuildSyncDeps, 'historyEnabled' | 'bridge'> & {
+    readonly bridge: GuildSyncDeps['bridge'] & HistoryPorts & IdentityPorts;
+};
 
-/** Add-on implementations. Each add-on registers here when it lands. */
-export function addonFactories(deps: AddonDeps): AddonFactories {
-    return { guildSync: () => createGuildSyncAddon(deps) };
+/** Add-on implementations, each built only when it is switched on. */
+export function addonFactories(
+    deps: AddonDeps,
+    config: AddonConfig
+): AddonFactories {
+    const sendNotice = discordNoticeSender(
+        deps.discordClient,
+        deps.isChannelLinked
+    );
+    return {
+        guildSync: () =>
+            createGuildSyncAddon({ ...deps, historyEnabled: config.history }),
+        history: () =>
+            createHistoryAddon({
+                sequelize: deps.sequelize,
+                listGuildLinks: deps.listGuildLinks,
+                links: deps.bridge,
+                ports: deps.bridge,
+                writer: new FluxerGuildWriter(deps.fluxerClientRef),
+                sendNotice,
+            }),
+        identity: () =>
+            createIdentityAddon({
+                discordClient: deps.discordClient,
+                fluxerClientRef: deps.fluxerClientRef,
+                sequelize: deps.sequelize,
+                listGuildLinks: deps.listGuildLinks,
+                ports: deps.bridge,
+                historyEnabled: config.history,
+                links: deps.bridge,
+                historyPorts: deps.bridge,
+                sendNotice,
+            }),
+    };
 }
 
 /**

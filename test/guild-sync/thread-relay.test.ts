@@ -198,6 +198,33 @@ describe('ThreadRelay', () => {
         assert.equal(calls.length, 3);
     });
 
+    it('holds replies while the thread history is being copied', async () => {
+        const { store, links, calls } = await setup();
+        const importing = new Set(['f-post']);
+        const relay = new ThreadRelay({
+            store,
+            links,
+            ports: {
+                async send(to, _l, threadId, raw) {
+                    calls.push(`send ${to} ${threadId} ${String(raw)}`);
+                    return 'copy';
+                },
+                async edit() {},
+                async remove() {},
+            },
+            active: () => true,
+            importing: async (id) => importing.has(id),
+            now: () => new Date(0),
+            logger: createRecordingLogger(),
+        });
+        await relay.created('discord', inPost('m1'), 'new reply');
+        await relay.flush();
+        assert.deepEqual(calls, []);
+        importing.clear();
+        await relay.flush();
+        assert.deepEqual(calls, ['send fluxer f-post new reply']);
+    });
+
     it('does nothing while add-ons are read-only', async () => {
         const { relay, calls, state } = await setup();
         state.active = false;

@@ -14,6 +14,13 @@ export const TABLES = {
     settings: 'addon_settings',
     leaderLock: 'addon_leader_lock',
     threadMessages: 'addon_thread_messages',
+    historyJobs: 'addon_history_jobs',
+    historyMessages: 'addon_history_messages',
+    historyOptOuts: 'addon_history_optouts',
+    identityLinks: 'addon_identity_links',
+    identityCodes: 'addon_identity_codes',
+    identityPending: 'addon_identity_pending',
+    identityFailures: 'addon_identity_failures',
 } as const;
 
 /** Umzug's record of applied add-on migrations, apart from upstream's. */

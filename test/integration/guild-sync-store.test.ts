@@ -6,7 +6,12 @@ import { runAddonMigrations } from '../../src/addons/db/migrator';
 import { TABLES } from '../../src/addons/db/schema';
 import { EMPTY_BODY } from '../../src/guild-sync/plan';
 import { stableJson } from '../../src/guild-sync/snapshot';
-import { PostgresGuildSyncStore } from '../../src/guild-sync/store';
+import {
+    HISTORY_LOCK_KEY,
+    PostgresGuildSyncStore,
+} from '../../src/guild-sync/store';
+import { PostgresHistoryStore } from '../../src/history/store';
+import { PostgresIdentityStore } from '../../src/identity/store';
 import { createRecordingLogger } from '../addons/fakes';
 import { channel, discordGuild } from '../guild-sync/fixtures';
 
@@ -288,5 +293,106 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         await assert.rejects(store.saveThreadMessage(message, now));
         await store.deleteThreadMessage('discord', 'dm1');
         assert.equal(await store.findThreadMessage('discord', 'dm1'), null);
+    });
+
+    it('keeps history jobs, imported messages and opt-outs', async () => {
+        const now = new Date();
+        const history = new PostgresHistoryStore(db);
+        await history.ensureJob(linkId, 'thread', 'd-post', 'd-forum', now);
+        await history.ensureJob(linkId, 'thread', 'd-post', 'd-forum', now);
+        const [job] = await history.listJobs(linkId);
+        assert.equal((await history.listJobs(linkId)).length, 1);
+        assert.equal(job.status, 'pending');
+        await history.updateJob(
+            job.id,
+            {
+                fluxerId: 'f-post',
+                status: 'importing',
+                cutoffId: '99',
+                importWebhook: { id: 'w', token: 't' },
+            },
+            now
+        );
+        assert.equal(await history.threadImporting('f-post'), true);
+        const updated = await history.getJob(job.id);
+        assert.deepEqual(updated?.importWebhook, { id: 'w', token: 't' });
+        const copy = {
+            discordMessageId: 'dm1',
+            jobId: job.id,
+            discordAuthorId: 'author',
+            fluxerMessageId: null,
+            fluxerTargetId: 'f-post',
+            inThread: true,
+            webhookId: 'w',
+        };
+        await history.startMessage(copy, now);
+        assert.equal(
+            (await history.unfinishedMessage(job.id))?.discordMessageId,
+            'dm1'
+        );
+        await history.finishMessage('dm1', 'fm1');
+        assert.equal(await history.unfinishedMessage(job.id), null);
+        assert.equal(
+            (await history.importedByFluxerId('fm1'))?.discordAuthorId,
+            'author'
+        );
+        await assert.rejects(history.startMessage(copy, now));
+        await history.setOptOut('author', true, now);
+        assert.equal(await history.isOptedOut('author'), true);
+        await history.setOptOut('author', false, now);
+        assert.equal(await history.isOptedOut('author'), false);
+        await history.updateJob(job.id, { status: 'done' }, now);
+        assert.equal(await history.threadImporting('f-post'), false);
+    });
+
+    it('keeps account links, codes, pending links and failures', async () => {
+        const identity = new PostgresIdentityStore(db);
+        const now = new Date();
+        const later = new Date(now.getTime() + 60_000);
+        await identity.saveCode('hash', 'discord', 'd1', later);
+        assert.equal(await identity.takeCode('hash', 'fluxer', now), null);
+        assert.equal(await identity.takeCode('hash', 'discord', now), 'd1');
+        assert.equal(await identity.takeCode('hash', 'discord', now), null);
+        await identity.savePending({
+            discordUserId: 'd1',
+            fluxerUserId: 'f1',
+            confirmSide: 'discord',
+            confirmUserId: 'd1',
+            expiresAt: later,
+        });
+        assert.equal(await identity.takePending('fluxer', 'f1', now), null);
+        const pending = await identity.takePending('discord', 'd1', now);
+        assert.equal(pending?.fluxerUserId, 'f1');
+        await identity.savePair(
+            { discordUserId: 'd1', fluxerUserId: 'f1' },
+            now
+        );
+        await assert.rejects(
+            identity.savePair({ discordUserId: 'd2', fluxerUserId: 'f1' }, now)
+        );
+        assert.deepEqual(await identity.pairFor('fluxer', 'f1'), {
+            discordUserId: 'd1',
+            fluxerUserId: 'f1',
+        });
+        assert.equal((await identity.listPairs()).length, 1);
+        await identity.deletePair('fluxer', 'f1');
+        assert.equal(await identity.pairFor('discord', 'd1'), null);
+        await identity.recordFailure('fluxer', 'f1', now);
+        await identity.recordFailure('fluxer', 'f1', now);
+        assert.equal(
+            await identity.failuresSince('fluxer', 'f1', new Date(0)),
+            2
+        );
+        assert.equal(await identity.failuresSince('fluxer', 'f1', later), 0);
+    });
+
+    it('takes a separate lock per add-on loop', async () => {
+        const inner = await store.withLeaderLock('a', () =>
+            store.withLeaderLock('b', async () => 'nested', HISTORY_LOCK_KEY)
+        );
+        assert.deepEqual(inner, {
+            ran: true,
+            value: { ran: true, value: 'nested' },
+        });
     });
 });

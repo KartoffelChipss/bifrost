@@ -63,7 +63,10 @@ function setup(source: GuildSnapshot, mode: AddonMode = 'dry-run') {
     const discord = new FakeReader({ ok: true, snapshot: source });
     const assets = new FakeAssets();
     const linker = new FakeLinker();
-    const wiring = { links: null as FakeLinker | null };
+    const wiring = {
+        links: null as FakeLinker | null,
+        ready: undefined as ReadonlySet<string> | undefined,
+    };
     const notices = recordingNotices();
     const pauses: number[] = [];
     let seq = 0;
@@ -74,6 +77,9 @@ function setup(source: GuildSnapshot, mode: AddonMode = 'dry-run') {
         writers: { fluxer: guild },
         assets: { discord: assets },
         links: wiring.links,
+        historyReady: wiring.ready
+            ? async () => wiring.ready ?? new Set<string>()
+            : undefined,
         threadSources: { discord: new FakeThreadSource() },
         notices: notices.board,
         commandPrefix: '!b ',
@@ -105,6 +111,10 @@ function setup(source: GuildSnapshot, mode: AddonMode = 'dry-run') {
         /** Turns on channel linking, as the running bot has it. */
         useLinks: () => {
             wiring.links = linker;
+        },
+        /** Turns on history gating with this set of copied channels. */
+        historyReady: (ready: ReadonlySet<string>) => {
+            wiring.ready = ready;
         },
         posted: notices.posted,
         pauses,
@@ -763,5 +773,34 @@ describe('channel links, forum tags and threads', () => {
         await s.cycle();
         assert.deepEqual(s.linker.unlinked, ['text']);
         assert.equal(named(s.guild, 'general'), undefined);
+    });
+});
+
+describe('bridging after history', () => {
+    const twoChannels = () =>
+        discordGuild({
+            channels: [
+                channel('text', { name: 'general' }),
+                channel('forum', { type: 15, name: 'game-chat' }),
+            ],
+        });
+
+    it('bridges a forum at once but a text channel only once its history is copied', async () => {
+        const s = setup(twoChannels());
+        s.useLinks();
+        const ready = new Set<string>();
+        s.historyReady(ready);
+        await s.cycle();
+        await s.cycle();
+        assert.deepEqual(
+            s.linker.links.map((l) => l.discordChannelId),
+            ['forum']
+        );
+        ready.add('text');
+        await s.cycle();
+        assert.deepEqual(s.linker.links.map((l) => l.discordChannelId).sort(), [
+            'forum',
+            'text',
+        ]);
     });
 });

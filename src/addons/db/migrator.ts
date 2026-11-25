@@ -6,6 +6,7 @@ import * as baseline from './migrations/00001-addon-baseline';
 import * as appliedFields from './migrations/00002-object-map-applied-fields';
 import * as adminApproval from './migrations/00003-settings-admin-approval';
 import * as threads from './migrations/00004-threads';
+import * as historyIdentity from './migrations/00005-history-identity';
 import { MIGRATIONS_MODEL, MIGRATIONS_TABLE } from './schema';
 
 /**
@@ -26,6 +27,11 @@ const MIGRATIONS: RunnableMigration<QueryInterface>[] = [
         down: adminApproval.down,
     },
     { name: '00004-threads', up: threads.up, down: threads.down },
+    {
+        name: '00005-history-identity',
+        up: historyIdentity.up,
+        down: historyIdentity.down,
+    },
 ];
 
 export class AddonDatabaseError extends Error {

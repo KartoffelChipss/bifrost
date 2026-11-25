@@ -52,13 +52,19 @@ export interface ThreadRelayDeps {
     readonly ports: ThreadRelayPorts;
     /** False while add-ons are read-only (guards 10 and 15). */
     readonly active: () => boolean;
+    /**
+     * True while a Fluxer thread's history is being copied. New replies
+     * wait, so they land below the history.
+     */
+    readonly importing?: (fluxerThreadId: string) => Promise<boolean>;
     readonly now: () => Date;
     readonly logger: AddonLogger;
 }
 
 /** Messages held for a thread that is not created on the other side yet. */
-export const MAX_PARKED_MESSAGES = 500;
-export const PARKED_TTL_MS = 30 * 60_000;
+export const MAX_PARKED_MESSAGES = 2_000;
+/** Long enough for the history of a busy post to be copied first. */
+export const PARKED_TTL_MS = 6 * 60 * 60_000;
 
 interface Parked {
     readonly from: SnapshotSide;
@@ -116,6 +122,7 @@ export class ThreadRelay {
         if (!link || this.isOwn(from, event, link)) return 'ignored';
         const pair = await store.findThreadPair(from, event.channelId);
         if (!pair) return 'unmapped';
+        if (await this.deps.importing?.(pair.fluxerId)) return 'unmapped';
         const to = other(from);
         const threadId = to === 'fluxer' ? pair.fluxerId : pair.discordId;
         const copyId = await ports.send(to, link, threadId, raw);

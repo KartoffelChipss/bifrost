@@ -256,24 +256,27 @@ const main = async () => {
     const addons = await startAddons(
         addonConfig,
         logger,
-        addonFactories({
-            discordClient,
-            fluxerClientRef,
-            listGuildLinks: () => linkService.getAllGuildLinks(),
-            isChannelLinked: async (id) =>
-                (await linkService.getChannelLinkByDiscordChannelId(id)) !==
-                null,
-            commandPrefix: COMMAND_PREFIX,
-            sequelize,
-            bridge: new UpstreamBridge({
+        addonFactories(
+            {
                 discordClient,
                 fluxerClientRef,
-                linkService,
-                webhookService,
-                discordEntityResolver,
-                fluxerEntityResolver,
-            }),
-        })
+                listGuildLinks: () => linkService.getAllGuildLinks(),
+                isChannelLinked: async (id) =>
+                    (await linkService.getChannelLinkByDiscordChannelId(id)) !==
+                    null,
+                commandPrefix: COMMAND_PREFIX,
+                sequelize,
+                bridge: new UpstreamBridge({
+                    discordClient,
+                    fluxerClientRef,
+                    linkService,
+                    webhookService,
+                    discordEntityResolver,
+                    fluxerEntityResolver,
+                }),
+            },
+            addonConfig
+        )
     );
     if (addons) registerAddonShutdown(addons);
 

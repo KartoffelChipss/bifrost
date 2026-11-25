@@ -21,6 +21,7 @@ const MIGRATIONS = [
     '00002-object-map-applied-fields',
     '00003-settings-admin-approval',
     '00004-threads',
+    '00005-history-identity',
 ];
 
 describe('add-on tables on Postgres', { skip: !url }, () => {
