@@ -115,3 +115,20 @@ export function createView(resolution: Resolution): FidelityView {
         finish: (payload) => finishWith(payload, resolution, pings),
     };
 }
+
+/**
+ * Upstream's formatting with explicit pings, for a copy fidelity could
+ * not resolve. Without them a Fluxer webhook parses every `@everyone`
+ * and `@here` in the text (MessageMentionService.extractMentions defaults
+ * canMentionEveryone to true), so a Discord member who may not mention
+ * everyone could ping a whole Fluxer server.
+ */
+export function plainView(pings: PingSpec): FidelityView {
+    return {
+        ...NO_FIDELITY,
+        finish: (payload) => ({
+            ...payload,
+            fidelity: { ...payload.fidelity, pings },
+        }),
+    };
+}
