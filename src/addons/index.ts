@@ -11,7 +11,7 @@ import { addonDatabaseState, recordAddonDatabaseState } from './state';
 import { createGuildSyncAddon, type GuildSyncDeps } from '../guild-sync';
 import { discordNoticeSender } from '../guild-sync/notifier';
 import { FluxerGuildWriter } from '../guild-sync/writers/fluxer';
-import { createHistoryAddon } from '../history';
+import { createHistoryAddon, editorThreads } from '../history';
 import type { HistoryPorts } from '../history/types';
 import { createIdentityAddon, type IdentityPorts } from '../identity';
 import { createRelayExtras, withRelayExtras } from '../relay-extras';
@@ -102,6 +102,11 @@ export function addonFactories(
                 historyEnabled: config.history,
                 links: deps.bridge,
                 historyPorts: deps.bridge,
+                editorThreads: editorThreads({
+                    listGuildLinks: deps.listGuildLinks,
+                    ports: deps.bridge,
+                    writer: new FluxerGuildWriter(deps.fluxerClientRef),
+                }),
                 sendNotice,
                 commandPrefix: deps.commandPrefix,
             }),

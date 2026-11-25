@@ -387,6 +387,7 @@ async function diffWithMap(
     const historyLocked = historyLocks(source.channels, {
         ready: links?.historyReady,
         never: links?.never ?? new Set(),
+        linked: links?.linked,
         excluded,
     });
     return { rows, members, found, historyLocked };

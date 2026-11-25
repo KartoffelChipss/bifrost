@@ -740,6 +740,7 @@ export function diff(input: DiffInput): DiffResult {
         historyLocked: historyLocks(input.source.channels, {
             ready: input.links?.historyReady,
             never: input.links?.never ?? new Set(),
+            linked: input.links?.linked,
             excluded: input.excluded,
         }),
         everyoneMask: botHeldBits(input.destination) ?? undefined,

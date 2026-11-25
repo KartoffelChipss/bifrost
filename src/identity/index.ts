@@ -20,7 +20,7 @@ import type { LinkedGuild } from '../guild-sync/cycle';
 import { NoticeBoard, type SendNotice } from '../guild-sync/notices';
 import { IDENTITY_LOCK_KEY, PostgresGuildSyncStore } from '../guild-sync/store';
 import { followFluxerClient } from '../guild-sync/threadEvents';
-import { HistoryEditor } from '../history/editor';
+import { HistoryEditor, type EditorThreads } from '../history/editor';
 import { PostgresHistoryStore } from '../history/store';
 import type { HistoryPorts } from '../history/types';
 import type { ChannelLinker } from '../guild-sync/links';
@@ -60,6 +60,8 @@ export interface IdentityDeps {
     readonly historyEnabled: boolean;
     readonly links: ChannelLinker;
     readonly historyPorts: Pick<HistoryPorts, 'editCopy' | 'deleteCopy'>;
+    /** Opens a closed Fluxer thread for a member's edit of a copy in it. */
+    readonly editorThreads?: EditorThreads;
     readonly sendNotice: SendNotice;
     /** Upstream's command prefix. Identity ignores DMs that start with it. */
     readonly commandPrefix: string;
@@ -83,7 +85,8 @@ function flowDeps(
                   editor: new HistoryEditor(
                       historyStore,
                       deps.links,
-                      deps.historyPorts
+                      deps.historyPorts,
+                      deps.editorThreads
                   ),
                   setOptOut: (id, out, now) =>
                       historyStore.setOptOut(id, out, now),

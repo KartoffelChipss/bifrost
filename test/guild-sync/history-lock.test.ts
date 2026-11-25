@@ -62,6 +62,22 @@ describe('posting lock while history imports', () => {
         assert.deepEqual(general()?.overwrites, everyoneLock);
     });
 
+    it('never locks a copy the relay bridges already', async () => {
+        const s = setup(guild());
+        s.useLinks();
+        await s.cycle();
+        await s.cycle();
+        const linker = s.depsFor().links;
+        assert.ok(linker);
+        assert.ok((await linker.linkedDiscordChannels()).has('text'));
+        s.historyReady(new Set());
+        await s.cycle();
+        const general = s.guild.snapshot.channels.find(
+            (c) => c.name === 'general'
+        );
+        assert.deepEqual(general?.overwrites, []);
+    });
+
     it('unlocks the copy once its history is ready', async () => {
         const { s, ready, copy } = gated();
         await s.cycle();
