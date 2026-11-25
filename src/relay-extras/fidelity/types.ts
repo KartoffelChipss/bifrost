@@ -67,6 +67,14 @@ export interface SourceFacts {
     readonly author: SourceAuthor;
     /** The message this one replies to, on the source side. */
     readonly reply: SourceReply | null;
+    readonly stickers: readonly SourceSticker[];
+}
+
+/** A sticker on the source message. */
+export interface SourceSticker {
+    readonly id: string;
+    /** The image URL upstream's transformer attaches for it. */
+    readonly url: string;
 }
 
 /** A source reply: the message it answers, and whether it pinged. */
@@ -109,6 +117,8 @@ export interface FidelityPorts {
         channelId: string,
         messageId: string
     ): Promise<boolean>;
+    /** The IDs of the stickers a server has. */
+    guildStickerIds(side: Side, guildId: string): Promise<ReadonlySet<string>>;
     now(): number;
     readonly logger: AddonLogger;
 }

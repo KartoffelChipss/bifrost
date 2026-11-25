@@ -36,6 +36,7 @@ const FACTS: SourceFacts = {
     pinged: { users: [], roles: [], everyone: false },
     author: { displayName: null, avatarUrl: null },
     reply: { messageId: '301', pinged: false },
+    stickers: [],
 };
 
 function ports() {

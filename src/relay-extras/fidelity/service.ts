@@ -16,6 +16,7 @@ import type {
     TargetMessageRef,
 } from './types';
 import { replyTarget } from './reply';
+import { NO_STICKERS, swapStickers, type StickerSwap } from './stickers';
 import { createView, NO_FIDELITY, type Resolution } from './view';
 
 /** Upper bound on guild links and channels whose maps are cached. */
@@ -36,6 +37,7 @@ export class FidelityService {
     private readonly objects: TtlCache<Directed<ObjectIds>>;
     private readonly accounts: TtlCache<Directed<ReadonlyMap<string, string>>>;
     private readonly channels: TtlCache<string | null>;
+    private readonly targetStickers: TtlCache<ReadonlySet<string>>;
     private lastWarnAt = Number.NEGATIVE_INFINITY;
 
     constructor(private readonly ports: FidelityPorts) {
@@ -45,6 +47,7 @@ export class FidelityService {
         this.objects = cache(MAX_CACHED_LINKS);
         this.accounts = cache(1);
         this.channels = cache(MAX_CACHED_CHANNELS);
+        this.targetStickers = cache(MAX_CACHED_LINKS);
     }
 
     async prepare(facts: SourceFacts): Promise<FidelityView> {
@@ -82,6 +85,7 @@ export class FidelityService {
         const ids = objects[facts.side];
         const channels = await this.channelMap(facts, link.id, ids);
         const replyTo = await this.replyTo(facts, link.id, channels);
+        const stickers = await this.stickers(facts, link, ids.stickers);
         return {
             facts,
             target: otherSide(facts.side),
@@ -92,7 +96,30 @@ export class FidelityService {
             },
             emojis: ids.emojis,
             replyTo,
+            stickers,
         };
+    }
+
+    /** A failed sticker lookup keeps the images, not just the stickers. */
+    private async stickers(
+        facts: SourceFacts,
+        link: GuildLinkRef,
+        synced: ReadonlyMap<string, string>
+    ): Promise<StickerSwap> {
+        const target = otherSide(facts.side);
+        if (target !== 'fluxer' || facts.stickers.length === 0) {
+            return NO_STICKERS;
+        }
+        try {
+            const onTarget = await this.targetStickers.get(
+                link.fluxerGuildId,
+                () => this.ports.guildStickerIds(target, link.fluxerGuildId)
+            );
+            return swapStickers(facts.stickers, synced, onTarget);
+        } catch (error) {
+            this.warn(error);
+            return NO_STICKERS;
+        }
     }
 
     /** A failed reply lookup costs the native reply, not the rest. */

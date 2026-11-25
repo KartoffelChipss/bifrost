@@ -4,11 +4,13 @@ import {
     MessageType,
     type Message as DiscordMessage,
 } from 'discord.js';
+import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
 import type {
     SourceAuthor,
     SourceFacts,
     SourcePings,
     SourceReply,
+    SourceSticker,
 } from './types';
 
 /**
@@ -27,6 +29,7 @@ export type DiscordSource = Pick<
     | 'type'
     | 'flags'
     | 'reference'
+    | 'stickers'
 >;
 
 export type FluxerSource = Pick<
@@ -109,6 +112,14 @@ function discordReply(message: DiscordSource): SourceReply | null {
     };
 }
 
+/** The URL matches DiscordMessageTransformer.buildAttachments. */
+function discordStickers(message: DiscordSource): SourceSticker[] {
+    return [...(message.stickers?.values() ?? [])].map((sticker) => ({
+        id: sticker.id,
+        url: buildDiscordStickerUrl(sticker.id, 160),
+    }));
+}
+
 export function discordFacts(message: DiscordSource): SourceFacts {
     return {
         side: 'discord',
@@ -118,6 +129,7 @@ export function discordFacts(message: DiscordSource): SourceFacts {
         pinged: discordPings(message),
         author: discordAuthor(message),
         reply: discordReply(message),
+        stickers: discordStickers(message),
     };
 }
 
@@ -129,7 +141,9 @@ export function fluxerFacts(message: FluxerSource): SourceFacts {
         content: message.content ?? '',
         pinged: fluxerPings(message),
         author: fluxerAuthor(message),
-        // Discord webhooks cannot reply, so the quote embed stays.
+        // Discord webhooks can neither reply nor send stickers
+        // (RESTPostAPIWebhookWithTokenJSONBody): quote and image stay.
         reply: null,
+        stickers: [],
     };
 }

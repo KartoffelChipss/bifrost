@@ -36,6 +36,18 @@ async function fluxerMessageExists(
     }
 }
 
+/** The sticker IDs of a Fluxer server; only Fluxer copies send stickers. */
+async function fluxerStickerIds(
+    ref: FidelityPortDeps['fluxerClientRef'],
+    guildId: string
+): Promise<ReadonlySet<string>> {
+    const client = ref.current;
+    if (!client?.isReady()) throw new Error('Fluxer gateway is not ready');
+    const guild = await client.guilds.fetch(guildId);
+    const stickers = await guild.fetchStickers();
+    return new Set(stickers.map((sticker) => sticker.id));
+}
+
 /** Fidelity's lookups, on the stores and services the add-ons share. */
 export function fidelityPorts(deps: FidelityPortDeps): FidelityPorts {
     // Read only: listPairs is the identity add-on's own query.
@@ -57,6 +69,10 @@ export function fidelityPorts(deps: FidelityPortDeps): FidelityPorts {
                 channelId,
                 messageId
             )),
+        guildStickerIds: async (side, guildId) =>
+            side === 'fluxer'
+                ? fluxerStickerIds(deps.fluxerClientRef, guildId)
+                : new Set<string>(),
         now: Date.now,
         logger: deps.logger,
     };

@@ -7,6 +7,7 @@ import {
     type MentionMaps,
 } from './mentions';
 import { webhookName } from './profile';
+import type { StickerSwap } from './stickers';
 import type {
     FidelityView,
     PingSpec,
@@ -31,6 +32,7 @@ export interface Resolution {
     readonly emojis: ReadonlyMap<string, string>;
     /** The counterpart a native reply answers, when it can be one. */
     readonly replyTo: TargetMessageRef | null;
+    readonly stickers: StickerSwap;
 }
 
 /** Upstream's behaviour: flat mentions, upstream's payload unchanged. */
@@ -82,8 +84,12 @@ function finishWith(
     pings: PingSpec
 ): WebhookMessageData {
     const { author } = resolution.facts;
+    const { ids, replacedUrls } = resolution.stickers;
     return {
         ...payload,
+        attachments: payload.attachments?.filter(
+            (attachment) => !replacedUrls.has(attachment.url)
+        ),
         username:
             webhookName(author.displayName, resolution.target) ??
             payload.username,
@@ -92,6 +98,7 @@ function finishWith(
             ...payload.fidelity,
             pings,
             ...(resolution.replyTo ? { replyTo: resolution.replyTo } : {}),
+            ...(ids.length > 0 ? { stickerIds: ids } : {}),
         },
     };
 }

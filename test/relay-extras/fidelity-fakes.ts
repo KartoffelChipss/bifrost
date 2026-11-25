@@ -78,6 +78,16 @@ export class FakePorts implements FidelityPorts {
     ]);
     pairs: MessagePair[] = [];
     failObjectMap: Error | null = null;
+    /** Sticker IDs each server has. */
+    stickers = new Map<string, Set<string>>([
+        [LINK.fluxerGuildId, new Set(['241'])],
+    ]);
+
+    async guildStickerIds(side: Side, guildId: string) {
+        this.calls.push(`stickers ${side}:${guildId}`);
+        return this.stickers.get(guildId) ?? new Set<string>();
+    }
+
     /** Target message IDs that were deleted. */
     gone = new Set<string>();
     failExists: Error | null = null;
