@@ -2,6 +2,7 @@ import type { EventEmitter } from 'node:events';
 import {
     Events as FluxerEvents,
     type Client as FluxerClient,
+    type ChannelPinsUpdatePayload,
     type ClientEvents as FluxerClientEvents,
     type MessageReactionAddManyPayload,
     type MessageReactionPayload,
@@ -130,7 +131,7 @@ function discordReactionListeners(relays: Relays, wrap: Wrap): Listener[] {
     ];
 }
 
-function discordPinListener(relays: Relays, wrap: Wrap): Listener {
+function discordPinListeners(relays: Relays, wrap: Wrap): Listener[] {
     const onUpdate = (
         old: Message | PartialMessage,
         next: Message | PartialMessage
@@ -138,11 +139,18 @@ function discordPinListener(relays: Relays, wrap: Wrap): Listener {
         if (!next.guildId || typeof next.pinned !== 'boolean') return;
         return relays.pins.changed('discord', {
             messageId: next.id,
+            channelId: next.channelId,
             pinned: next.pinned,
             previous: old.partial ? null : old.pinned,
         });
     };
-    return onDiscord(Events.MessageUpdate, wrap('pin', onUpdate));
+    // Evidence that an update without a cached old state is a pin change.
+    const onPins = (channel: { readonly id: string }) =>
+        relays.pins.pinsChanged('discord', channel.id);
+    return [
+        onDiscord(Events.MessageUpdate, wrap('pin', onUpdate)),
+        onDiscord(Events.ChannelPinsUpdate, wrap('pin', onPins)),
+    ];
 }
 
 /** Listens on the Discord client. Returns a function that stops it. */
@@ -153,7 +161,7 @@ export function listenToDiscord(
 ): () => void {
     return attach(client, [
         ...discordReactionListeners(relays, wrap),
-        discordPinListener(relays, wrap),
+        ...discordPinListeners(relays, wrap),
     ]);
 }
 
@@ -236,12 +244,13 @@ function fluxerRemoveListeners(relays: Relays, wrap: Wrap): Listener[] {
 /** The part of a Fluxer MessageUpdate message the pin relay reads. */
 interface FluxerUpdated {
     readonly id: string;
+    readonly channelId: string;
     readonly guildId: string | null;
     readonly partial: boolean;
     readonly pinned?: boolean;
 }
 
-function fluxerPinListener(relays: Relays, wrap: Wrap): Listener {
+function fluxerPinListeners(relays: Relays, wrap: Wrap): Listener[] {
     const onUpdate = (
         old: { readonly pinned: boolean } | null,
         next: FluxerUpdated
@@ -254,11 +263,18 @@ function fluxerPinListener(relays: Relays, wrap: Wrap): Listener {
                 : null;
         return relays.pins.changed('fluxer', {
             messageId: next.id,
+            channelId: next.channelId,
             pinned,
             previous: old ? old.pinned : null,
         });
     };
-    return onFluxer(FluxerEvents.MessageUpdate, wrap('pin', onUpdate));
+    // Fluxer sends the channel's pin event before the message update.
+    const onPins = (p: ChannelPinsUpdatePayload) =>
+        relays.pins.pinsChanged('fluxer', p.channelId);
+    return [
+        onFluxer(FluxerEvents.MessageUpdate, wrap('pin', onUpdate)),
+        onFluxer(FluxerEvents.ChannelPinsUpdate, wrap('pin', onPins)),
+    ];
 }
 
 /** Listens on one Fluxer client. Returns a function that stops it. */
@@ -270,6 +286,6 @@ export function listenToFluxer(
     return attach(client, [
         ...fluxerAddListeners(relays, wrap),
         ...fluxerRemoveListeners(relays, wrap),
-        fluxerPinListener(relays, wrap),
+        ...fluxerPinListeners(relays, wrap),
     ]);
 }
