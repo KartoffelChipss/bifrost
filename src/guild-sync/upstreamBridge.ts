@@ -52,6 +52,8 @@ import {
     fluxerThreadWebhook,
 } from './threadWebhook';
 import type { FluxerWebhookSend } from './writers/fluxer';
+import { NO_PINGS } from '../relay-extras/fidelity/view';
+import { withoutNativeReply } from '../relay-extras/fidelity';
 
 /**
  * Connects guild-sync to upstream Bifröst: its channel links, webhooks and
@@ -224,6 +226,14 @@ export class UpstreamBridge
 
     // ---- message formatting
 
+    /** The payload with every ping off (src/relay-extras/fidelity). */
+    private quiet(payload: RelayPayload): RelayPayload {
+        return {
+            ...payload,
+            fidelity: { ...payload.fidelity, pings: NO_PINGS },
+        };
+    }
+
     private async toFluxerPayload(
         message: DiscordMessage,
         guildLinkId: string
@@ -239,9 +249,16 @@ export class UpstreamBridge
         );
         // Every copy posted on Fluxer: a thread reply, an edit, a forum
         // starter or an imported message must not run as a command there.
+        // Fidelity pings what the Discord message pinged; without it,
+        // @everyone pings only when it did on Discord, as before.
+        const pings = payload.fidelity?.pings ?? {
+            ...NO_PINGS,
+            everyone: fluxerAllowedMentions(message).parse.length > 0,
+        };
         return {
             ...payload,
             content: defuseContent(payload.content, this.commandPrefix),
+            fidelity: { ...payload.fidelity, pings },
         };
     }
 
@@ -297,7 +314,10 @@ export class UpstreamBridge
             message,
             guildLink?.id ?? ''
         );
-        return { ...relayed, content: defuseMentions(relayed.content) };
+        return this.quiet({
+            ...relayed,
+            content: defuseMentions(relayed.content),
+        });
     }
 
     private optOuts: ((discordUserId: string) => Promise<boolean>) | null =
@@ -339,14 +359,11 @@ export class UpstreamBridge
         return { client, scoped: discordThreadWebhook(client, threadId) };
     }
 
-    /** `raw` is the Discord message copied: it decides who may be pinged. */
-    private fluxerWebhook(link: LinkedChannel, threadId: string, raw: unknown) {
-        return fluxerThreadWebhook(
-            this.fluxer(),
-            link.fluxerWebhook,
-            { threadId },
-            { allowed_mentions: fluxerAllowedMentions(raw) }
-        );
+    /** Who may be pinged travels in the payload (toFluxerPayload). */
+    private fluxerWebhook(link: LinkedChannel, threadId: string) {
+        return fluxerThreadWebhook(this.fluxer(), link.fluxerWebhook, {
+            threadId,
+        });
     }
 
     async send(
@@ -362,7 +379,7 @@ export class UpstreamBridge
                 link.guildLinkId
             );
             const sent = await webhookService.sendMessageViaFluxerWebhook(
-                this.fluxerWebhook(link, threadId, raw),
+                this.fluxerWebhook(link, threadId),
                 payload
             );
             return sent.messageId;
@@ -393,7 +410,7 @@ export class UpstreamBridge
                 link.guildLinkId
             );
             await webhookService.editMessageViaFluxerWebhook(
-                this.fluxerWebhook(link, threadId, raw),
+                this.fluxerWebhook(link, threadId),
                 messageId,
                 payload
             );
@@ -492,7 +509,11 @@ export class UpstreamBridge
         const message = await this.fluxer()
             .channels.fetchMessage(info.id, info.id)
             .catch(() => null);
-        if (message) return this.toDiscordPayload(message, guildLinkId);
+        if (message) {
+            return this.quiet(
+                await this.toDiscordPayload(message, guildLinkId)
+            );
+        }
         const me = this.up.discordClient.user;
         return {
             content: '*The first message of this post is no longer available.*',
@@ -519,10 +540,13 @@ export class UpstreamBridge
             const tag = forum.availableTags.find((t) => t.name === name);
             return tag ? [tag.id] : [];
         });
+        // A post's first message pings no one, like a Discord starter.
         const payload = starter
-            ? await this.toDiscordPayload(
-                  starter as FluxerMessage,
-                  link.guildLinkId
+            ? this.quiet(
+                  await this.toDiscordPayload(
+                      starter as FluxerMessage,
+                      link.guildLinkId
+                  )
               )
             : await this.fluxerStarter(info, link.guildLinkId);
         const { client } = await this.discordWebhook(link, '');
@@ -664,7 +688,8 @@ export class UpstreamBridge
                   reference: { value: null },
               }) as DiscordMessage)
             : message;
-        return this.toFluxerPayload(source, guildLinkId);
+        // A history copy quotes its reply; a native one could ping.
+        return this.toFluxerPayload(withoutNativeReply(source), guildLinkId);
     }
 
     /** Discord returns at most 50 pins per page. */

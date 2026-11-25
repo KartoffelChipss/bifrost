@@ -12,6 +12,13 @@ import {
 } from 'discord.js';
 import logger from '../utils/logging/logger';
 import WebhookEmbed from './WebhookEmbed';
+// Fork: pings, native replies and stickers (src/relay-extras/fidelity).
+import {
+    discordSendFields,
+    fluxerEditFields,
+    fluxerSendFields,
+} from '../relay-extras/fidelity/send';
+import type { CopyFidelity } from '../relay-extras/fidelity/types';
 
 type DiscordWebhook = WebhookClient;
 
@@ -27,6 +34,7 @@ export type WebhookMessageData = {
     avatarURL: string;
     attachments?: WebhookAttachment[];
     embeds?: WebhookEmbed[];
+    fidelity?: CopyFidelity; // Fork
 };
 
 export class WebhookService {
@@ -114,6 +122,7 @@ export class WebhookService {
                 files,
                 embeds:
                     data.embeds?.map((embed) => embed.toDiscordEmbed()) || [],
+                ...discordSendFields(data.fidelity), // Fork
             });
 
             return { messageId: id };
@@ -142,6 +151,7 @@ export class WebhookService {
                 files,
                 embeds:
                     data.embeds?.map((embed) => embed.toDiscordEmbed()) || [],
+                ...discordSendFields(data.fidelity), // Fork
             });
         } catch (error: unknown) {
             logger.error('Error editing message via Discord webhook:', error);
@@ -253,6 +263,7 @@ export class WebhookService {
                     embeds:
                         data.embeds?.map((embed) => embed.toFluxerEmbed()) ||
                         [],
+                    ...fluxerSendFields(data.fidelity), // Fork
                 },
                 true
             );
@@ -294,6 +305,7 @@ export class WebhookService {
                     embeds:
                         data.embeds?.map((embed) => embed.toFluxerEmbed()) ||
                         [],
+                    ...fluxerEditFields(data.fidelity), // Fork
                 },
                 auth: false,
             });

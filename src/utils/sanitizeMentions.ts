@@ -2,6 +2,9 @@ type MentionResolver = {
     resolveUser: (id: string) => string | null;
     resolveRole: (id: string) => string | null;
     resolveChannel: (id: string) => string | null;
+    // Fork: the other platform's mention for a token, or null to flatten it
+    // (src/relay-extras/fidelity).
+    mapMention?: (token: string) => string | null;
 };
 
 export function sanitizeMentions(
@@ -9,6 +12,9 @@ export function sanitizeMentions(
     resolver: MentionResolver
 ): string {
     return content.replace(/<@!?\d+>|<@&\d+>|<#\d+>/g, (match) => {
+        // Fork: keep a mention that maps to the other platform.
+        const mapped = resolver.mapMention?.(match);
+        if (mapped) return mapped;
         if (
             match.startsWith('<@') &&
             !match.startsWith('<@&') &&

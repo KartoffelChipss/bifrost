@@ -11,6 +11,12 @@ import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
 import { getPollMessage } from '../../utils/pollMessageFormatter';
 import WebhookEmbed, { WebhookEmbedFooter } from '../WebhookEmbed';
 import { GeneralEmoji } from '../../utils/emojis';
+// Fork: mentions, pings, names, replies and stickers (src/relay-extras/fidelity).
+import {
+    discordFidelity,
+    NO_FIDELITY,
+    type FidelityView,
+} from '../../relay-extras/fidelity';
 
 type DiscordMessage = OmitPartialGroupDMChannel<Message<boolean>>;
 
@@ -66,9 +72,11 @@ export default class DiscordMessageTransformer extends MessageTransformer<
     }
 
     private sanitizeContent(
-        message: Pick<DiscordMessage, 'content' | 'client' | 'guild'>
+        message: Pick<DiscordMessage, 'content' | 'client' | 'guild'>,
+        fidelity: FidelityView = NO_FIDELITY // Fork
     ): string {
         return sanitizeMentions(message.content, {
+            mapMention: fidelity.mention, // Fork
             resolveUser: (id) => {
                 const user = message.client.users.cache.get(id);
                 return user ? user.username : null;
@@ -115,9 +123,10 @@ export default class DiscordMessageTransformer extends MessageTransformer<
         message: DiscordMessage,
         fluxerEmojis: GeneralEmoji[] = []
     ): Promise<WebhookMessageData> {
-        const sanitizedContent = this.sanitizeContent(message);
+        const fidelity = await discordFidelity(message); // Fork
+        const sanitizedContent = this.sanitizeContent(message, fidelity);
         const emojiReplacedContent = this.replaceEmojis(
-            sanitizedContent,
+            fidelity.emojis(sanitizedContent, fluxerEmojis), // Fork
             fluxerEmojis
         );
 
@@ -141,19 +150,20 @@ export default class DiscordMessageTransformer extends MessageTransformer<
 
         const embeds: WebhookEmbed[] = this.buildRichEmbeds(message);
 
-        if (message.reference) {
+        // Fork: a native reply on Fluxer replaces the quote embed.
+        if (message.reference && !fidelity.nativeReply) {
             const isForwarded = message.flags.has(MessageFlags.HasSnapshot);
             const referencedMessage = isForwarded
                 ? message.messageSnapshots.first()
                 : await message.fetchReference();
             if (!referencedMessage) {
-                return {
+                return fidelity.finish({
                     content: messageContent,
                     username: message.author.username,
                     avatarURL: message.author.avatarURL() || '',
                     attachments: attachments,
                     embeds,
-                };
+                }); // Fork
             }
 
             if (isForwarded) {
@@ -192,12 +202,12 @@ export default class DiscordMessageTransformer extends MessageTransformer<
             }
         }
 
-        return {
+        return fidelity.finish({
             content: messageContent,
             username: message.author.username,
             avatarURL: message.author.avatarURL() || '',
             attachments: attachments,
             embeds,
-        };
+        }); // Fork
     }
 }
