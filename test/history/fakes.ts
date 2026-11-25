@@ -5,8 +5,10 @@ import type {
     HistoryJob,
     HistoryPorts,
     ImportedMessage,
+    JobKey,
     JobKind,
     JobPatch,
+    JobTotals,
     PayloadOptions,
     SendTarget,
     SourceMessage,
@@ -23,8 +25,63 @@ export class FakeHistoryStore implements HistoryStore {
     threadPairs = new Map<string, string>();
     private seq = 0;
 
+    /** Calls of each listing, by name. */
+    readonly listings = new Map<string, number>();
+
+    private count(name: string) {
+        this.listings.set(name, (this.listings.get(name) ?? 0) + 1);
+    }
+
     async listJobs(guildLinkId: string) {
+        this.count('listJobs');
         return this.jobs.filter((j) => j.guildLinkId === guildLinkId);
+    }
+
+    async listOpenJobs(guildLinkId: string) {
+        this.count('listOpenJobs');
+        return this.jobs.filter(
+            (j) =>
+                j.guildLinkId === guildLinkId &&
+                j.status !== 'done' &&
+                j.status !== 'failed'
+        );
+    }
+
+    async jobKeys(guildLinkId: string): Promise<JobKey[]> {
+        this.count('jobKeys');
+        return this.jobs
+            .filter((j) => j.guildLinkId === guildLinkId)
+            .map(({ id, kind, discordId, fluxerId }) => ({
+                id,
+                kind,
+                discordId,
+                fluxerId,
+            }));
+    }
+
+    async jobTotals(guildLinkId: string): Promise<JobTotals> {
+        const jobs = this.jobs.filter((j) => j.guildLinkId === guildLinkId);
+        return {
+            jobs: jobs.length,
+            open: jobs.filter(
+                (j) => j.status !== 'done' && j.status !== 'failed'
+            ).length,
+            imported: jobs.reduce((sum, j) => sum + j.imported, 0),
+            skipped: jobs.reduce((sum, j) => sum + j.skipped, 0),
+            failed: jobs.filter((j) => j.status === 'failed').length,
+        };
+    }
+
+    async hasWaitingJob(guildLinkId: string, now: Date) {
+        return this.jobs.some(
+            (j) =>
+                j.guildLinkId === guildLinkId &&
+                ((j.kind === 'channel' && j.status === 'ready') ||
+                    (j.status !== 'done' &&
+                        j.status !== 'failed' &&
+                        j.retryAt !== null &&
+                        j.retryAt.getTime() > now.getTime()))
+        );
     }
 
     async getJob(id: string) {
@@ -55,6 +112,7 @@ export class FakeHistoryStore implements HistoryStore {
             retries: 0,
             retryAt: null,
             skipped: 0,
+            skipStreak: 0,
             messageCount: null,
             attachmentCount: null,
             surveyedAt: null,
@@ -168,6 +226,7 @@ export class FakeHistoryStore implements HistoryStore {
                 status: j.cutoffId === null ? 'pending' : 'importing',
                 failures: 0,
                 retries: 0,
+                skipStreak: 0,
                 retryAt: null,
                 lastError: null,
             };

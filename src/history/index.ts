@@ -9,7 +9,7 @@ import type { ChannelLinker } from '../guild-sync/links';
 import { NoticeBoard, type SendNotice } from '../guild-sync/notices';
 import { HISTORY_LOCK_KEY, PostgresGuildSyncStore } from '../guild-sync/store';
 import type { GuildWriter } from '../guild-sync/writers/writer';
-import { HistoryEditor } from './editor';
+import { HistoryEditor, type EditorThreads } from './editor';
 import { listenToDiscordEdits } from './events';
 import { CopyFormatter } from './format';
 import { HistoryImporter, type HistoryMode } from './importer';
@@ -96,6 +96,8 @@ function buildImporter(deps: HistoryDeps, context: AddonContext) {
         inlineMax: deps.inlineMax,
         recordThreadState: threadStateRecorder(sync),
         excluded: deps.excludedChannels,
+        adminChannel: async (id) =>
+            (await sync.loadSettings(id)).adminChannelId,
         commandPrefix: deps.commandPrefix,
         mode: modeOf(sync, context),
         report: async (id, key, text) => {
@@ -114,12 +116,32 @@ function buildImporter(deps: HistoryDeps, context: AddonContext) {
     return { sync, importer };
 }
 
+/** Opens and closes Fluxer threads around edits of copies inside them. */
+export function editorThreads(
+    deps: Pick<HistoryDeps, 'listGuildLinks' | 'ports' | 'writer'>
+): EditorThreads {
+    return {
+        discordState: (id) => deps.ports.threadState(id),
+        setState: async (linkId, threadId, state) => {
+            const links = await deps.listGuildLinks();
+            const link = links.find((l) => l.id === linkId);
+            if (!link) throw new Error(`guild link ${linkId} is gone`);
+            await deps.writer.updateThread(link.fluxerGuildId, threadId, state);
+        },
+    };
+}
+
 /** Mirrors Discord edits and deletes of imported messages. */
 function startMirror(deps: HistoryDeps, context: AddonContext, sync: Sync) {
     const store = new PostgresHistoryStore(deps.sequelize);
     const mirror = new HistoryMirror({
         store,
-        editor: new HistoryEditor(store, deps.links, deps.ports),
+        editor: new HistoryEditor(
+            store,
+            deps.links,
+            deps.ports,
+            editorThreads(deps)
+        ),
         formatter: new CopyFormatter({
             store,
             ports: deps.ports,
@@ -151,10 +173,11 @@ async function importLink(
     importer: HistoryImporter,
     link: LinkedGuild,
     deadline: number,
-    logger: AddonLogger
+    logger: AddonLogger,
+    held: () => Promise<boolean>
 ): Promise<PassResult> {
     try {
-        if (await importer.run(link, deadline))
+        if (await importer.run(link, deadline, held))
             return { more: true, waiting: false };
         return { more: false, waiting: await importer.waiting(link.id) };
     } catch (error) {
@@ -165,12 +188,15 @@ async function importLink(
 
 /**
  * Runs the importer for each guild link until the pass budget is spent,
- * which keeps the leader lock's transaction short.
+ * which keeps the leader lock's transaction short. `held` reports whether
+ * the leader lock is still held; once it is lost, no new work starts, so
+ * two instances never copy at once.
  */
 export async function importLinks(
     deps: Pick<HistoryDeps, 'listGuildLinks'>,
     importer: HistoryImporter,
-    logger: AddonLogger
+    logger: AddonLogger,
+    held: () => Promise<boolean> = async () => true
 ): Promise<PassResult> {
     const deadline = Date.now() + PASS_BUDGET_MS;
     const links = await deps.listGuildLinks();
@@ -178,7 +204,8 @@ export async function importLinks(
     let waiting = false;
     for (const link of links.slice(0, MAX_LINKS_PER_PASS)) {
         if (Date.now() >= deadline) return { more: true, waiting };
-        const result = await importLink(importer, link, deadline, logger);
+        if (!(await held())) return IDLE;
+        const result = await importLink(importer, link, deadline, logger, held);
         more = more || result.more;
         waiting = waiting || result.waiting;
     }
@@ -233,7 +260,13 @@ export function createHistoryAddon(deps: HistoryDeps): Addon {
                     async () => {
                         const locked = await sync.withLeaderLock(
                             holder,
-                            () => importLinks(deps, importer, context.logger),
+                            (held) =>
+                                importLinks(
+                                    deps,
+                                    importer,
+                                    context.logger,
+                                    held
+                                ),
                             HISTORY_LOCK_KEY
                         );
                         return locked.ran ? locked.value : IDLE;

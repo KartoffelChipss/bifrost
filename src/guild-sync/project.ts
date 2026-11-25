@@ -96,6 +96,9 @@ const HISTORY_TYPES: ReadonlySet<number> = new Set([0, 2, 5]);
  * The source channels to lock while history import gates bridging: text,
  * voice and announcement channels not ready yet. Forums (their posts are
  * handled apart), excluded channels and the admin channel never lock.
+ * Nor does a channel the relay bridges already (`linked`): live chat
+ * flows there, and a lock would cut Fluxer off from Discord. History
+ * copies such a channel's past into an archive thread instead.
  */
 export function historyLocks(
     channels: readonly ChannelSnap[],
@@ -103,6 +106,7 @@ export function historyLocks(
         readonly ready?: ReadonlySet<string>;
         readonly never: ReadonlySet<string>;
         readonly excluded?: ReadonlySet<string>;
+        readonly linked?: ReadonlySet<string>;
     }
 ): ReadonlySet<string> {
     const { ready } = gate;
@@ -111,6 +115,7 @@ export function historyLocks(
     for (const c of channels) {
         if (!HISTORY_TYPES.has(c.type) || ready.has(c.id)) continue;
         if (gate.never.has(c.id) || gate.excluded?.has(c.id)) continue;
+        if (gate.linked?.has(c.id)) continue;
         locked.add(c.id);
     }
     return locked;
