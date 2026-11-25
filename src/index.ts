@@ -46,6 +46,10 @@ import sequelize from './db/sequelize';
 import DiscordStatsService from './services/statsService/DiscordStatsService';
 import FluxerStatsService from './services/statsService/FluxerStatsService';
 
+process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled promise rejection:', reason);
+});
+
 const main = async () => {
     // Fork hook: fail startup on bad add-on settings, before anything runs.
     const addonConfig = requireAddonConfig(process.env);
