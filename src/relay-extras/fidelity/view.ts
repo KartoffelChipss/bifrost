@@ -1,4 +1,8 @@
-import type { WebhookMessageData } from '../../services/WebhookService';
+import type WebhookEmbed from '../../services/WebhookEmbed';
+import type {
+    WebhookAttachment,
+    WebhookMessageData,
+} from '../../services/WebhookService';
 import { breakMentions } from '../../utils/sanitizeMentions';
 import {
     breakUnpinged,
@@ -81,15 +85,17 @@ export function copyPings(resolution: Resolution): PingSpec {
 function finishWith(
     payload: WebhookMessageData,
     resolution: Resolution,
-    pings: PingSpec
+    pings: PingSpec,
+    replyQuote: WebhookEmbed | null
 ): WebhookMessageData {
     const { author } = resolution.facts;
     const { ids, replacedUrls } = resolution.stickers;
+    const replaced = (attachment: WebhookAttachment) =>
+        replacedUrls.has(attachment.url);
+    const images = payload.attachments?.filter(replaced) ?? [];
     return {
         ...payload,
-        attachments: payload.attachments?.filter(
-            (attachment) => !replacedUrls.has(attachment.url)
-        ),
+        attachments: payload.attachments?.filter((a) => !replaced(a)),
         username:
             webhookName(author.displayName, resolution.target) ??
             payload.username,
@@ -97,10 +103,23 @@ function finishWith(
         fidelity: {
             ...payload.fidelity,
             pings,
-            ...(resolution.replyTo ? { replyTo: resolution.replyTo } : {}),
-            ...(ids.length > 0 ? { stickerIds: ids } : {}),
+            ...replyFields(resolution.replyTo, replyQuote),
+            ...(ids.length > 0
+                ? { stickerIds: ids, stickerImages: images }
+                : {}),
         },
     };
+}
+
+/** A native reply, with the quote it replaces kept for a fallback. */
+function replyFields(
+    replyTo: TargetMessageRef | null,
+    replyQuote: WebhookEmbed | null
+) {
+    if (!replyTo) return {};
+    return replyQuote
+        ? { replyTo, replyQuote: replyQuote.toPlainObject() }
+        : { replyTo };
 }
 
 /** The view a transformer reads while it builds one copy. */
@@ -112,7 +131,8 @@ export function createView(resolution: Resolution): FidelityView {
             mapEmojis(content, resolution.emojis, targetEmojis),
         breakMentions: (content) => breakUnpinged(content, pings.everyone),
         nativeReply: resolution.replyTo !== null,
-        finish: (payload) => finishWith(payload, resolution, pings),
+        finish: (payload, replyQuote) =>
+            finishWith(payload, resolution, pings, replyQuote ?? null),
     };
 }
 

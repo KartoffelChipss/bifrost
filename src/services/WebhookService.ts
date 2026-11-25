@@ -18,6 +18,14 @@ import {
     fluxerEditFields,
     fluxerSendFields,
 } from '../relay-extras/fidelity/send';
+import {
+    editNeedsCopy,
+    editPayload,
+    MAX_FALLBACKS,
+    rejectedField,
+    repliesNatively,
+    withoutField,
+} from '../relay-extras/fidelity/fallback';
 import type { CopyFidelity } from '../relay-extras/fidelity/types';
 
 type DiscordWebhook = WebhookClient;
@@ -239,57 +247,98 @@ export class WebhookService {
         webhook: FluxerWebhook,
         data: WebhookMessageData
     ): Promise<{ messageId: string }> {
-        try {
-            const msg = await webhook.send(
-                {
-                    content: data.content,
-                    username: data.username,
-                    avatarUrl: data.avatarURL,
-                    files:
-                        data.attachments?.map((attachment) => ({
-                            url: attachment.url,
-                            name: attachment.name,
-                            filename: attachment.name,
-                        })) || [],
-                    attachments:
-                        data.attachments?.map((attachment, index) => ({
-                            id: index,
-                            name: attachment.name,
-                            filename: attachment.name,
-                            flags: attachment.spoiler
-                                ? MessageAttachmentFlags.IS_SPOILER
-                                : undefined,
-                        })) || [],
-                    embeds:
-                        data.embeds?.map((embed) => embed.toFluxerEmbed()) ||
-                        [],
-                    ...fluxerSendFields(data.fidelity), // Fork
-                },
-                true
-            );
+        // Fork: retries without a native reply or sticker Fluxer rejected.
+        const sent = await this.sendCopyViaFluxerWebhook(webhook, data);
+        if (!sent.ok) throw sent.error;
+        return { messageId: sent.messageId };
+    }
 
-            if (!msg) {
-                throw new Error(
-                    'Did not receive message object after sending via Fluxer webhook'
+    /**
+     * Fork: sends a copy, and on a rejection of its native reply or
+     * stickers sends it again with upstream's quote or sticker images
+     * (src/relay-extras/fidelity/fallback.ts). `payload` is the last
+     * payload tried, so a failed send is queued without a rejected field.
+     */
+    async sendCopyViaFluxerWebhook(
+        webhook: FluxerWebhook,
+        data: WebhookMessageData
+    ): Promise<FluxerCopyResult> {
+        let payload = data;
+        for (let attempt = 0; attempt <= MAX_FALLBACKS; attempt++) {
+            try {
+                const messageId = await this.postFluxerCopy(webhook, payload);
+                return { ok: true, messageId, payload };
+            } catch (error: unknown) {
+                const field = rejectedField(error, payload.fidelity);
+                if (!field) {
+                    logger.error(
+                        'Error sending message via Fluxer webhook:',
+                        error
+                    );
+                    return { ok: false, error, payload };
+                }
+                logger.warn(
+                    `Fluxer rejected the copy's ${field}, sending it without: ${String(error)}`
                 );
+                payload = withoutField(payload, field);
             }
-
-            return { messageId: msg.id };
-        } catch (error: unknown) {
-            logger.error('Error sending message via Fluxer webhook:', error);
-            throw error;
         }
+        // Unreachable: each fallback drops one of MAX_FALLBACKS fields.
+        const error = new Error('Fluxer send fallbacks exhausted');
+        return { ok: false, error, payload };
+    }
+
+    private async postFluxerCopy(
+        webhook: FluxerWebhook,
+        data: WebhookMessageData
+    ): Promise<string> {
+        const msg = await webhook.send(
+            {
+                content: data.content,
+                username: data.username,
+                avatarUrl: data.avatarURL,
+                files:
+                    data.attachments?.map((attachment) => ({
+                        url: attachment.url,
+                        name: attachment.name,
+                        filename: attachment.name,
+                    })) || [],
+                attachments:
+                    data.attachments?.map((attachment, index) => ({
+                        id: index,
+                        name: attachment.name,
+                        filename: attachment.name,
+                        flags: attachment.spoiler
+                            ? MessageAttachmentFlags.IS_SPOILER
+                            : undefined,
+                    })) || [],
+                embeds:
+                    data.embeds?.map((embed) => embed.toFluxerEmbed()) || [],
+                ...fluxerSendFields(data.fidelity), // Fork
+            },
+            true
+        );
+
+        if (!msg) {
+            throw new Error(
+                'Did not receive message object after sending via Fluxer webhook'
+            );
+        }
+
+        return msg.id;
     }
 
     async editMessageViaFluxerWebhook(
         webhook: FluxerWebhook,
         messageId: string,
-        data: WebhookMessageData
+        payload: WebhookMessageData
     ): Promise<void> {
         try {
             const route =
                 FluxerRoutes.webhookExecute(webhook.id, webhook.token!) +
                 `/messages/${messageId}`;
+            // Fork: keeps the quote or sticker images the copy was sent with.
+            const data = await this.fluxerEditData(webhook, route, payload);
             await webhook.client.rest.patch(route, {
                 body: {
                     content: data.content,
@@ -314,4 +363,41 @@ export class WebhookService {
             throw error;
         }
     }
+
+    /**
+     * Fork: an edit cannot add or drop a native reply, so a payload that
+     * replies natively asks the copy whether it does. When that fails the
+     * quote stays: a quote too many beats a reply without context.
+     */
+    private async fluxerEditData(
+        webhook: FluxerWebhook,
+        route: string,
+        payload: WebhookMessageData
+    ): Promise<WebhookMessageData> {
+        if (!editNeedsCopy(payload)) return editPayload(payload, false);
+        try {
+            const copy: unknown = await webhook.client.rest.get(route, {
+                auth: false,
+            });
+            return editPayload(payload, repliesNatively(copy));
+        } catch (error: unknown) {
+            logger.warn(
+                `Could not read the Fluxer copy before an edit, keeping the reply quote: ${String(error)}`
+            );
+            return editPayload(payload, false);
+        }
+    }
 }
+
+/** Fork: a Fluxer send and the payload last tried (sendCopyViaFluxerWebhook). */
+export type FluxerCopyResult =
+    | {
+          readonly ok: true;
+          readonly messageId: string;
+          readonly payload: WebhookMessageData;
+      }
+    | {
+          readonly ok: false;
+          readonly error: unknown;
+          readonly payload: WebhookMessageData;
+      };
