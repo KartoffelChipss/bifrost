@@ -28,6 +28,17 @@ function install() {
 
 const users = (...ids: string[]) => new Map(ids.map((id) => [id, {}]));
 
+/** Mentioned roles as discord.js Role objects: id and mentionable. */
+const roles = (mentionable: boolean, ...ids: string[]) =>
+    new Map(ids.map((id) => [id, { id, mentionable }]));
+
+/** A member whose channel permissions grant Mention Everyone or not. */
+const member = (mentionEveryone: boolean) => ({
+    displayName: 'alice',
+    avatarURL: () => null,
+    permissionsIn: () => ({ has: () => mentionEveryone }),
+});
+
 function pinging(fields: Record<string, unknown>) {
     return discordMessage({
         mentions: {
@@ -48,7 +59,7 @@ describe('fidelity pings, Discord to Fluxer', () => {
         const out = await transformer.transformMessage(
             pinging({
                 users: users('101', '102'),
-                roles: users('111', '112'),
+                roles: roles(true, '111', '112'),
             })
         );
         assert.deepEqual(out.fidelity?.pings, {
@@ -57,6 +68,25 @@ describe('fidelity pings, Discord to Fluxer', () => {
             roles: ['211'],
             repliedUser: false,
         });
+    });
+
+    it('does not ping a role mention that could not ping on Discord', async () => {
+        install();
+        const out = await transformer.transformMessage(
+            pinging({ roles: roles(false, '111') })
+        );
+        assert.deepEqual(out.fidelity?.pings?.roles, []);
+    });
+
+    it('pings any mentioned role for an author with Mention Everyone', async () => {
+        install();
+        const message = pinging({ roles: roles(false, '111') });
+        Object.assign(message, { member: member(true) });
+        const out = await transformer.transformMessage(message);
+        assert.deepEqual(out.fidelity?.pings?.roles, ['211']);
+        Object.assign(message, { member: member(false) });
+        const plain = await transformer.transformMessage(message);
+        assert.deepEqual(plain.fidelity?.pings?.roles, []);
     });
 
     it('pings everyone only when the source did', async () => {

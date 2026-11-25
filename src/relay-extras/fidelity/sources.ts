@@ -2,6 +2,7 @@ import type { Message as FluxerMessage } from '@fluxerjs/core';
 import {
     MessageFlags,
     MessageType,
+    PermissionFlagsBits,
     type Message as DiscordMessage,
 } from 'discord.js';
 import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
@@ -49,16 +50,49 @@ const MAX_PINGED = 100;
 
 /**
  * discord.js `mentions` mirrors the API's `mentions`, `mention_roles` and
- * `mention_everyone`: what the message pinged. `everyone` is set only when
- * the author may mention everyone.
+ * `mention_everyone`. `everyone` is set only when the author may mention
+ * everyone. The API documents `mention_roles` only as "roles specifically
+ * mentioned in this message" (Message object), not as roles that pinged.
  */
 function discordPings(message: DiscordSource): SourcePings {
-    const { users, roles, everyone } = message.mentions;
+    const { users, everyone } = message.mentions;
     return {
         users: [...users.keys()].slice(0, MAX_PINGED),
-        roles: [...roles.keys()].slice(0, MAX_PINGED),
+        roles: pingedRoles(message).slice(0, MAX_PINGED),
         everyone: everyone === true,
     };
+}
+
+/**
+ * The mentioned roles that could ping: a role anyone may mention, or any
+ * role when the author has Mention @everyone, @here, and All Roles in the
+ * channel (Discord's role `mentionable` flag and MENTION_EVERYONE
+ * permission). A mention of any other role is plain text on Discord, so
+ * the copy must not ping it either.
+ */
+function pingedRoles(message: DiscordSource): string[] {
+    const roles = [...message.mentions.roles.values()];
+    if (roles.every((role) => role.mentionable)) {
+        return roles.map((role) => role.id);
+    }
+    const anyRole = mayMentionAnyRole(message);
+    return roles
+        .filter((role) => anyRole || role.mentionable)
+        .map((role) => role.id);
+}
+
+/** False when the author's channel permissions are unknown. */
+function mayMentionAnyRole(message: DiscordSource): boolean {
+    const member = message.member;
+    if (!member) return false;
+    try {
+        return member
+            .permissionsIn(message.channelId)
+            .has(PermissionFlagsBits.MentionEveryone);
+    } catch {
+        // permissionsIn throws for a channel not in the cache.
+        return false;
+    }
 }
 
 /** Fluxer's `mentions`, `mentionRoles` and `mentionEveryone` (Message). */
