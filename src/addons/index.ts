@@ -83,6 +83,7 @@ export function addonFactories(
                 links: deps.bridge,
                 historyPorts: deps.bridge,
                 sendNotice,
+                commandPrefix: deps.commandPrefix,
             }),
     };
 }
