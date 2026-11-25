@@ -32,6 +32,34 @@ export const NO_FIDELITY: FidelityView = {
     finish: (payload) => payload,
 };
 
+/** Target IDs of the mapped source IDs, without repeats. */
+function mapIds(
+    ids: readonly string[],
+    map: ReadonlyMap<string, string>
+): string[] {
+    const out = new Set<string>();
+    for (const id of ids) {
+        const target = map.get(id);
+        if (target) out.add(target);
+    }
+    return [...out];
+}
+
+/**
+ * What the copy may ping: exactly what the source pinged, where it maps.
+ * A user who did not link accounts, or a role guild-sync did not sync, is
+ * plain text on the copy and cannot ping.
+ */
+export function copyPings(resolution: Resolution): PingSpec {
+    const { pinged } = resolution.facts;
+    return {
+        everyone: pinged.everyone,
+        users: mapIds(pinged.users, resolution.mentions.users),
+        roles: mapIds(pinged.roles, resolution.mentions.roles),
+        repliedUser: false,
+    };
+}
+
 function finishWith(
     payload: WebhookMessageData,
     pings: PingSpec
@@ -41,7 +69,7 @@ function finishWith(
 
 /** The view a transformer reads while it builds one copy. */
 export function createView(resolution: Resolution): FidelityView {
-    const pings = NO_PINGS;
+    const pings = copyPings(resolution);
     return {
         mention: (token) => mapMentionToken(token, resolution.mentions),
         emojis: (content, targetEmojis) =>

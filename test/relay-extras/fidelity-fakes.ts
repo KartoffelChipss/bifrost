@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Message as FluxerMessage } from '@fluxerjs/core';
 import type { MapRow } from '../../src/guild-sync/ops';
 import type { MessagePair } from '../../src/relay-extras/types';
@@ -195,4 +198,16 @@ export function fluxerMessage(fields: Record<string, unknown> = {}) {
         ...fields,
     };
     return message as unknown as FluxerMessage;
+}
+
+/**
+ * Upstream's WebhookService, loaded after the environment its logger
+ * reads: placeholder tokens and a throwaway log folder.
+ */
+export async function loadWebhookService() {
+    process.env.BF_FLUXER_TOKEN ??= 'test-token';
+    process.env.BF_DISCORD_TOKEN ??= 'test-token';
+    process.env.BF_CONFIG_PATH ??= mkdtempSync(join(tmpdir(), 'bifrost-'));
+    const module = await import('../../src/services/WebhookService');
+    return module.WebhookService;
 }

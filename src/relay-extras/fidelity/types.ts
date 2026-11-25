@@ -42,12 +42,20 @@ export interface CopyFidelity {
     readonly stickerIds?: readonly string[];
 }
 
+/** What the source message really pinged, as source IDs. */
+export interface SourcePings {
+    readonly users: readonly string[];
+    readonly roles: readonly string[];
+    readonly everyone: boolean;
+}
+
 /** The parts of a source message fidelity reads, from either platform. */
 export interface SourceFacts {
     readonly side: Side;
     readonly guildId: string | null;
     readonly channelId: string;
     readonly content: string;
+    readonly pinged: SourcePings;
 }
 
 /** One upstream guild link. */

@@ -1,6 +1,6 @@
 import type { Message as FluxerMessage } from '@fluxerjs/core';
 import type { Message as DiscordMessage } from 'discord.js';
-import type { SourceFacts } from './types';
+import type { SourceFacts, SourcePings } from './types';
 
 /**
  * Reads the facts fidelity needs from a platform message. Pure, so tests
@@ -9,13 +9,44 @@ import type { SourceFacts } from './types';
 
 export type DiscordSource = Pick<
     DiscordMessage,
-    'guildId' | 'channelId' | 'content'
+    'guildId' | 'channelId' | 'content' | 'mentions'
 >;
 
 export type FluxerSource = Pick<
     FluxerMessage,
-    'guildId' | 'channelId' | 'content'
+    | 'guildId'
+    | 'channelId'
+    | 'content'
+    | 'mentions'
+    | 'mentionRoles'
+    | 'mentionEveryone'
 >;
+
+/** Both platforms take at most 100 IDs of each kind; more never ping. */
+const MAX_PINGED = 100;
+
+/**
+ * discord.js `mentions` mirrors the API's `mentions`, `mention_roles` and
+ * `mention_everyone`: what the message pinged. `everyone` is set only when
+ * the author may mention everyone.
+ */
+function discordPings(message: DiscordSource): SourcePings {
+    const { users, roles, everyone } = message.mentions;
+    return {
+        users: [...users.keys()].slice(0, MAX_PINGED),
+        roles: [...roles.keys()].slice(0, MAX_PINGED),
+        everyone: everyone === true,
+    };
+}
+
+/** Fluxer's `mentions`, `mentionRoles` and `mentionEveryone` (Message). */
+function fluxerPings(message: FluxerSource): SourcePings {
+    return {
+        users: (message.mentions ?? []).map((u) => u.id).slice(0, MAX_PINGED),
+        roles: [...(message.mentionRoles ?? [])].slice(0, MAX_PINGED),
+        everyone: message.mentionEveryone === true,
+    };
+}
 
 export function discordFacts(message: DiscordSource): SourceFacts {
     return {
@@ -23,6 +54,7 @@ export function discordFacts(message: DiscordSource): SourceFacts {
         guildId: message.guildId,
         channelId: message.channelId,
         content: message.content ?? '',
+        pinged: discordPings(message),
     };
 }
 
@@ -32,5 +64,6 @@ export function fluxerFacts(message: FluxerSource): SourceFacts {
         guildId: message.guildId,
         channelId: message.channelId,
         content: message.content ?? '',
+        pinged: fluxerPings(message),
     };
 }
