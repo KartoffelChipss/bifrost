@@ -532,8 +532,24 @@ const NO_ASSETS: AssetSource = {
 };
 
 /**
- * Applies a saved plan (design: Cycle step 7). The process mode is read
- * again before every write, so a trip to read-only stops the run.
+ * Why the link may no longer write, from its settings read now, or null.
+ * `sync kill on` or `sync mode dry-run` during a long run stops it at
+ * the next write.
+ */
+async function applyStopped(
+    linkId: string,
+    deps: CycleDeps
+): Promise<string | null> {
+    const settings = await deps.store.loadSettings(linkId);
+    const mode = resolveMode(deps.processMode(), settings, deps.allowApply);
+    if (mode.mode === 'apply') return null;
+    return mode.reason ?? `the link is now in ${mode.mode} mode`;
+}
+
+/**
+ * Applies a saved plan (design: Cycle step 7). The process mode and the
+ * link's settings are read again before every write, so a trip to
+ * read-only, the kill switch or a mode change stops the run.
  */
 async function applySaved(
     plan: Plan,
@@ -573,6 +589,7 @@ async function applySaved(
             links: deps.links,
             threads: deps.threadSources[sourceSide] ?? null,
             canWrite: () => deps.processMode() !== 'read-only',
+            writesStopped: () => applyStopped(plan.guildLinkId, deps),
             stillLeader: deps.stillLeader,
             failures: deps.failures,
             pause: deps.pause,

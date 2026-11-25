@@ -110,6 +110,12 @@ export interface ApplyDeps {
     readonly canWrite: () => boolean;
     /** Checked before every write: false once the leader lock is lost. */
     readonly stillLeader?: () => Promise<boolean>;
+    /**
+     * Checked before every write: why the link's own settings, read again,
+     * no longer allow writes (its kill switch or mode changed during the
+     * run), or null. A failed read stops the run too.
+     */
+    readonly writesStopped?: () => Promise<string | null>;
     /** Ops that keep failing wait out a backoff instead of every cycle. */
     readonly failures?: FailureLedger;
     readonly pause: (ms: number) => Promise<void>;
@@ -1106,9 +1112,22 @@ export function bucketOf(op: PlanOp): string {
     return op.op === 'reorder' ? `reorder:${op.kind}` : op.kind;
 }
 
+/** Why the link's settings, read again, stop the run, or null. */
+async function settingsStop(state: RunState): Promise<string | null> {
+    const { writesStopped } = state.deps;
+    if (!writesStopped) return null;
+    try {
+        return await writesStopped();
+    } catch (error) {
+        return `link settings could not be read again: ${messageOf(error)}`;
+    }
+}
+
 /** Why the run must stop before the next op, or null. */
 async function stopReason(state: RunState): Promise<string | null> {
     if (!state.deps.canWrite()) return 'writes were switched off';
+    const stopped = await settingsStop(state);
+    if (stopped !== null) return stopped;
     if (state.failed >= MAX_FAILURES_PER_CYCLE) {
         return `${state.failed} writes failed`;
     }
