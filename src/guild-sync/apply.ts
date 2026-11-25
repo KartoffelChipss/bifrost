@@ -8,6 +8,7 @@ import type { ChannelLinker, ThreadSource } from './links';
 import type { JsonValue, MapRow, PlanOp } from './ops';
 import { destIdOf, isRemoval } from './ops';
 import type { Plan } from './plan';
+import { MAX_CHANNELS_PER_CATEGORY } from './diff';
 import { ORDER_PENDING } from './order';
 import {
     everyoneHidden,
@@ -126,8 +127,8 @@ interface RunState {
     postponed: number;
     /** Kinds of position-holding objects this run created. */
     readonly created: Set<'role' | 'channel'>;
-    /** The archive category, once found or created in this run. */
-    archiveCategoryId: string | null;
+    /** Channels moved into each archive category this run. */
+    readonly archiveMoves: Map<string, number>;
     /**
      * True while an @everyone update in the plan has not been written.
      * Channel creates wait for it (see everyoneGate).
@@ -146,35 +147,97 @@ function pair(direction: SyncDirection, sourceId: string, destId: string) {
         : { discordId: destId, fluxerId: sourceId };
 }
 
-/** Finds the archive category, or creates it locked for @everyone. */
+/** The applied-fields key that marks a map row as an archive category. */
+export const ARCHIVE_KEY = 'archiveCategory';
+
+/** The archive categories the map records, in number order. */
+function archiveSlots(state: RunState): { id: string; number: number }[] {
+    const { direction } = state.input.plan;
+    const slots: { id: string; number: number }[] = [];
+    for (const row of state.rows) {
+        const number = row.appliedFields?.[ARCHIVE_KEY];
+        const id = destIdOf(row, direction);
+        if (row.kind !== 'category' || row.state !== 'active') continue;
+        if (typeof number === 'number' && id) slots.push({ id, number });
+    }
+    return slots.sort((a, b) => a.number - b.number);
+}
+
+/** Channels in a category now, counting moves made earlier this run. */
+function archiveFill(state: RunState, id: string): number {
+    const { channels } = state.input.destination;
+    const before = channels.filter((c) => c.parentId === id).length;
+    return before + (state.archiveMoves.get(id) ?? 0);
+}
+
+/**
+ * An archive category with room, found only through the map so a user's
+ * own category of the same name is never used. Fluxer holds 50 channels
+ * per category; a full one gets a numbered successor.
+ */
 async function archiveCategory(state: RunState): Promise<string> {
-    if (state.archiveCategoryId) return state.archiveCategoryId;
-    const { destination } = state.input;
-    const existing = destination.channels.find(
-        (c) => c.type === CATEGORY_TYPE && c.name === ARCHIVE_CATEGORY
-    );
-    state.archiveCategoryId =
-        existing?.id ??
-        (await state.deps.writer.createChannel(destination.guildId, {
-            type: CATEGORY_TYPE,
-            name: ARCHIVE_CATEGORY,
-            parentId: null,
-            topic: null,
-            nsfw: false,
-            rateLimitPerUser: 0,
-            bitrate: null,
-            userLimit: null,
-            tags: [],
-            overwrites: [
-                {
-                    id: destination.everyoneRoleId,
-                    type: 0,
-                    allow: '0',
-                    deny: LOCK_BITS.toString(),
-                },
-            ],
-        }));
-    return state.archiveCategoryId;
+    const present = new Set(state.input.destination.channels.map((c) => c.id));
+    const slots = archiveSlots(state);
+    for (const slot of slots) {
+        const exists = present.has(slot.id) || state.archiveMoves.has(slot.id);
+        if (!exists) continue;
+        if (archiveFill(state, slot.id) < MAX_CHANNELS_PER_CATEGORY) {
+            return slot.id;
+        }
+    }
+    const number = slots.reduce((max, s) => Math.max(max, s.number), 0) + 1;
+    return createArchiveCategory(state, number);
+}
+
+/** Creates archive category `number`, locked for @everyone, and owns it. */
+async function createArchiveCategory(
+    state: RunState,
+    number: number
+): Promise<string> {
+    const { destination, plan } = state.input;
+    const name =
+        number === 1 ? ARCHIVE_CATEGORY : `${ARCHIVE_CATEGORY}-${number}`;
+    const id = await state.deps.writer.createChannel(destination.guildId, {
+        type: CATEGORY_TYPE,
+        name,
+        parentId: null,
+        topic: null,
+        nsfw: false,
+        rateLimitPerUser: 0,
+        bitrate: null,
+        userLimit: null,
+        tags: [],
+        overwrites: [
+            {
+                id: destination.everyoneRoleId,
+                type: 0,
+                allow: '0',
+                deny: LOCK_BITS.toString(),
+            },
+        ],
+    });
+    const toFluxer = plan.direction === 'discord-to-fluxer';
+    try {
+        const row = await state.deps.store.insertMapping(
+            {
+                guildLinkId: plan.guildLinkId,
+                kind: 'category',
+                discordId: toFluxer ? null : id,
+                fluxerId: toFluxer ? id : null,
+                createdBySync: true,
+                appliedFields: { [ARCHIVE_KEY]: number, name },
+            },
+            state.deps.now()
+        );
+        state.rows = [...state.rows, row];
+    } catch (error) {
+        throw new OwnershipLostError(
+            `archive category ${id} was created but not recorded`,
+            error
+        );
+    }
+    state.archiveMoves.set(id, 0);
+    return id;
 }
 
 const CATEGORY_TYPE = 4;
@@ -351,10 +414,19 @@ async function perform(
             await writer.updateChannel(guildId, destId, action.patch);
             return null;
         case 'archive-channel': {
-            const patch = action.move
-                ? { ...action.patch, parentId: await archiveCategory(state) }
-                : action.patch;
-            await writer.updateChannel(guildId, destId, patch);
+            if (!action.move) {
+                await writer.updateChannel(guildId, destId, action.patch);
+                return null;
+            }
+            const parentId = await archiveCategory(state);
+            await writer.updateChannel(guildId, destId, {
+                ...action.patch,
+                parentId,
+            });
+            state.archiveMoves.set(
+                parentId,
+                (state.archiveMoves.get(parentId) ?? 0) + 1
+            );
             return null;
         }
         case 'update-guild':
@@ -876,7 +948,7 @@ function newState(input: ApplyInput, deps: ApplyDeps): RunState {
         skipped: [],
         postponed: 0,
         created: new Set(),
-        archiveCategoryId: null,
+        archiveMoves: new Map(),
         everyonePending: [
             ...input.plan.body.ops,
             ...input.plan.body.deferred,

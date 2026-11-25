@@ -135,10 +135,19 @@ const ROLE_NAME_MAX = 100;
 const EMOJI_NAME_MAX = 32;
 const STICKER_NAME_MAX = 30;
 
-const archivedName = (name: string, max: number) =>
-    `[archived] ${name}`.slice(0, max);
+const ARCHIVED_PREFIX = '[archived] ';
+const ARCHIVED_EXPRESSION_PREFIX = 'archived_';
+
+/** The archived name. A name archived before keeps its one prefix. */
+export function archivedName(name: string, max: number): string {
+    if (name.startsWith(ARCHIVED_PREFIX)) return name.slice(0, max);
+    return `${ARCHIVED_PREFIX}${name}`.slice(0, max);
+}
+
 const archivedExpression = (name: string, max: number) =>
-    `archived_${name}`.slice(0, max);
+    name.startsWith(ARCHIVED_EXPRESSION_PREFIX)
+        ? name.slice(0, max)
+        : `${ARCHIVED_EXPRESSION_PREFIX}${name}`.slice(0, max);
 
 /** Adds the lock to @everyone and leaves every other overwrite as it is. */
 export function lockOverwrites(

@@ -39,8 +39,9 @@ type AppliedFields = Readonly<Record<string, JsonValue>>;
 export interface NewMapping {
     readonly guildLinkId: string;
     readonly kind: ObjectKind;
-    readonly discordId: string;
-    readonly fluxerId: string;
+    /** Null on the source side for an object with no source (archive category). */
+    readonly discordId: string | null;
+    readonly fluxerId: string | null;
     /** False for an object that existed before, such as @everyone. */
     readonly createdBySync: boolean;
     readonly appliedFields: AppliedFields;
