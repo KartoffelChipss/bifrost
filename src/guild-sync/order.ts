@@ -24,7 +24,24 @@ export interface OrderPair {
     readonly prevPos: number | null;
     /** Created by the sync and not placed by a reorder yet. */
     readonly pending?: boolean;
+    /**
+     * Sort group inside a category: Fluxer always lists text-like channels
+     * above voice channels there (GuildChannelOrdering.ts), whatever the
+     * positions say. Zero everywhere else.
+     */
+    readonly group?: number;
 }
+
+/** Fluxer's channelLayoutRank: text-like, then voice, then the rest. */
+export function layoutGroup(type: number): number {
+    if (TEXT_LIKE_TYPES.has(type)) return 0;
+    return VOICE_LIKE_TYPES.has(type) ? 1 : 2;
+}
+
+/** Text, announcement, forum and media channels. */
+const TEXT_LIKE_TYPES: ReadonlySet<number> = new Set([0, 5, 15, 16]);
+/** Voice, and stage channels, which Fluxer gets as voice channels. */
+const VOICE_LIKE_TYPES: ReadonlySet<number> = new Set([2, 13]);
 
 interface OrderInput {
     readonly source: GuildSnapshot;
@@ -43,7 +60,12 @@ function sortedDestIds(
     id: (pair: OrderPair) => string
 ): string[] {
     return [...pairs]
-        .sort((a, b) => pos(a) - pos(b) || id(a).localeCompare(id(b)))
+        .sort(
+            (a, b) =>
+                (a.group ?? 0) - (b.group ?? 0) ||
+                pos(a) - pos(b) ||
+                id(a).localeCompare(id(b))
+        )
         .map((pair) => pair.destId);
 }
 
@@ -94,7 +116,8 @@ function pairsFor<T extends { id: string; position: number }>(
     dests: readonly T[],
     previous: readonly T[] | null,
     destIdOf: (item: T) => string | null,
-    isPending: (item: T) => boolean
+    isPending: (item: T) => boolean,
+    groupOf: (item: T) => number = () => 0
 ): OrderPair[] {
     const destById = new Map(dests.map((item) => [item.id, item]));
     const prevById = new Map((previous ?? []).map((item) => [item.id, item]));
@@ -110,6 +133,7 @@ function pairsFor<T extends { id: string; position: number }>(
             destPos: dest.position,
             prevPos: prevById.get(item.id)?.position ?? null,
             pending: isPending(item),
+            group: groupOf(dest),
         });
     }
     return pairs;
@@ -140,6 +164,55 @@ function channelScopes(
     return scopes;
 }
 
+/** Scopes that are not a category: no type grouping applies there. */
+const ROOT_SCOPES: ReadonlySet<string> = new Set(['top', 'categories']);
+
+/**
+ * True when the source lists a voice channel above a text-like one in a
+ * category. Fluxer refuses that order, so the copy keeps text first.
+ */
+function voiceAboveText(channels: readonly ChannelSnap[]): boolean {
+    const sorted = [...channels].sort(
+        (a, b) => a.position - b.position || a.id.localeCompare(b.id)
+    );
+    let voiceSeen = false;
+    for (const channel of sorted) {
+        const group = layoutGroup(channel.type);
+        if (group === 1) voiceSeen = true;
+        else if (group === 0 && voiceSeen) return true;
+    }
+    return false;
+}
+
+function diffChannelScope(
+    input: OrderInput,
+    map: IdMap,
+    scope: string,
+    channels: readonly ChannelSnap[],
+    out: Out
+): void {
+    const kindOf = (c: ChannelSnap) =>
+        channelKind(c.type) === 'category' ? 'category' : 'channel';
+    const grouped = !ROOT_SCOPES.has(scope);
+    const pairs = pairsFor(
+        channels,
+        input.destination.channels,
+        input.previousSource?.channels ?? null,
+        (c) => map.dest(kindOf(c), c.id),
+        (c) => map.applied(kindOf(c), c.id)?.[ORDER_PENDING] === true,
+        (c) => (grouped ? layoutGroup(c.type) : 0)
+    );
+    if (grouped && pairs.length > 1 && voiceAboveText(channels)) {
+        out.findings.push({
+            type: 'skipped',
+            kind: 'channel',
+            id: scope,
+            detail: 'order differs: Fluxer keeps voice channels below text',
+        });
+    }
+    push(out, diffOrder('channel', scope, pairs));
+}
+
 /** Reorder ops for roles and for each channel scope. */
 export function diffOrders(input: OrderInput, map: IdMap, out: Out): void {
     const roles = input.source.roles.filter(
@@ -160,15 +233,6 @@ export function diffOrders(input: OrderInput, map: IdMap, out: Out): void {
         )
     );
     for (const [scope, channels] of channelScopes(input, map)) {
-        const kindOf = (c: ChannelSnap) =>
-            channelKind(c.type) === 'category' ? 'category' : 'channel';
-        const pairs = pairsFor(
-            channels,
-            input.destination.channels,
-            input.previousSource?.channels ?? null,
-            (c) => map.dest(kindOf(c), c.id),
-            (c) => map.applied(kindOf(c), c.id)?.[ORDER_PENDING] === true
-        );
-        push(out, diffOrder('channel', scope, pairs));
+        diffChannelScope(input, map, scope, channels, out);
     }
 }

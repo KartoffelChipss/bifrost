@@ -14,7 +14,9 @@ import {
 } from './project';
 import type { ChannelSnap, GuildSnapshot } from './snapshot';
 import { channelKind } from './snapshot';
+import { layoutGroup } from './order';
 import type {
+    ChannelMove,
     ChannelPatch,
     ChannelSpec,
     EmojiChoice,
@@ -68,7 +70,12 @@ export type WriteAction =
     | { readonly type: 'update-channel'; patch: ChannelPatch; applied: Fields }
     | { readonly type: 'update-guild'; patch: GuildPatch; applied: Fields }
     | { readonly type: 'role-positions'; positions: PositionSpec[] }
-    | { readonly type: 'channel-positions'; positions: PositionSpec[] }
+    | {
+          readonly type: 'channel-positions';
+          moves: ChannelMove[];
+          /** The objects this write places; only their order flag clears. */
+          placed: string[];
+      }
     | { readonly type: 'create-emoji'; name: string; applied: Fields }
     | { readonly type: 'rename-emoji'; name: string; applied: Fields }
     | {
@@ -687,17 +694,83 @@ export function positionsFor(
     return destIds.map((id, i) => ({ id, position: slots[i] }));
 }
 
+/**
+ * The destination channels under one parent, in Fluxer's display order:
+ * by position, and inside a category text-like before voice
+ * (GuildChannelOrdering.ts sortChannelsForOrdering).
+ */
+function siblingsOf(
+    channels: readonly ChannelSnap[],
+    parentId: string | null
+): ChannelSnap[] {
+    const group = (c: ChannelSnap) =>
+        parentId === null ? 0 : layoutGroup(c.type);
+    return channels
+        .filter((c) => (c.parentId ?? null) === parentId)
+        .sort(
+            (a, b) =>
+                group(a) - group(b) ||
+                a.position - b.position ||
+                a.id.localeCompare(b.id)
+        );
+}
+
+/**
+ * Moves that give the listed channels the wanted order among their
+ * siblings. Fluxer applies a list of moves one by one, each relative to a
+ * preceding sibling (ChannelOperationsService.updateChannelPositionsByList),
+ * so global positions do not work. Listed channels take over the slots
+ * they hold now; every other sibling stays where it is. Sent in final
+ * order, each move lands after a channel that already sits where it
+ * should, and inside a category a text-like channel never lands below a
+ * voice channel, so every step passes Fluxer's voice placement check.
+ */
+export function channelMoves(
+    destIds: readonly string[],
+    channels: readonly ChannelSnap[],
+    parentId: string | null
+): { moves: ChannelMove[]; placed: string[] } {
+    const siblings = siblingsOf(channels, parentId);
+    const present = new Set(siblings.map((c) => c.id));
+    const placed = destIds.filter((id) => present.has(id));
+    const listed = new Set(placed);
+    let next = 0;
+    const final = siblings.map((c) =>
+        listed.has(c.id) ? placed[next++] : c.id
+    );
+    const moves: ChannelMove[] = [];
+    final.forEach((id, index) => {
+        if (!listed.has(id)) return;
+        moves.push({ id, precedingId: index === 0 ? null : final[index - 1] });
+    });
+    return { moves, placed };
+}
+
+/** The destination parent a channel scope's objects sit under. */
+function scopeParent(scope: string): string | null {
+    return scope === 'top' || scope === 'categories' ? null : scope;
+}
+
 function reorderAction(op: ReorderOp, ctx: WriteContext): WriteAction {
-    const items =
-        op.kind === 'role' ? ctx.destination.roles : ctx.destination.channels;
+    if (op.kind === 'channel') {
+        const ids = new Set(ctx.destination.channels.map((c) => c.id));
+        if (op.destIds.some((id) => !ids.has(id))) {
+            return skip('an object in the order is gone');
+        }
+        const { moves, placed } = channelMoves(
+            op.destIds,
+            ctx.destination.channels,
+            scopeParent(op.scope)
+        );
+        if (placed.length < 2) return skip('the channels moved elsewhere');
+        return { type: 'channel-positions', moves, placed };
+    }
     const positions = positionsFor(
         op.destIds,
-        new Map(items.map((item) => [item.id, item.position]))
+        new Map(ctx.destination.roles.map((item) => [item.id, item.position]))
     );
     if (!positions) return skip('an object in the order is gone');
-    return op.kind === 'role'
-        ? { type: 'role-positions', positions }
-        : { type: 'channel-positions', positions };
+    return { type: 'role-positions', positions };
 }
 
 /** The write one op needs, or the reason it cannot be applied. */

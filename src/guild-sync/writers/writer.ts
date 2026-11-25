@@ -110,6 +110,15 @@ export interface PositionSpec {
     readonly position: number;
 }
 
+/**
+ * One channel move: the channel goes right after `precedingId` among its
+ * siblings, or first when it is null. The parent does not change.
+ */
+export interface ChannelMove {
+    readonly id: string;
+    readonly precedingId: string | null;
+}
+
 export interface EmojiSpec {
     readonly name: string;
     /** A base64 data URI. */
@@ -145,9 +154,10 @@ export interface GuildWriter {
         channelId: string,
         patch: ChannelPatch
     ): Promise<void>;
+    /** Applies the moves in order, as one request. */
     setChannelPositions(
         guildId: string,
-        positions: readonly PositionSpec[]
+        moves: readonly ChannelMove[]
     ): Promise<void>;
     updateGuild(guildId: string, patch: GuildPatch): Promise<void>;
     /** Returns the new emoji's ID. */

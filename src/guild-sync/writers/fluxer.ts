@@ -12,6 +12,7 @@ import type { RelayPayload } from '../links';
 import { fluxerThreadWebhook } from '../threadWebhook';
 import {
     timedWrite,
+    type ChannelMove,
     type ChannelPatch,
     type ChannelSpec,
     type EmojiChoice,
@@ -318,12 +319,18 @@ export class FluxerGuildWriter implements GuildWriter {
 
     async setChannelPositions(
         guildId: string,
-        positions: readonly PositionSpec[]
+        moves: readonly ChannelMove[]
     ): Promise<void> {
         const guild = await this.guild(guildId);
+        // The library's position helper cannot send preceding_sibling_id,
+        // which Fluxer's ChannelPositionUpdateRequest accepts.
+        const body = moves.map((m) => ({
+            id: m.id,
+            preceding_sibling_id: m.precedingId,
+        }));
         await timedWrite(
             'Fluxer channel positions',
-            guild.setChannelPositions(positions.map((p) => ({ ...p })))
+            guild.client.rest.patch(Routes.guildChannels(guildId), { body })
         );
     }
 

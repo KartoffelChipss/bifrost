@@ -5,7 +5,9 @@ import type {
     GuildSnapshot,
     RoleSnap,
 } from '../../src/guild-sync/snapshot';
+import { layoutGroup } from '../../src/guild-sync/order';
 import type {
+    ChannelMove,
     ChannelPatch,
     ChannelSpec,
     EmojiSpec,
@@ -136,18 +138,53 @@ export class FakeGuild implements GuildReader, GuildWriter {
         this.calls.push(`update channel ${id}`);
     }
 
-    async setChannelPositions(
-        _guild: string,
-        positions: readonly PositionSpec[]
-    ) {
-        const next = new Map(positions.map((p) => [p.id, p.position]));
+    /** Every channel-positions request, as sent. */
+    readonly moves: ChannelMove[][] = [];
+
+    /**
+     * Applies moves one by one like Fluxer: each lands right after its
+     * preceding sibling, and inside a category a voice channel directly
+     * above a text-like one is refused.
+     */
+    async setChannelPositions(_guild: string, moves: readonly ChannelMove[]) {
+        this.moves.push([...moves]);
+        for (const move of moves) this.moveChannel(move);
+        this.calls.push('channel positions');
+    }
+
+    private moveChannel(move: ChannelMove) {
+        const target = this.snapshot.channels.find((c) => c.id === move.id);
+        if (!target) throw new Error('unknown channel');
+        const parent = target.parentId ?? null;
+        const group = (c: ChannelSnap) =>
+            parent === null ? 0 : layoutGroup(c.type);
+        const siblings = this.snapshot.channels
+            .filter((c) => (c.parentId ?? null) === parent && c.id !== move.id)
+            .sort((a, b) => group(a) - group(b) || a.position - b.position);
+        const at =
+            move.precedingId === null
+                ? 0
+                : siblings.findIndex((c) => c.id === move.precedingId) + 1;
+        if (at === 0 && move.precedingId !== null) {
+            throw new Error('preceding sibling is not a sibling');
+        }
+        siblings.splice(at, 0, target);
+        const prev = siblings[at - 1];
+        const next = siblings[at + 1];
+        if (
+            parent !== null &&
+            ((layoutGroup(target.type) === 0 && prev?.type === 2) ||
+                (target.type === 2 && next && layoutGroup(next.type) === 0))
+        ) {
+            throw new Error('VOICE_CHANNELS_CANNOT_BE_ABOVE_TEXT_CHANNELS');
+        }
+        const position = new Map(siblings.map((c, i) => [c.id, i + 1]));
         this.patch({
             channels: this.snapshot.channels.map((c) => ({
                 ...c,
-                position: next.get(c.id) ?? c.position,
+                position: position.get(c.id) ?? c.position,
             })),
         });
-        this.calls.push('channel positions');
     }
 
     async updateGuild(_guild: string, patch: GuildPatch) {

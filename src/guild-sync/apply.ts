@@ -115,7 +115,8 @@ interface RunState {
     map: IdMap;
     applied: number;
     failed: number;
-    readonly failedByKind: Map<PlanOp['kind'], number>;
+    /** Failed writes this cycle, by failure bucket (see bucketOf). */
+    readonly failedByKind: Map<string, number>;
     readonly skipped: { op: PlanOp; reason: string }[];
     postponed: number;
     /** Kinds of position-holding objects this run created. */
@@ -351,7 +352,7 @@ async function perform(
             await writer.setRolePositions(guildId, action.positions);
             return null;
         case 'channel-positions':
-            await writer.setChannelPositions(guildId, action.positions);
+            await writer.setChannelPositions(guildId, action.moves);
             return null;
         case 'rename-emoji':
         case 'archive-emoji':
@@ -461,11 +462,29 @@ async function record(
     if (pending) state.created.add(op.kind === 'role' ? 'role' : 'channel');
 }
 
+/**
+ * A channel that changed parent this run sits elsewhere than the snapshot
+ * says, so channel positions wait for the next cycle's fresh read.
+ */
+function noteMoves(state: RunState, op: PlanOp): void {
+    if (op.op !== 'update' || (op.kind !== 'channel' && op.kind !== 'category'))
+        return;
+    if (op.changes.some((c) => c.field === 'parentId')) {
+        state.created.add('channel');
+    }
+}
+
 /** After a reorder, the objects it placed are no longer pending. */
-async function settleOrder(state: RunState, op: PlanOp): Promise<void> {
+async function settleOrder(
+    state: RunState,
+    op: PlanOp,
+    action: WriteAction
+): Promise<void> {
     if (op.op !== 'reorder') return;
     const kinds = op.kind === 'role' ? ['role'] : ['category', 'channel'];
-    for (const destId of op.destIds) {
+    const placed =
+        action.type === 'channel-positions' ? action.placed : op.destIds;
+    for (const destId of placed) {
         const row = state.rows.find(
             (r) =>
                 kinds.includes(r.kind) &&
@@ -627,8 +646,9 @@ async function recordWrite(
     if ('applied' in action) {
         await record(state, op, action.applied, result.newId);
     }
+    noteMoves(state, op);
     await recordRemoval(state, op, result.gone || action.type === 'gone');
-    await settleOrder(state, op);
+    await settleOrder(state, op, action);
     const next = 'followUp' in action ? action.followUp : null;
     if (next && result.newId) {
         await state.deps.pause(UPDATE_WRITE_MS);
@@ -721,6 +741,14 @@ async function recordBaselines(state: RunState): Promise<void> {
     }
 }
 
+/**
+ * The failure cap bucket of an op. Reorders count apart from the other
+ * writes of their kind, so a refused reorder cannot hold up links.
+ */
+export function bucketOf(op: PlanOp): string {
+    return op.op === 'reorder' ? `reorder:${op.kind}` : op.kind;
+}
+
 /** Why the run must stop before the next op, or null. */
 async function stopReason(state: RunState): Promise<string | null> {
     if (!state.deps.canWrite()) return 'writes were switched off';
@@ -770,11 +798,12 @@ export async function applyPlan(
     for (const op of input.plan.body.ops) {
         stopped = await stopReason(state);
         if (stopped !== null) break;
-        const kindFailures = state.failedByKind.get(op.kind) ?? 0;
+        const bucket = bucketOf(op);
+        const kindFailures = state.failedByKind.get(bucket) ?? 0;
         if (kindFailures >= MAX_FAILURES_PER_KIND) {
             state.skipped.push({
                 op,
-                reason: `${kindFailures} ${op.kind} writes failed this cycle`,
+                reason: `${kindFailures} ${bucket} writes failed this cycle`,
             });
             continue;
         }
@@ -782,7 +811,7 @@ export async function applyPlan(
         if (outcome === 'written') state.applied += 1;
         else if (outcome === 'failed') {
             state.failed += 1;
-            state.failedByKind.set(op.kind, kindFailures + 1);
+            state.failedByKind.set(bucket, kindFailures + 1);
         }
     }
     if (stopped === null && state.failed === 0) await recordBaselines(state);
