@@ -48,6 +48,7 @@ const startDiscordClient = async ({
     fluxerStatsService,
     dbStatsService,
     extraIntents = [],
+    extraPartials = [],
     extraCommands = {},
 }: {
     linkService: LinkService;
@@ -62,6 +63,8 @@ const startDiscordClient = async ({
     dbStatsService: DbStatsService;
     // Fork hook: intents the enabled add-ons need (src/addons/intents.ts).
     extraIntents?: GatewayIntentBits[];
+    // Fork hook: partials the enabled add-ons need (src/addons/intents.ts).
+    extraPartials?: Partials[];
     // Fork hook: commands the enabled add-ons add (src/addons/commands.ts).
     extraCommands?: Readonly<
         Record<string, (client: Client) => DiscordCommandHandler>
@@ -74,7 +77,7 @@ const startDiscordClient = async ({
             GatewayIntentBits.MessageContent,
             ...extraIntents,
         ],
-        partials: [Partials.Message, Partials.Channel],
+        partials: [Partials.Message, Partials.Channel, ...extraPartials],
         presence: {
             status: 'online',
             activities: [

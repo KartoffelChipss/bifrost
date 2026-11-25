@@ -8,9 +8,11 @@ import { FluxerGuildWriter } from '../guild-sync/writers/fluxer';
 import { createHistoryAddon } from '../history';
 import type { HistoryPorts } from '../history/types';
 import { createIdentityAddon, type IdentityPorts } from '../identity';
+import { createRelayExtras, withRelayExtras } from '../relay-extras';
+import type { RelayLookupPorts } from '../relay-extras/types';
 
 export { requireAddonConfig } from './config';
-export { addonDiscordIntents } from './intents';
+export { addonDiscordIntents, addonDiscordPartials } from './intents';
 export { initAddonDatabase } from './db/migrator';
 
 export interface AddonsHandle {
@@ -22,7 +24,10 @@ export type AddonDeps = Omit<
     GuildSyncDeps,
     'historyEnabled' | 'bridge' | 'excludedChannels'
 > & {
-    readonly bridge: GuildSyncDeps['bridge'] & HistoryPorts & IdentityPorts;
+    readonly bridge: GuildSyncDeps['bridge'] &
+        HistoryPorts &
+        IdentityPorts &
+        RelayLookupPorts;
 };
 
 /** Add-on implementations, each built only when it is switched on. */
@@ -35,12 +40,21 @@ export function addonFactories(
         deps.isChannelLinked
     );
     return {
+        // Live reactions and pins start and stop with guild-sync.
         guildSync: () =>
-            createGuildSyncAddon({
-                ...deps,
-                historyEnabled: config.history,
-                excludedChannels: config.excludedChannels,
-            }),
+            withRelayExtras(
+                createGuildSyncAddon({
+                    ...deps,
+                    historyEnabled: config.history,
+                    excludedChannels: config.excludedChannels,
+                }),
+                createRelayExtras({
+                    discordClient: deps.discordClient,
+                    fluxerClientRef: deps.fluxerClientRef,
+                    sequelize: deps.sequelize,
+                    lookups: deps.bridge,
+                })
+            ),
         history: () =>
             createHistoryAddon({
                 sequelize: deps.sequelize,
