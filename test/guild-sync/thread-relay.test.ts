@@ -616,10 +616,12 @@ describe('thread webhooks', () => {
             body: { content: 'hi' },
         });
         await webhook.client.rest.patch('/webhooks/w1/secret/messages/m1', {});
+        await webhook.client.rest.get('/webhooks/w1/secret/messages/m1', {});
         assert.deepEqual(
             calls.map((c) => c.route),
             [
                 '/webhooks/w1/secret?wait=true&thread_id=t%201',
+                '/webhooks/w1/secret/messages/m1?thread_id=t%201',
                 '/webhooks/w1/secret/messages/m1?thread_id=t%201',
             ]
         );

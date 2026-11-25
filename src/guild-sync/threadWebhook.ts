@@ -82,7 +82,11 @@ export function fluxerThreadWebhook(
             if (property === 'post' || property === 'patch') {
                 return aim(bound, true);
             }
-            return property === 'delete' ? aim(bound, false) : value;
+            // Fluxer reads `thread_id` on a webhook message's GET too
+            // (WebhookController.ts), which an edit uses to read the copy.
+            return property === 'delete' || property === 'get'
+                ? aim(bound, false)
+                : value;
         },
     });
     const scoped = Object.create(client, { rest: { value: rest } }) as Client;
