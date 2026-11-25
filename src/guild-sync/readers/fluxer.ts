@@ -68,6 +68,8 @@ interface OptionalChannelFields {
 }
 
 const FORUM_TYPE = 15;
+/** Forum and media channels: their threads are posts, never private. */
+const THREAD_ONLY_TYPES: ReadonlySet<number> = new Set([FORUM_TYPE, 16]);
 const PRIVATE_THREAD = 12;
 /** The forum-post pinned flag, the same bit on both platforms. */
 const PINNED_FLAG = 1 << 1;
@@ -158,19 +160,29 @@ function fluxerThread(
     };
 }
 
-/** Archived private threads; the bot is an administrator on Fluxer. */
-async function archivedPrivate(parent: GuildChannel): Promise<ThreadChannel[]> {
+/**
+ * Archived private threads, paged like public ones. A refusal or a list
+ * longer than MAX_ARCHIVE_PAGES is reported, not thrown.
+ */
+async function archivedPrivate(
+    parent: GuildChannel
+): Promise<{ threads: ThreadChannel[]; readable: boolean }> {
     const manager = (parent as GuildChannel & OptionalChannelFields).threads;
-    if (!manager || Number(parent.type) === FORUM_TYPE) return [];
-    const result = await manager
-        .fetchArchived({ type: 'private', limit: 100 })
-        .catch(() => ({ threads: [] as ThreadChannel[] }));
-    return result.threads;
+    if (!manager || THREAD_ONLY_TYPES.has(Number(parent.type))) {
+        return { threads: [], readable: true };
+    }
+    try {
+        const result = await archivedThreads(parent, 'private');
+        return { threads: result.threads, readable: result.complete };
+    } catch {
+        return { threads: [], readable: false };
+    }
 }
 
 /** `complete` is false when more pages remain after MAX_ARCHIVE_PAGES. */
 async function archivedThreads(
-    parent: GuildChannel
+    parent: GuildChannel,
+    type: 'public' | 'private' = 'public'
 ): Promise<{ threads: ThreadChannel[]; complete: boolean }> {
     const manager = (parent as GuildChannel & OptionalChannelFields).threads;
     if (!manager) return { threads: [], complete: true };
@@ -178,7 +190,7 @@ async function archivedThreads(
     let before: string | undefined;
     for (let page = 0; page < MAX_ARCHIVE_PAGES; page++) {
         const result = await manager.fetchArchived({
-            type: 'public',
+            type,
             limit: 100,
             before,
         });
@@ -196,7 +208,7 @@ async function archivedThreads(
 async function readThreads(
     guild: Guild,
     channels: readonly GuildChannel[]
-): Promise<{ threads: ThreadSnap[]; gaps: string[] }> {
+): Promise<{ threads: ThreadSnap[]; gaps: string[]; privateGaps: string[] }> {
     const tagNames = new Map<string, string>();
     for (const channel of channels) {
         const tags = (channel as GuildChannel & OptionalChannelFields)
@@ -207,6 +219,7 @@ async function readThreads(
     const active = await guild.fetchActiveThreads();
     for (const thread of active.threads) all.set(thread.id, thread);
     const gaps: string[] = [];
+    const privateGaps: string[] = [];
     for (const parent of channels) {
         if (!THREAD_PARENT_TYPES.has(Number(parent.type))) continue;
         try {
@@ -216,14 +229,14 @@ async function readThreads(
         } catch {
             gaps.push(parent.id);
         }
-        for (const thread of await archivedPrivate(parent)) {
-            all.set(thread.id, thread);
-        }
+        const hidden = await archivedPrivate(parent);
+        for (const thread of hidden.threads) all.set(thread.id, thread);
+        if (!hidden.readable) privateGaps.push(parent.id);
     }
     const threads = [...all.values()]
         .filter((t) => SYNCED_THREAD_TYPES.has(Number(t.type)) && t.parentId)
         .map((t) => fluxerThread(t, tagNames));
-    return { threads, gaps };
+    return { threads, gaps, privateGaps };
 }
 
 export function fluxerRole(r: Role): RoleSnap {
@@ -273,7 +286,7 @@ async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
         guild.fetchStickers(),
         guild.fetchMe(),
     ]);
-    const { threads, gaps } = await readThreads(guild, channels);
+    const { threads, gaps, privateGaps } = await readThreads(guild, channels);
     return {
         side: 'fluxer',
         guildId: guild.id,
@@ -287,6 +300,7 @@ async function snapshotOf(guild: Guild): Promise<GuildSnapshot> {
         stickers: stickers.map(fluxerSticker),
         threads,
         threadGaps: gaps,
+        privateThreadGaps: privateGaps,
         settings: settingsOf(guild),
         features: [...(guild.features ?? [])],
         bot: {
