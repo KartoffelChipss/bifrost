@@ -8,6 +8,7 @@ import { WebhookAttachment, WebhookMessageData } from '../WebhookService';
 import MessageTransformer from './MessageTransformer';
 import { sanitizeMentions } from '../../utils/sanitizeMentions';
 import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
+import { fluxerFilename } from '../fluxerFiles'; // Fork
 import { getPollMessage } from '../../utils/pollMessageFormatter';
 import WebhookEmbed, { WebhookEmbedFooter } from '../WebhookEmbed';
 import { GeneralEmoji } from '../../utils/emojis';
@@ -58,7 +59,8 @@ export default class DiscordMessageTransformer extends MessageTransformer<
         const attachments: WebhookAttachment[] =
             source.attachments?.map((attachment) => ({
                 url: attachment.url,
-                name: attachment.name || 'attachment',
+                // Fork: Fluxer refuses names over 255 characters.
+                name: fluxerFilename(attachment.name),
                 spoiler: attachment.spoiler,
                 size: attachment.size,
             })) ?? [];

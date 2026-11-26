@@ -15,6 +15,36 @@
 export const FLUXER_MAX_FILE_BYTES = 50 * 1024 * 1024;
 /** Time allowed to download one file from Discord. */
 export const FILE_DOWNLOAD_TIMEOUT_MS = 120_000;
+/**
+ * Fluxer's filename limit, counted in UTF-16 code units (FilenameType in
+ * fluxer packages/schema/src/primitives/FileValidators.ts). A longer name
+ * fails the whole send with FILENAME_LENGTH_INVALID; Discord files can
+ * have longer names.
+ */
+export const FLUXER_MAX_FILENAME_LENGTH = 255;
+/** The ending kept as an extension when a name is shortened. */
+const EXTENSION = /\.[^.]{1,16}$/;
+
+/**
+ * A filename Fluxer accepts: an empty name becomes "attachment", and one
+ * over FLUXER_MAX_FILENAME_LENGTH is cut short, keeping its extension and
+ * whole characters.
+ */
+export function fluxerFilename(name: string): string {
+    if (name.length === 0) return 'attachment';
+    if (name.length <= FLUXER_MAX_FILENAME_LENGTH) return name;
+    const extension = EXTENSION.exec(name)?.[0] ?? '';
+    const budget = FLUXER_MAX_FILENAME_LENGTH - extension.length;
+    let stem = '';
+    // Bounded by the name's length: one step per code point.
+    for (const char of name.slice(0, name.length - extension.length)) {
+        if (stem.length + char.length > budget) break;
+        stem += char;
+    }
+    const shortened = stem + extension;
+    return shortened.length > 0 ? shortened : 'attachment';
+}
+
 /** Fluxer's message content limit (MAX_CONTENT_LENGTH in history). */
 const MAX_CONTENT_LENGTH = 4_000;
 
