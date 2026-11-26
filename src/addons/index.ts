@@ -129,6 +129,9 @@ export async function startAddons(
         logger.info('[addons] Add-ons are disabled');
         return null;
     }
+    // Settings that are only warnings while add-ons are on, such as a bad
+    // BF_ADDONS_RESET_USER_ID, which leaves its one command off.
+    for (const warning of config.warnings) logger.warn(`[addons] ${warning}`);
     if (addonDatabaseState() === 'failed') {
         logger.error(
             '[addons] Add-ons are off because their migrations failed. The relay keeps running.'
