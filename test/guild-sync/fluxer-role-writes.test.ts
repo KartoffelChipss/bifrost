@@ -221,3 +221,35 @@ describe('Fluxer edits of archived threads', () => {
         ]);
     });
 });
+
+describe('archiving an archived thread with a lock', () => {
+    it('unlocks nothing and leaves the thread archived and locked', async () => {
+        const edits: Record<string, unknown>[] = [];
+        const thread = Object.assign(Object.create(ThreadChannel.prototype), {
+            archived: true,
+            flags: 0,
+            parentId: null,
+            edit: async (options: Record<string, unknown>) => {
+                edits.push(options);
+                return thread;
+            },
+        });
+        const channels = { fetch: async () => thread };
+        const client = {
+            isReady: () => true,
+            guilds: {
+                fetch: async () => ({ id: 'g1', client: { channels } }),
+            },
+            channels,
+        } as unknown as Client;
+        await new FluxerGuildWriter({ current: client }).updateThread(
+            'g1',
+            't1',
+            { archived: true, locked: true }
+        );
+        assert.deepEqual(edits, [
+            { archived: false, locked: true },
+            { archived: true },
+        ]);
+    });
+});
