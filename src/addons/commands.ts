@@ -8,6 +8,8 @@ import type { LinkedGuild } from '../guild-sync/cycle';
 import { PostgresHistoryStore } from '../history/store';
 import { PostgresGuildSyncStore } from '../guild-sync/store';
 import type { StatusSignal } from '../guild-sync/statusSignal';
+import { PendingResets } from '../guild-sync/threadReset';
+import type { ThreadResetLauncher } from '../guild-sync/threadResetJob';
 import { EmbedColors } from '../utils/embeds';
 import type { AddonConfig } from './config';
 import type { AddonDatabaseState } from './db/migrator';
@@ -25,6 +27,8 @@ export interface AddonCommandDeps {
     readonly isChannelLinked: (discordChannelId: string) => Promise<boolean>;
     /** Asks guild-sync to update a link's status message after a change. */
     readonly statusSignal?: StatusSignal;
+    /** Starts `sync reset-threads` in guild-sync, once it runs. */
+    readonly threadReset?: ThreadResetLauncher;
 }
 
 export const ADDONS_OFF_REPLY =
@@ -62,6 +66,14 @@ export function addonDiscordCommands(
     }
     const store = new PostgresGuildSyncStore(deps.sequelize);
     const history = new PostgresHistoryStore(deps.sequelize);
+    const threadReset = deps.threadReset
+        ? {
+              pending: new PendingResets(),
+              launcher: deps.threadReset,
+              allowApply: config.allowApply,
+              userId: config.resetUserId ?? null,
+          }
+        : undefined;
     return {
         sync: (client) =>
             new SyncDiscordCommandHandler(client, {
@@ -74,6 +86,7 @@ export function addonDiscordCommands(
                 retryHistory: config.history
                     ? (linkId, now) => history.retryFailed(linkId, now)
                     : undefined,
+                threadReset,
                 now: () => new Date(),
             }),
     };

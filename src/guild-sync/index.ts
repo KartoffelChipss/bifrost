@@ -34,6 +34,7 @@ import {
     listenToFluxerThreads,
 } from './threadEvents';
 import { ThreadRelay, type ThreadRelayPorts } from './threadRelay';
+import { ThreadResetRunner, type ThreadResetPort } from './threadResetJob';
 import { FluxerGuildWriter, type FluxerWebhookSend } from './writers/fluxer';
 
 export const ADDON_NAME = 'guild-sync';
@@ -82,6 +83,8 @@ export interface GuildSyncDeps {
     readonly identityEnabled?: boolean;
     /** History passes and admin commands ask for a status update here. */
     readonly statusSignal?: StatusSignal;
+    /** `sync reset-threads` reaches guild-sync's reset runner here. */
+    readonly threadReset?: ThreadResetPort;
 }
 
 /** Linked accounts, Discord user ID to Fluxer user ID. */
@@ -383,6 +386,44 @@ function startThreadRelay(
 }
 
 /**
+ * Attaches the runner for `sync reset-threads`. Returns its stop function.
+ * `after` hears when a reset ended, for the status and the next cycle.
+ */
+function startThreadResets(
+    deps: GuildSyncDeps,
+    context: AddonContext,
+    cycleDeps: CycleDeps,
+    holder: string,
+    after: (guildLinkId: string) => void
+): () => Promise<void> {
+    const writer = cycleDeps.writers.fluxer;
+    if (!deps.threadReset || !writer) return async () => {};
+    const runner = new ThreadResetRunner({
+        store: cycleDeps.store,
+        writer,
+        notices: cycleDeps.notices,
+        processMode: cycleDeps.processMode,
+        allowApply: cycleDeps.allowApply,
+        holder: `${holder}:thread-reset`,
+        isolate: (run) => context.boundary.run(ADDON_NAME, 'thread-reset', run),
+        changed: after,
+        pause,
+        now: cycleDeps.now,
+        newId: cycleDeps.newId,
+        logger: context.logger,
+    });
+    const detach = deps.threadReset.attach(runner);
+    return async () => {
+        detach();
+        if (!(await runner.stop())) {
+            context.logger.warn(
+                '[guild-sync] A thread reset was still running; it stops after its current thread'
+            );
+        }
+    };
+}
+
+/**
  * The guild-sync add-on. Every cycle saves a plan and logs its summary. A
  * plan is applied only when the environment allows apply and an admin set
  * the link to apply. Structure is written only to Fluxer. Messages inside
@@ -394,6 +435,7 @@ export function createGuildSyncAddon(deps: GuildSyncDeps): Addon {
     let stopRelay: (() => Promise<void>) | null = null;
     let status: StatusBoard | null = null;
     let stopListening: (() => void) | null = null;
+    let stopResets: (() => Promise<void>) | null = null;
 
     return {
         name: ADDON_NAME,
@@ -440,6 +482,16 @@ export function createGuildSyncAddon(deps: GuildSyncDeps): Addon {
                 );
                 if (result.ok && result.value) active.notify();
             }, DEFAULT_SCHEDULE);
+            stopResets = startThreadResets(
+                deps,
+                context,
+                cycleDeps,
+                holder,
+                (id) => {
+                    board.request(id);
+                    active.notify();
+                }
+            );
             listener = context.boundary.handler(ADDON_NAME, 'event', () =>
                 active.notify()
             );
@@ -458,10 +510,13 @@ export function createGuildSyncAddon(deps: GuildSyncDeps): Addon {
             stopListening = null;
             const relayStopped = stopRelay?.();
             stopRelay = null;
+            const resetsStopped = stopResets?.();
+            stopResets = null;
             // All wait together, within the host's stop deadline. The
             // status board clears its timers at once.
             await Promise.all([
                 relayStopped,
+                resetsStopped,
                 scheduler?.stop(),
                 status?.stop(),
             ]);
