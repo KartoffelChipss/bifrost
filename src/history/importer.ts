@@ -52,12 +52,25 @@ export const MAX_CATCH_UPS = 2;
 /**
  * Runs in a row with a lasting error (such as a 4xx) before the message
  * at fault is skipped, or the job fails when no message is at fault.
- * Temporary errors never count.
+ * The count starts over when the error is about something else: another
+ * message, or the target instead of a message (failingId).
  */
 export const MAX_FAILURES = 5;
 /**
+ * Temporary errors in a row on one message before each further one counts
+ * as a lasting error: a message Fluxer always answers 5xx for would
+ * otherwise hold the job, and its channel, forever. With the wait capped
+ * at RETRY_MAX_MS this is a few hours. A temporary error about the target,
+ * such as a failed read, is retried without bound: it stops every message
+ * alike, and passes once the service is back.
+ */
+export const MAX_RETRIES = 20;
+/** What a job's error counts are about when no single message is. */
+export const TARGET_FAULT = 'target';
+/**
  * Messages skipped in a row before the job fails: so many failing at
- * once points at the target, not at the messages.
+ * once points at the target, not at the messages. The same bound holds
+ * across a link's jobs, so many small jobs cannot each skip a few.
  */
 export const MAX_SKIP_STREAK = 10;
 /** First wait after an error; it doubles per error in a row, up to the max. */
@@ -232,6 +245,33 @@ const ADMIN_SKIPPED = 'skipped: the admin channel is never imported';
 
 /** Stops a run cleanly when writes are switched off mid-way. */
 class StoppedError extends Error {}
+
+/** The message an error is about, or TARGET_FAULT. */
+function faultOf(error: unknown): string {
+    return error instanceof MessageError ? error.messageId : TARGET_FAULT;
+}
+
+/** A job's error counts and what they are about. */
+interface ErrorCounts {
+    readonly failingId: string;
+    readonly failures: number;
+    readonly retries: number;
+}
+
+/** The job's counts so far for this fault; another fault starts over. */
+function countsFor(job: HistoryJob, fault: string): ErrorCounts {
+    return job.failingId === fault
+        ? { failingId: fault, failures: job.failures, retries: job.retries }
+        : { failingId: fault, failures: 0, retries: 0 };
+}
+
+/**
+ * True when every message the job tried was skipped: likely the target's
+ * fault, so the job must not finish as if it were copied.
+ */
+function allSkipped(job: HistoryJob): boolean {
+    return job.skipStreak > 0 && job.imported === 0;
+}
 
 export class HistoryImporter {
     private readonly formatter: CopyFormatter;
@@ -455,10 +495,12 @@ export class HistoryImporter {
     /**
      * An archive thread's history goes on through the import webhook. A
      * finished one waits as ready until its channel is bridged, then
-     * copies up to the link (finishArchive).
+     * copies up to the link (finishArchive). A pending one starts again
+     * and reuses its thread (ArchiveThreads).
      */
     private async archiveRunnable(job: HistoryJob): Promise<HistoryJob | null> {
-        if (job.status === 'importing') return job;
+        // A pending job has a thread when a step after making it failed.
+        if (job.status === 'importing' || job.status === 'pending') return job;
         if (job.status !== 'ready') return null;
         const bridged = await this.deps.links.byDiscordChannel(job.discordId);
         return bridged ? job : null;
@@ -519,23 +561,32 @@ export class HistoryImporter {
     }
 
     /**
-     * A temporary error waits and retries without counting. A lasting one
-     * counts; at MAX_FAILURES the message at fault is skipped, or the job
-     * fails when no single message is at fault, such as when the webhook
-     * or channel is gone or the bot lost access (isTargetError).
+     * A temporary error waits and retries, up to MAX_RETRIES on one
+     * message. A lasting one counts; at MAX_FAILURES the message at fault
+     * is skipped, or the job fails when no single message is at fault,
+     * such as when the webhook or channel is gone or the bot lost access
+     * (isTargetError). Counts are kept per fault (countsFor).
      */
     private async onError(link: LinkedGuild, job: HistoryJob, error: unknown) {
         const detail = describeError(error);
         this.deps.logger.warn(
             `[history] ${job.kind} ${job.discordId}: ${detail}`
         );
-        if (isTransient(error)) return this.retryLater(job, detail);
-        const failures = job.failures + 1;
-        const patch = { ...this.lostWebhook(job, error), lastError: detail };
+        const counts = countsFor(job, faultOf(error));
+        const transient = isTransient(error);
+        const retries = transient ? counts.retries + 1 : counts.retries;
+        if (transient && this.mayRetry(counts.failingId, retries))
+            return this.retryLater(job, { ...counts, retries }, detail);
+        const failures = counts.failures + 1;
+        const patch = {
+            ...this.lostWebhook(job, error),
+            lastError: detail,
+            failingId: counts.failingId,
+            retries,
+        };
         if (failures < MAX_FAILURES) {
-            const retryAt = new Date(
-                this.deps.now().getTime() + backoffMs(failures)
-            );
+            const wait = backoffMs(Math.max(failures, retries));
+            const retryAt = new Date(this.deps.now().getTime() + wait);
             await this.deps.store.updateJob(
                 job.id,
                 { ...patch, failures, retryAt },
@@ -548,13 +599,21 @@ export class HistoryImporter {
         else await this.fail(link, job, detail, patch);
     }
 
-    private async retryLater(job: HistoryJob, detail: string) {
+    /** A temporary error is retried freely, but only so often on a message. */
+    private mayRetry(fault: string, retries: number): boolean {
+        return fault === TARGET_FAULT || retries <= MAX_RETRIES;
+    }
+
+    private async retryLater(
+        job: HistoryJob,
+        counts: ErrorCounts,
+        detail: string
+    ) {
         const { store, now } = this.deps;
-        const retries = job.retries + 1;
-        const retryAt = new Date(now().getTime() + backoffMs(retries));
+        const retryAt = new Date(now().getTime() + backoffMs(counts.retries));
         await store.updateJob(
             job.id,
-            { retries, retryAt, lastError: detail },
+            { ...counts, retryAt, lastError: detail },
             now()
         );
     }
@@ -574,9 +633,19 @@ export class HistoryImporter {
     }
 
     /**
-     * Gives up on one message that keeps failing, and records it. After
-     * MAX_SKIP_STREAK skips in a row the job fails: the trouble is then
-     * likely not with the messages.
+     * Messages skipped in a row in each link since its last copy, less
+     * those given back when their job failed (restoreStreak). Kept in
+     * memory: a restart starts it over, and each job's own streak still
+     * holds. It stops a target-wide error from skipping a few messages in
+     * each of many jobs, which no single job's streak would catch.
+     */
+    private readonly linkSkips = new Map<string, number>();
+
+    /**
+     * Gives up on one message that keeps failing, and records it. The
+     * MAX_SKIP_STREAK-th skip in a row, in the job or across its link,
+     * fails the job instead: the trouble is then likely not with the
+     * messages, and the job's streak is given back (fail).
      */
     private async skip(
         link: LinkedGuild,
@@ -585,15 +654,21 @@ export class HistoryImporter {
         detail: string
     ) {
         const { store, now, logger } = this.deps;
-        const skipStreak = job.skipStreak + 1;
+        const blocked = this.skipBlocked(link.id, job);
+        if (blocked) return this.fail(link, job, `${blocked}: ${detail}`);
+        this.linkSkips.set(link.id, (this.linkSkips.get(link.id) ?? 0) + 1);
         await store.dropMessage(messageId);
         await store.updateJob(
             job.id,
             {
                 checkpointId: messageId,
                 skipped: job.skipped + 1,
-                skipStreak,
+                skipStreak: job.skipStreak + 1,
+                streakFromId:
+                    job.skipStreak === 0 ? job.checkpointId : job.streakFromId,
                 failures: 0,
+                retries: 0,
+                failingId: null,
                 retryAt: null,
                 lastError: `skipped message ${messageId}: ${detail}`,
             },
@@ -602,23 +677,32 @@ export class HistoryImporter {
         logger.warn(
             `[history] Skipped message ${messageId} in ${job.kind} ${job.discordId}: ${detail}`
         );
-        if (skipStreak < MAX_SKIP_STREAK) return;
-        await this.fail(
-            link,
-            job,
-            `${skipStreak} messages in a row could not be copied, the last one because: ${detail}`
-        );
     }
 
+    /** Why the next skip must fail the job instead, or null if it may skip. */
+    private skipBlocked(linkId: string, job: HistoryJob): string | null {
+        const lead = `${MAX_SKIP_STREAK} messages in a row could not be copied`;
+        if (job.skipStreak + 1 >= MAX_SKIP_STREAK)
+            return `${lead}, the last one because`;
+        if ((this.linkSkips.get(linkId) ?? 0) + 1 >= MAX_SKIP_STREAK)
+            return `${lead} across this server's channels, the last one because`;
+        return null;
+    }
+
+    /**
+     * Fails a job and reports it. A job failing mid skip streak gives its
+     * skips back (restoreStreak), so a retry tries those messages again.
+     */
     private async fail(
         link: LinkedGuild,
         job: HistoryJob,
         reason: string,
         patch: JobPatch = {}
     ) {
+        const restored = this.restoreStreak(link.id, job);
         await this.deps.store.updateJob(
             job.id,
-            { ...patch, status: 'failed', lastError: reason },
+            { ...patch, ...restored, status: 'failed', lastError: reason },
             this.deps.now()
         );
         await this.deps.report(
@@ -626,6 +710,37 @@ export class HistoryImporter {
             `failed:${job.id}`,
             `History import stopped for ${job.kind} ${job.discordId}: ${reason}`
         );
+    }
+
+    /**
+     * Moves the checkpoint back to before the streak's first skip and
+     * takes the streak off `skipped`. Skipped messages have no record to
+     * undo: a skip drops it. A streak begun before streakFromId existed
+     * has nowhere to go back to and stays as it is.
+     */
+    private restoreStreak(linkId: string, job: HistoryJob): JobPatch {
+        if (job.skipStreak === 0 || job.streakFromId === null) return {};
+        const left = (this.linkSkips.get(linkId) ?? 0) - job.skipStreak;
+        this.linkSkips.set(linkId, Math.max(left, 0));
+        return {
+            checkpointId: job.streakFromId,
+            skipped: Math.max(job.skipped - job.skipStreak, 0),
+            skipStreak: 0,
+            streakFromId: null,
+        };
+    }
+
+    /** Fails a job that would end with every message it tried skipped. */
+    private async failAllSkipped(
+        link: LinkedGuild,
+        job: HistoryJob
+    ): Promise<boolean> {
+        await this.fail(
+            link,
+            job,
+            `none of its messages could be copied (${job.skipStreak} skipped), the last because: ${job.lastError ?? 'unknown error'}`
+        );
+        return false;
     }
 
     private async route(job: HistoryJob): Promise<Route> {
@@ -1001,12 +1116,16 @@ export class HistoryImporter {
         );
         const fluxerId = await this.send(target, payload, message.id);
         await store.finishMessage(message.id, fluxerId);
+        // A copy ends every streak: the target works.
+        this.linkSkips.delete(link.id);
         const patch = {
             checkpointId: message.id,
             imported: job.imported + 1,
             failures: 0,
             retries: 0,
+            failingId: null,
             skipStreak: 0,
+            streakFromId: null,
             retryAt: null,
         };
         await store.updateJob(job.id, patch, now());
@@ -1086,9 +1205,14 @@ export class HistoryImporter {
         }
     }
 
-    /** Catches up on new messages, then waits for the bridge or finishes. */
+    /**
+     * Catches up on new messages, then waits for the bridge or finishes.
+     * A job that skipped every message it tried fails instead, below
+     * MAX_SKIP_STREAK too, so a small job cannot drop them all unseen.
+     */
     private async finish(pass: Pass, job: HistoryJob): Promise<boolean> {
         const { store, ports, now } = this.deps;
+        if (allSkipped(job)) return this.failAllSkipped(pass.link, job);
         if (job.archiveThreadId) return this.finishArchive(pass, job);
         if (await this.catchUp(job)) return true;
         await this.pinCopies(job);
@@ -1188,14 +1312,20 @@ export class HistoryImporter {
             for (const message of batch) {
                 if (this.overdue(pass)) return true;
                 if (snowflakeTime(message.id) >= linkedAt.getTime())
-                    return this.done(state);
+                    return this.gapDone(pass.link, state);
                 state = (await this.deps.ports.relayedLive(message.id))
                     ? await this.advance(state, message.id)
                     : await this.copy(pass, state, message, route);
             }
-            if (batch.length < PAGE_SIZE) return this.done(state);
+            if (batch.length < PAGE_SIZE) return this.gapDone(pass.link, state);
         }
         return true;
+    }
+
+    /** Ends a gap pass, unless every message the job tried was skipped. */
+    private async gapDone(link: LinkedGuild, job: HistoryJob) {
+        if (allSkipped(job)) return this.failAllSkipped(link, job);
+        return this.done(job);
     }
 
     private async done(job: HistoryJob): Promise<boolean> {

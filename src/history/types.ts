@@ -36,14 +36,28 @@ export interface HistoryJob {
     readonly imported: number;
     /** Failed runs in a row with a lasting error, such as a 4xx. */
     readonly failures: number;
-    /** Temporary errors in a row (5xx, 429, timeouts); never fail a job. */
+    /**
+     * Temporary errors in a row (5xx, 429, timeouts). Past MAX_RETRIES on
+     * one message they count as lasting errors.
+     */
     readonly retries: number;
+    /**
+     * What `failures` and `retries` count against: a Discord message ID,
+     * or 'target' for errors outside any one message. Null when unknown.
+     */
+    readonly failingId: string | null;
     /** No run starts before this time, after an error. */
     readonly retryAt: Date | null;
     /** Messages given up on after repeated lasting errors. */
     readonly skipped: number;
     /** Messages skipped in a row; a copied message resets it. */
     readonly skipStreak: number;
+    /**
+     * The checkpoint from before the first skip of the current streak. A
+     * job that fails mid-streak goes back there, so a retry tries the
+     * skipped messages again.
+     */
+    readonly streakFromId: string | null;
     readonly messageCount: number | null;
     readonly attachmentCount: number | null;
     readonly surveyedAt: Date | null;
@@ -68,9 +82,11 @@ export type JobPatch = Partial<
         | 'imported'
         | 'failures'
         | 'retries'
+        | 'failingId'
         | 'retryAt'
         | 'skipped'
         | 'skipStreak'
+        | 'streakFromId'
         | 'messageCount'
         | 'attachmentCount'
         | 'surveyedAt'
