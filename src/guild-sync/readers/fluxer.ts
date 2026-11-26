@@ -365,18 +365,19 @@ export class FluxerGuildReader implements GuildReader {
 }
 
 /**
- * One role, read from the full list: Fluxer has no route to read a single
- * role (GuildRoleController.ts), so the library's fetchRole always 404s.
- * A role missing from the list throws a 404, which isUnknown reads as gone.
+ * One role, emoji or sticker, read from the full list: Fluxer has no route
+ * to read a single one (GuildRoleController.ts and the emoji and sticker
+ * controllers), so the library's fetchRole, fetchEmoji and fetchSticker
+ * always 404. One missing from the list throws a 404, which isUnknown
+ * reads as gone.
  */
-export async function fetchRoleFromList(
-    guild: Pick<Guild, 'fetchRoles'>,
-    id: string
+export async function findListed(
+    id: string,
+    list: () => Promise<readonly { readonly id: string }[]>
 ): Promise<unknown> {
-    const roles = await guild.fetchRoles();
-    const role = roles.find((r) => r.id === id);
-    if (role) return role;
-    throw Object.assign(new Error(`Role ${id} is not in the guild`), {
+    const found = (await list()).find((item) => item.id === id);
+    if (found) return found;
+    throw Object.assign(new Error(`${id} is not in the guild`), {
         statusCode: 404,
     });
 }
@@ -384,15 +385,15 @@ export async function fetchRoleFromList(
 function fetchOne(guild: Guild, kind: SyncKind, id: string): Promise<unknown> {
     switch (kind) {
         case 'role':
-            return fetchRoleFromList(guild, id);
+            return findListed(id, () => guild.fetchRoles());
         case 'category':
         case 'channel':
         case 'thread':
             return guild.client.channels.fetch(id, { force: true });
         case 'emoji':
-            return guild.fetchEmoji(id);
+            return findListed(id, () => guild.fetchEmojis());
         case 'sticker':
-            return guild.fetchSticker(id);
+            return findListed(id, () => guild.fetchStickers());
         case 'guild':
             return Promise.resolve(guild);
     }

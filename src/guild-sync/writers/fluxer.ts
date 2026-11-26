@@ -272,9 +272,15 @@ export class FluxerGuildWriter implements GuildWriter {
         positions: readonly PositionSpec[]
     ): Promise<void> {
         const guild = await this.guild(guildId);
+        // Fluxer answers 204 with no body (GuildRoleController.ts), which
+        // the library's setRolePositions tries to read as roles and throws
+        // after the reorder already happened. Send the PATCH directly.
         await timedWrite(
             'Fluxer role positions',
-            guild.setRolePositions(positions.map((p) => ({ ...p })))
+            guild.client.rest.patch(Routes.guildRoles(guildId), {
+                body: positions.map((p) => ({ ...p })),
+                auth: true,
+            })
         );
     }
 
@@ -378,11 +384,15 @@ export class FluxerGuildWriter implements GuildWriter {
 
     async renameEmoji(guildId: string, emojiId: string, name: string) {
         const guild = await this.guild(guildId);
-        const emoji = await timedWrite(
-            'Fluxer emoji fetch',
-            guild.fetchEmoji(emojiId)
+        // No fetchEmoji first: Fluxer has no route to read one emoji
+        // (GuildEmojiController.ts serves PATCH and DELETE only).
+        await timedWrite(
+            'Fluxer emoji edit',
+            guild.client.rest.patch(Routes.guildEmoji(guildId, emojiId), {
+                body: { name },
+                auth: true,
+            })
         );
-        await timedWrite('Fluxer emoji edit', emoji.edit({ name }));
     }
 
     async createSticker(guildId: string, spec: StickerSpec): Promise<string> {
@@ -438,20 +448,24 @@ export class FluxerGuildWriter implements GuildWriter {
 
     async deleteEmoji(guildId: string, emojiId: string): Promise<void> {
         const guild = await this.guild(guildId);
-        const emoji = await timedWrite(
-            'Fluxer emoji fetch',
-            guild.fetchEmoji(emojiId)
+        // No fetchEmoji first: Fluxer cannot read one emoji (renameEmoji).
+        await timedWrite(
+            'Fluxer emoji delete',
+            guild.client.rest.delete(Routes.guildEmoji(guildId, emojiId), {
+                auth: true,
+            })
         );
-        await timedWrite('Fluxer emoji delete', emoji.delete());
     }
 
     async deleteSticker(guildId: string, stickerId: string): Promise<void> {
         const guild = await this.guild(guildId);
-        const sticker = await timedWrite(
-            'Fluxer sticker fetch',
-            guild.fetchSticker(stickerId)
+        // No fetchSticker first: Fluxer has no route to read one sticker.
+        await timedWrite(
+            'Fluxer sticker delete',
+            guild.client.rest.delete(Routes.guildSticker(guildId, stickerId), {
+                auth: true,
+            })
         );
-        await timedWrite('Fluxer sticker delete', sticker.delete());
     }
 
     private async thread(guildId: string, threadId: string) {
