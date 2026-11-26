@@ -37,6 +37,15 @@ export interface SyncSettings extends GuardSettings, ShrinkLimits {
 
 type AppliedFields = Readonly<Record<string, JsonValue>>;
 
+/** Where guild-sync's live status message for a link was posted. */
+export interface StatusMessageRef {
+    readonly channelId: string;
+    readonly messageId: string;
+}
+
+/** Active object map rows, by kind. A kind with no rows is absent. */
+export type MappedCounts = Readonly<Partial<Record<ObjectKind, number>>>;
+
 /** A new `addon_object_map` row. */
 export interface NewMapping {
     readonly guildLinkId: string;
@@ -174,6 +183,15 @@ export interface GuildSyncStore {
     setRowState(rowId: string, state: ObjectState, now: Date): Promise<void>;
     lastPlan(guildLinkId: string): Promise<Plan | null>;
     getPlan(planId: string): Promise<Plan | null>;
+    /** The saved status message, or null before the first one is posted. */
+    loadStatusMessage(guildLinkId: string): Promise<StatusMessageRef | null>;
+    /** Saves or clears the status message's place. */
+    saveStatusMessage(
+        guildLinkId: string,
+        ref: StatusMessageRef | null
+    ): Promise<void>;
+    /** Active object map rows by kind, for the status message. */
+    countMapped(guildLinkId: string): Promise<MappedCounts>;
 }
 
 /** Arbitrary constant: 'bfsg' in ASCII. Shared by every fork instance. */
@@ -388,6 +406,34 @@ function parseIntent(row: Row): CreateIntent[] {
             refused: after.refused === true,
         },
     ];
+}
+
+/** A status message reference from a settings row, or null. */
+export function parseStatusMessage(row: Row): StatusMessageRef | null {
+    const channelId = optionalId(
+        row.statusChannelId ?? null,
+        'statusChannelId'
+    );
+    const messageId = optionalId(
+        row.statusMessageId ?? null,
+        'statusMessageId'
+    );
+    return channelId && messageId ? { channelId, messageId } : null;
+}
+
+/** Map row counts by kind, from `SELECT kind, count(*)` rows. */
+export function parseMappedCounts(rows: readonly Row[]): MappedCounts {
+    const counts: Partial<Record<ObjectKind, number>> = {};
+    for (const row of rows.slice(0, OBJECT_KINDS.length)) {
+        const kind = oneOf(OBJECT_KINDS, row.kind, 'kind');
+        // count() is bigint, which pg returns as text.
+        const count = Number(row.count);
+        if (!Number.isSafeInteger(count) || count < 0) {
+            throw new StoreDataError('map row count is not a count');
+        }
+        counts[kind] = count;
+    }
+    return counts;
 }
 
 /** Rows a DELETE removed, from the pg result Sequelize passes back. */
@@ -774,6 +820,43 @@ export class PostgresGuildSyncStore
             { bind: [guildLinkId], type: QueryTypes.SELECT }
         );
         return rows.length === 0 ? null : parsePlan(rows[0]);
+    }
+
+    async loadStatusMessage(
+        guildLinkId: string
+    ): Promise<StatusMessageRef | null> {
+        const rows = await this.db.query<Row>(
+            `SELECT "statusChannelId", "statusMessageId" FROM ${TABLES.settings} WHERE "guildLinkId" = $1`,
+            { bind: [guildLinkId], type: QueryTypes.SELECT }
+        );
+        return rows.length === 0 ? null : parseStatusMessage(rows[0]);
+    }
+
+    async saveStatusMessage(
+        guildLinkId: string,
+        ref: StatusMessageRef | null
+    ): Promise<void> {
+        await this.loadSettings(guildLinkId);
+        // Not a setting an admin changed, so "updatedAt" stays as it is.
+        await this.db.query(
+            `UPDATE ${TABLES.settings} SET "statusChannelId" = $2, "statusMessageId" = $3 WHERE "guildLinkId" = $1`,
+            {
+                bind: [
+                    guildLinkId,
+                    ref?.channelId ?? null,
+                    ref?.messageId ?? null,
+                ],
+            }
+        );
+    }
+
+    async countMapped(guildLinkId: string): Promise<MappedCounts> {
+        const rows = await this.db.query<Row>(
+            `SELECT kind, count(*) AS count FROM ${TABLES.objectMap}
+             WHERE "guildLinkId" = $1 AND state = 'active' GROUP BY kind`,
+            { bind: [guildLinkId], type: QueryTypes.SELECT }
+        );
+        return parseMappedCounts(rows);
     }
 
     async findThreadPair(side: SnapshotSide, threadId: string) {
