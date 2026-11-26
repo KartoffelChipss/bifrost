@@ -13,6 +13,7 @@ import * as enforceDrift from './migrations/00008-settings-enforce-drift';
 import * as historySkipStreak from './migrations/00009-history-skip-streak';
 import * as historyFailureTracking from './migrations/00010-history-failure-tracking';
 import * as statusMessage from './migrations/00011-settings-status-message';
+import * as destMissing from './migrations/00012-object-map-dest-missing';
 import { MIGRATIONS_MODEL, MIGRATIONS_TABLE } from './schema';
 
 /**
@@ -67,6 +68,11 @@ const MIGRATIONS: RunnableMigration<QueryInterface>[] = [
         name: '00011-settings-status-message',
         up: statusMessage.up,
         down: statusMessage.down,
+    },
+    {
+        name: '00012-object-map-dest-missing',
+        up: destMissing.up,
+        down: destMissing.down,
     },
 ];
 
