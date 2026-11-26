@@ -593,7 +593,7 @@ export class FluxerGuildWriter implements GuildWriter {
         const reopen = needsReopen(thread.archived === true, edit);
         if (reopen) edit.archived = false;
         await timedWrite('Fluxer thread edit', thread.edit(edit));
-        if (reopen && patch.archived === undefined) {
+        if (reopen && patch.archived !== false) {
             await timedWrite(
                 'Fluxer thread re-archive',
                 thread.edit({ archived: true })
