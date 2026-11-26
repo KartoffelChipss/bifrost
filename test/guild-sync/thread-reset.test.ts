@@ -326,6 +326,8 @@ describe('sync reset-threads confirm', () => {
 class FakeWriter {
     readonly deleted: string[] = [];
     readonly notFound = new Set<string>();
+    /** Gone, as @fluxerjs/core reports it: a code and no HTTP status. */
+    readonly libraryNotFound = new Set<string>();
     readonly refuse = new Set<string>();
     /** Called before each delete, for a test that changes settings. */
     before: (id: string) => void = () => {};
@@ -335,6 +337,11 @@ class FakeWriter {
         if (this.notFound.has(id)) {
             throw Object.assign(new Error('Unknown Channel'), {
                 statusCode: 404,
+            });
+        }
+        if (this.libraryNotFound.has(id)) {
+            throw Object.assign(new Error(`Channel ${id} not found`), {
+                code: 'CHANNEL_NOT_FOUND',
             });
         }
         if (this.refuse.has(id)) throw new Error('500 from Fluxer');
@@ -434,6 +441,14 @@ describe('ThreadResetRunner', () => {
         r.writer.notFound.add('f-t2');
         await r.reset();
         assert.deepEqual(r.writer.deleted, ['f-t1', 'f-t3']);
+        assert.deepEqual(threadIds(r.store.rows), ['mirror', 'old']);
+        assert.match(r.posted[0].text, /2 deleted, 1 already gone, 0 failed/);
+    });
+
+    it("counts the library's channel-not-found as already gone", async () => {
+        const r = runnerSetup();
+        r.writer.libraryNotFound.add('f-t2');
+        await r.reset();
         assert.deepEqual(threadIds(r.store.rows), ['mirror', 'old']);
         assert.match(r.posted[0].text, /2 deleted, 1 already gone, 0 failed/);
     });
