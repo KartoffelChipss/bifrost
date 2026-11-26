@@ -380,6 +380,15 @@ function createAction(op: CreateOp, ctx: WriteContext): WriteAction {
     if (op.kind === 'category' || op.kind === 'channel') {
         const channel = ctx.source.channels.find((c) => c.id === op.sourceId);
         if (!channel) return skip('the source channel is gone');
+        // Never create a channel outside its category: when the category
+        // create failed earlier in this run, the channel waits for it.
+        if (
+            op.kind === 'channel' &&
+            channel.parentId !== null &&
+            !ctx.map.dest('category', channel.parentId)
+        ) {
+            return skip('its category is not on Fluxer yet');
+        }
         const applied = projectSourceChannel(channel, projection);
         return {
             type: 'create-channel',
