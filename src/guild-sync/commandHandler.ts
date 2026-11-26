@@ -6,7 +6,9 @@ import { EmbedColors } from '../utils/embeds';
 import {
     describeStatus,
     parseSyncCommand,
+    resetRefusal,
     runSyncCommand,
+    type SyncCommand,
     type SyncCommandContext,
 } from './command';
 import type { LinkedGuild } from './cycle';
@@ -16,6 +18,8 @@ import type { GuildSyncStore } from './store';
  * The `sync` command: the admin switch for guild-sync. It only changes
  * `addon_settings`; the next cycle reads the new values.
  */
+
+const OWNER_ONLY = 'Only the server owner can use this command.';
 
 export interface SyncCommandDeps extends SyncCommandContext {
     readonly store: SyncCommandContext['store'] &
@@ -59,25 +63,39 @@ export class SyncDiscordCommandHandler extends DiscordCommandHandler {
         );
     }
 
+    /**
+     * Why the author may not run this command, or null. `reset-threads`
+     * belongs to the one user in BF_ADDONS_RESET_USER_ID alone; every other
+     * subcommand, and unparsable input, to the server owner.
+     */
+    private refusal(
+        message: DiscordCommandHandlerMessage,
+        command: SyncCommand
+    ): string | null {
+        if (!message.guildId) return OWNER_ONLY;
+        if (command.type === 'reset-threads') {
+            return resetRefusal(this.deps.threadReset, message.author.id);
+        }
+        return this.allowed(message) ? null : OWNER_ONLY;
+    }
+
     async handleCommand(
         message: DiscordCommandHandlerMessage,
         _command: string,
         ...args: string[]
     ): Promise<void> {
-        if (!message.guildId || !this.allowed(message)) {
-            await this.reply(
-                message,
-                'Only the server owner can use this command.',
-                EmbedColors.Error
-            );
+        const command = parseSyncCommand(args);
+        const guildId = message.guildId;
+        const refused = this.refusal(message, command);
+        if (refused || !guildId) {
+            await this.reply(message, refused ?? OWNER_ONLY, EmbedColors.Error);
             return;
         }
-        const command = parseSyncCommand(args);
         if (command.type === 'error') {
             await this.reply(message, command.message, EmbedColors.Error);
             return;
         }
-        const link = await this.deps.findLink(message.guildId);
+        const link = await this.deps.findLink(guildId);
         if (!link) {
             await this.reply(
                 message,
@@ -90,10 +108,15 @@ export class SyncDiscordCommandHandler extends DiscordCommandHandler {
             command,
             link,
             message.channelId,
-            this.deps
+            this.deps,
+            message.author.id
         );
         if (typeof error === 'string') {
             await this.reply(message, error, EmbedColors.Error);
+            return;
+        }
+        if (error?.alone) {
+            await this.reply(message, error.note, EmbedColors.Info);
             return;
         }
         const { store, allowApply } = this.deps;

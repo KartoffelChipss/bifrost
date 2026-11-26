@@ -196,6 +196,45 @@ describe('parseAddonConfig database dialect', () => {
     });
 });
 
+describe('parseAddonConfig BF_ADDONS_RESET_USER_ID', () => {
+    const config = (env: Record<string, string>) => {
+        const result = parseAddonConfig({ ...ON, ...env });
+        assert.ok(result.ok);
+        return result.config;
+    };
+
+    it('reads one Discord user ID', () => {
+        const id = '200000000000000001';
+        assert.equal(
+            config({ BF_ADDONS_RESET_USER_ID: ` ${id} ` }).resetUserId,
+            id
+        );
+    });
+
+    it('leaves the reset off when unset or empty', () => {
+        assert.equal(config({}).resetUserId, undefined);
+        const empty = config({ BF_ADDONS_RESET_USER_ID: '' });
+        assert.equal(empty.resetUserId, undefined);
+        assert.deepEqual(empty.warnings, []);
+    });
+
+    it('warns and leaves the reset off for a malformed value', () => {
+        for (const value of [
+            'abc',
+            '123',
+            '200000000000000001,2000000000000002',
+        ]) {
+            const parsed = config({ BF_ADDONS_RESET_USER_ID: value });
+            assert.equal(parsed.resetUserId, undefined, value);
+            assert.equal(parsed.enabled, true);
+            assert.match(parsed.warnings.join(), /BF_ADDONS_RESET_USER_ID/);
+        }
+        const off = parseAddonConfig({ BF_ADDONS_RESET_USER_ID: 'abc' });
+        assert.ok(off.ok);
+        assert.match(off.config.warnings.join(), /RESET_USER_ID.*ignored/);
+    });
+});
+
 describe('requireAddonConfig', () => {
     it('throws AddonConfigError on a bad value while add-ons are on', () => {
         assert.throws(

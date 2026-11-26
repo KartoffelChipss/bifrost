@@ -29,6 +29,12 @@ export interface AddonConfig {
      */
     readonly historyInlineMax?: number;
     /**
+     * BF_ADDONS_RESET_USER_ID: the one Discord user who may run
+     * `sync reset-threads`. Absent when unset or invalid, which turns the
+     * command off; a bad value is only a warning.
+     */
+    readonly resetUserId?: string;
+    /**
      * Problems found in add-on settings while add-ons are off. They do not
      * stop startup; the host logs them as warnings.
      */
@@ -84,6 +90,24 @@ function parseMode(
 
 const SNOWFLAKE = /^\d{15,25}$/;
 
+/**
+ * Parses BF_ADDONS_RESET_USER_ID. Unset or empty is null. A bad value is
+ * a warning, never an error: it only leaves `sync reset-threads` off.
+ */
+function parseResetUser(value: string | undefined): {
+    id: string | null;
+    warning: string | null;
+} {
+    const text = (value ?? '').trim();
+    if (text === '') return { id: null, warning: null };
+    if (SNOWFLAKE.test(text)) return { id: text, warning: null };
+    return {
+        id: null,
+        warning:
+            'BF_ADDONS_RESET_USER_ID is not a Discord user ID; `sync reset-threads` stays off',
+    };
+}
+
 /** Upper bound for BF_HISTORY_INLINE_MAX. */
 const MAX_INLINE_MAX = 10_000_000;
 
@@ -135,6 +159,7 @@ function parseSettings(env: Env): {
     mode: AddonConfig['initialMode'];
     excluded: ReadonlySet<string>;
     inlineMax: number;
+    resetUser: ReturnType<typeof parseResetUser>;
     errors: string[];
 } {
     const errors: string[] = [];
@@ -166,6 +191,7 @@ function parseSettings(env: Env): {
         mode: mode.ok ? mode.value : 'dry-run',
         excluded: excluded.ok ? excluded.value : new Set(),
         inlineMax: inlineMax.ok ? inlineMax.value : 0,
+        resetUser: parseResetUser(env.BF_ADDONS_RESET_USER_ID),
         errors,
     };
 }
@@ -195,8 +221,13 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
     const enabled = parseStrictBool('BF_ADDONS_ENABLED', env.BF_ADDONS_ENABLED);
     if (!enabled.ok) return { ok: false, error: enabled.error };
     const settings = parseSettings(env);
-    if (!enabled.value)
-        return { ok: true, config: disabledConfig(settings.errors) };
+    const resetWarnings = settings.resetUser.warning
+        ? [settings.resetUser.warning]
+        : [];
+    if (!enabled.value) {
+        const errors = [...settings.errors, ...resetWarnings];
+        return { ok: true, config: disabledConfig(errors) };
+    }
     if (settings.errors.length > 0)
         return { ok: false, error: settings.errors.join('; ') };
 
@@ -210,7 +241,7 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
             error: `BF_ADDONS_ENABLED needs BF_DB_DIALECT=postgres, got ${dialect}`,
         };
     }
-    const { flags } = settings;
+    const { flags, resetUser } = settings;
     return {
         ok: true,
         config: {
@@ -219,7 +250,8 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
             initialMode: settings.mode,
             excludedChannels: settings.excluded,
             historyInlineMax: settings.inlineMax,
-            warnings: [],
+            ...(resetUser.id ? { resetUserId: resetUser.id } : {}),
+            warnings: resetWarnings,
         },
     };
 }
