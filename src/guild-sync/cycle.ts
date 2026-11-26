@@ -328,13 +328,14 @@ async function confirmedRemovals(
 async function linkState(
     link: LinkedGuild,
     settings: SyncSettings,
-    deps: CycleDeps
+    deps: CycleDeps,
+    bridged: ReadonlySet<string>
 ): Promise<DiffInput['links']> {
     if (!deps.links || settings.direction !== 'discord-to-fluxer') {
         return undefined;
     }
     return {
-        linked: await deps.links.linkedDiscordChannels(link.discordGuildId),
+        linked: bridged,
         never: new Set(
             settings.adminChannelId ? [settings.adminChannelId] : []
         ),
@@ -342,6 +343,15 @@ async function linkState(
             ? await deps.historyReady(link.id)
             : undefined,
     };
+}
+
+/** Discord channels the relay bridges; none without the relay wired in. */
+async function bridgedChannels(
+    link: LinkedGuild,
+    deps: CycleDeps
+): Promise<ReadonlySet<string>> {
+    if (!deps.links) return new Set();
+    return deps.links.linkedDiscordChannels(link.discordGuildId);
 }
 
 /** The map with missing counts updated (guard 4), and the diff. */
@@ -360,7 +370,8 @@ async function diffWithMap(
     await deps.store.saveMissing(missing, now);
     const rows = applyMissing(loaded, missing);
     const excluded = excludedIds(source, deps.excludedChannels ?? new Set());
-    const links = await linkState(link, settings, deps);
+    const bridged = await bridgedChannels(link, deps);
+    const links = await linkState(link, settings, deps, bridged);
     const found = diff({
         source,
         destination,
@@ -370,11 +381,13 @@ async function diffWithMap(
         excluded,
         members,
         links,
+        bridged,
         enforceDrift: settings.enforceDrift,
     });
     const historyLocked = historyLocks(source.channels, {
         ready: links?.historyReady,
         never: links?.never ?? new Set(),
+        linked: links?.linked,
         excluded,
     });
     return { rows, members, found, historyLocked };
@@ -520,8 +533,24 @@ const NO_ASSETS: AssetSource = {
 };
 
 /**
- * Applies a saved plan (design: Cycle step 7). The process mode is read
- * again before every write, so a trip to read-only stops the run.
+ * Why the link may no longer write, from its settings read now, or null.
+ * `sync kill on` or `sync mode dry-run` during a long run stops it at
+ * the next write.
+ */
+async function applyStopped(
+    linkId: string,
+    deps: CycleDeps
+): Promise<string | null> {
+    const settings = await deps.store.loadSettings(linkId);
+    const mode = resolveMode(deps.processMode(), settings, deps.allowApply);
+    if (mode.mode === 'apply') return null;
+    return mode.reason ?? `the link is now in ${mode.mode} mode`;
+}
+
+/**
+ * Applies a saved plan (design: Cycle step 7). The process mode and the
+ * link's settings are read again before every write, so a trip to
+ * read-only, the kill switch or a mode change stops the run.
  */
 async function applySaved(
     plan: Plan,
@@ -561,6 +590,7 @@ async function applySaved(
             links: deps.links,
             threads: deps.threadSources[sourceSide] ?? null,
             canWrite: () => deps.processMode() !== 'read-only',
+            writesStopped: () => applyStopped(plan.guildLinkId, deps),
             stillLeader: deps.stillLeader,
             failures: deps.failures,
             pause: deps.pause,

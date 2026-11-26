@@ -161,7 +161,11 @@ export class FakeStore implements GuildSyncStore {
     async createIntents(_link: string, since: Date) {
         return this.audits.flatMap((entry, i) => {
             const at = this.auditTimes[i];
-            const name = (entry.after as { name?: unknown } | null)?.name;
+            const after = entry.after as {
+                name?: unknown;
+                refused?: unknown;
+            } | null;
+            const name = after?.name;
             const intent =
                 entry.op === 'create-intent' &&
                 at >= since &&
@@ -169,7 +173,15 @@ export class FakeStore implements GuildSyncStore {
                 entry.kind !== 'overwrite' &&
                 typeof name === 'string';
             return intent
-                ? [{ kind: entry.kind, sourceId: entry.sourceId, name, at }]
+                ? [
+                      {
+                          kind: entry.kind,
+                          sourceId: entry.sourceId,
+                          name,
+                          at,
+                          refused: after?.refused === true,
+                      },
+                  ]
                 : [];
         });
     }

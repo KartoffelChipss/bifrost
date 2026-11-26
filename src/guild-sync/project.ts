@@ -2,6 +2,7 @@ import type { SyncDirection } from '../addons/db/schema';
 import type { IdMap } from './idmap';
 import type { JsonValue } from './ops';
 import {
+    ADMINISTRATOR,
     MANAGED_BITS,
     NO_BITS,
     bitOf,
@@ -51,6 +52,33 @@ export interface ProjectionContext {
      * deny @everyone posting and reacting until it is (historyLocks).
      */
     readonly historyLocked?: ReadonlySet<string>;
+    /**
+     * The bits the destination bot holds (botHeldBits), when it does not
+     * hold them all. The @everyone projection keeps only these: Fluxer
+     * refuses a role update that grants a bit the bot lacks
+     * (GuildRoleService.resolveRequestedPermissions), and channels are
+     * created only after the @everyone update succeeds (apply.ts
+     * everyoneGate). The not-held-by-bot finding reports what is left out.
+     */
+    readonly everyoneMask?: bigint;
+}
+
+/**
+ * The bits the destination bot holds through @everyone and its roles, or
+ * null when it may grant every bit: it owns the server, holds
+ * Administrator, or its standing is not known.
+ */
+export function botHeldBits(destination: GuildSnapshot): bigint | null {
+    const bot = destination.bot;
+    if (!bot || bot.isOwner) return null;
+    const held = destination.roles
+        .filter(
+            (r) =>
+                r.id === destination.everyoneRoleId ||
+                bot.roleIds.includes(r.id)
+        )
+        .reduce((bits, r) => bits | BigInt(r.permissions), NO_BITS);
+    return (held & ADMINISTRATOR) !== NO_BITS ? null : held;
 }
 
 /**
@@ -68,6 +96,9 @@ const HISTORY_TYPES: ReadonlySet<number> = new Set([0, 2, 5]);
  * The source channels to lock while history import gates bridging: text,
  * voice and announcement channels not ready yet. Forums (their posts are
  * handled apart), excluded channels and the admin channel never lock.
+ * Nor does a channel the relay bridges already (`linked`): live chat
+ * flows there, and a lock would cut Fluxer off from Discord. History
+ * copies such a channel's past into an archive thread instead.
  */
 export function historyLocks(
     channels: readonly ChannelSnap[],
@@ -75,6 +106,7 @@ export function historyLocks(
         readonly ready?: ReadonlySet<string>;
         readonly never: ReadonlySet<string>;
         readonly excluded?: ReadonlySet<string>;
+        readonly linked?: ReadonlySet<string>;
     }
 ): ReadonlySet<string> {
     const { ready } = gate;
@@ -83,6 +115,7 @@ export function historyLocks(
     for (const c of channels) {
         if (!HISTORY_TYPES.has(c.type) || ready.has(c.id)) continue;
         if (gate.never.has(c.id) || gate.excluded?.has(c.id)) continue;
+        if (gate.linked?.has(c.id)) continue;
         locked.add(c.id);
     }
     return locked;
@@ -201,11 +234,14 @@ function roleLook(role: RoleSnap): Record<string, JsonValue> {
 }
 
 export function projectSourceRole(role: RoleSnap, ctx: ProjectionContext) {
-    const fields: Record<string, JsonValue> = {
-        permissions: translated(role.permissions, ctx.direction),
-    };
-    if (role.id === ctx.map.sourceEveryone) return fields;
-    return { ...fields, ...roleLook(role) };
+    const permissions = translated(role.permissions, ctx.direction);
+    const fields: Record<string, JsonValue> = { permissions };
+    if (role.id !== ctx.map.sourceEveryone) {
+        return { ...fields, ...roleLook(role) };
+    }
+    if (ctx.everyoneMask === undefined) return fields;
+    const held = BigInt(permissions) & ctx.everyoneMask;
+    return { permissions: held.toString() };
 }
 
 export function projectDestRole(role: RoleSnap, ctx: ProjectionContext) {

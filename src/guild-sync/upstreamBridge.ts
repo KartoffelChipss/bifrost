@@ -7,11 +7,19 @@ import {
     type Message as FluxerMessage,
 } from '@fluxerjs/core';
 import {
+    ChannelFlags,
     ChannelType,
     DiscordAPIError,
     MessageType,
+    PermissionFlagsBits,
     RESTJSONErrorCodes,
+    type AnyThreadChannel,
     type Client as DiscordClient,
+    type GuildTextThreadCreateOptions,
+    type NewsChannel,
+    type TextChannel,
+    type ThreadAutoArchiveDuration,
+    type ThreadEditOptions,
 } from 'discord.js';
 import type {
     FluxerCopy,
@@ -43,7 +51,13 @@ import type {
     ThreadSource,
 } from './links';
 import { isNotFound } from './apply';
-import type { FluxerThreadInfo, ThreadMirrorPorts } from './threadMirror';
+import { discordThread } from './readers/discord';
+import { fluxerThread as snapFluxerThread } from './readers/fluxer';
+import type {
+    DiscordThreadInfo,
+    FluxerThreadInfo,
+    ThreadMirrorPorts,
+} from './threadMirror';
 import type { ThreadRelayPorts } from './threadRelay';
 import {
     discordPostWebhook,
@@ -472,6 +486,14 @@ export class UpstreamBridge
         return this.up.fluxerClientRef.current?.user?.id ?? null;
     }
 
+    discordBotId(): string | null {
+        return this.up.discordClient.user?.id ?? null;
+    }
+
+    /**
+     * The thread as the Fluxer reader snapshots it, so its private flag
+     * (type 12), slowmode and auto-archive match what the sync compares.
+     */
     async fluxerThread(threadId: string): Promise<FluxerThreadInfo | null> {
         const client = this.fluxer();
         const thread = await client.channels.fetch(threadId);
@@ -483,22 +505,117 @@ export class UpstreamBridge
         const forum =
             parent instanceof FluxerForumChannel ||
             parent instanceof FluxerMediaChannel;
-        const tagNames = forum
-            ? thread.appliedTags.flatMap((id) => {
-                  const tag = parent.availableTags.find((t) => t.id === id);
-                  return tag ? [tag.name] : [];
-              })
-            : [];
+        const tagNames = new Map(
+            forum ? parent.availableTags.map((t) => [t.id, t.name]) : []
+        );
         return {
-            id: thread.id,
+            ...snapFluxerThread(thread, tagNames),
             parentId: thread.parentId,
-            name: thread.name ?? '',
             ownerId: thread.ownerId,
             forum,
-            tags: tagNames.sort(),
-            archived: thread.archived,
-            locked: thread.locked,
         };
+    }
+
+    /** Fluxer lists thread members 100 at a time (ThreadRequestSchemas.ts). */
+    private static readonly MEMBER_PAGE = 100;
+    private static readonly MAX_MEMBER_PAGES = 10;
+
+    async fluxerThreadMembers(threadId: string): Promise<string[]> {
+        const thread = await this.fluxer().channels.fetch(threadId);
+        if (!(thread instanceof FluxerThreadChannel)) {
+            throw new Error(`${threadId} is not a Fluxer thread`);
+        }
+        const ids: string[] = [];
+        let after: string | undefined;
+        for (let page = 0; page < UpstreamBridge.MAX_MEMBER_PAGES; page++) {
+            const members = await thread.members.fetch({
+                after,
+                limit: UpstreamBridge.MEMBER_PAGE,
+            });
+            for (const m of members) if (m.userId) ids.push(m.userId);
+            if (members.length < UpstreamBridge.MEMBER_PAGE) break;
+            after = members[members.length - 1].userId ?? undefined;
+            if (!after) break;
+        }
+        return ids;
+    }
+
+    /** Upper bound on members added to one private Discord thread. */
+    private static readonly MAX_ADDED_MEMBERS = 100;
+
+    async addDiscordThreadMembers(
+        threadId: string,
+        userIds: readonly string[]
+    ): Promise<void> {
+        const thread = await this.up.discordClient.channels.fetch(threadId);
+        if (!thread?.isThread()) throw new Error(`${threadId} is not a thread`);
+        const failed: string[] = [];
+        for (const id of userIds.slice(0, UpstreamBridge.MAX_ADDED_MEMBERS)) {
+            // A linked account that left the server cannot be added.
+            await thread.members.add(id).catch(() => failed.push(id));
+        }
+        if (failed.length > 0) {
+            throw new Error(`could not add ${failed.join(', ')}`);
+        }
+    }
+
+    /** A Discord thread as the mirror sees it, read as the reader does. */
+    private discordThreadInfo(
+        thread: AnyThreadChannel,
+        parent: object
+    ): DiscordThreadInfo {
+        const tags = 'availableTags' in parent ? parent.availableTags : [];
+        const tagNames = new Map(
+            (tags as readonly { id: string; name: string }[]).map((t) => [
+                t.id,
+                t.name,
+            ])
+        );
+        // The mirror reads the look's settings, never its IDs.
+        const look = discordThread(thread, tagNames);
+        return { id: thread.id, ownerId: thread.ownerId, look };
+    }
+
+    async activeDiscordThreads(
+        link: LinkedChannel
+    ): Promise<DiscordThreadInfo[]> {
+        const parent = await this.up.discordClient.channels.fetch(
+            link.discordChannelId
+        );
+        if (!parent || !('threads' in parent) || parent.isThread()) return [];
+        const active = await parent.threads.fetchActive(false);
+        return [...active.threads.values()].map((t) =>
+            this.discordThreadInfo(t, parent)
+        );
+    }
+
+    /**
+     * Gives a new Discord thread the Fluxer thread's lock, slowmode,
+     * auto-archive and pin, where they differ. Needs Manage Threads; when
+     * refused, the copy keeps Discord's defaults, which the sync then
+     * reports as drift instead of writing them to Fluxer.
+     */
+    private async matchSettings(
+        thread: AnyThreadChannel,
+        info: FluxerThreadInfo
+    ): Promise<AnyThreadChannel> {
+        const changes: ThreadEditOptions = {
+            ...(info.locked && !thread.locked ? { locked: true } : {}),
+            ...(info.rateLimitPerUser !== undefined &&
+            info.rateLimitPerUser !== (thread.rateLimitPerUser ?? 0)
+                ? { rateLimitPerUser: info.rateLimitPerUser }
+                : {}),
+            ...(info.autoArchiveDuration !== undefined &&
+            info.autoArchiveDuration !== thread.autoArchiveDuration
+                ? {
+                      autoArchiveDuration:
+                          info.autoArchiveDuration as ThreadAutoArchiveDuration,
+                  }
+                : {}),
+            ...(info.pinned === true ? { flags: ChannelFlags.Pinned } : {}),
+        };
+        if (Object.keys(changes).length === 0) return thread;
+        return thread.edit(changes).catch(() => thread);
     }
 
     /** The Fluxer post's first message, or a placeholder when it is gone. */
@@ -526,7 +643,7 @@ export class UpstreamBridge
         link: LinkedChannel,
         info: FluxerThreadInfo,
         starter: unknown | null
-    ): Promise<string> {
+    ): Promise<DiscordThreadInfo> {
         const forum = await this.up.discordClient.channels.fetch(
             link.discordChannelId
         );
@@ -560,13 +677,52 @@ export class UpstreamBridge
         );
         const threadId = post.threadId();
         if (!threadId) throw new Error('Discord did not name the new post');
-        return threadId;
+        return this.newPost(threadId, info, forum);
     }
 
+    /**
+     * A post the webhook just started, given the Fluxer post's settings. If
+     * this fails, the next attempt adopts the post (threadMirror.ts).
+     */
+    private async newPost(
+        threadId: string,
+        info: FluxerThreadInfo,
+        forum: object
+    ): Promise<DiscordThreadInfo> {
+        const thread = await this.up.discordClient.channels.fetch(threadId, {
+            force: true,
+        });
+        if (!thread?.isThread()) {
+            throw new Error(`Discord post ${threadId} is not a thread`);
+        }
+        return this.discordThreadInfo(
+            await this.matchSettings(thread, info),
+            forum
+        );
+    }
+
+    /** True when the bot may start a private thread in the channel. */
+    private canStartPrivate(parent: TextChannel): boolean {
+        const me = this.up.discordClient.user;
+        const perms = me ? parent.permissionsFor(me) : null;
+        return (
+            perms?.has([
+                PermissionFlagsBits.CreatePrivateThreads,
+                PermissionFlagsBits.SendMessagesInThreads,
+            ]) === true
+        );
+    }
+
+    /**
+     * Starts a thread with the Fluxer thread's slowmode and auto-archive.
+     * A private Fluxer thread gets a private thread, which only a text
+     * channel holds; when the bot may not start one there, it returns
+     * null and starts nothing. A private thread is never made public.
+     */
     async createDiscordThread(
         link: LinkedChannel,
         info: FluxerThreadInfo
-    ): Promise<string> {
+    ): Promise<DiscordThreadInfo | null> {
         const parent = await this.up.discordClient.channels.fetch(
             link.discordChannelId
         );
@@ -576,8 +732,41 @@ export class UpstreamBridge
         ) {
             throw new Error(`${link.discordChannelId} cannot hold threads`);
         }
-        const thread = await parent.threads.create({ name: info.name });
-        return thread.id;
+        const settings = {
+            name: info.name,
+            autoArchiveDuration: info.autoArchiveDuration as
+                | ThreadAutoArchiveDuration
+                | undefined,
+            rateLimitPerUser: info.rateLimitPerUser,
+        };
+        const thread =
+            info.private === true
+                ? await this.startPrivate(parent, settings, info)
+                : await parent.threads.create(settings);
+        if (!thread) return null;
+        return this.discordThreadInfo(
+            await this.matchSettings(thread, info),
+            parent
+        );
+    }
+
+    /** A private thread, or null when the bot may not start one there. */
+    private async startPrivate(
+        parent: TextChannel | NewsChannel,
+        settings: GuildTextThreadCreateOptions<ChannelType.PrivateThread>,
+        info: FluxerThreadInfo
+    ): Promise<AnyThreadChannel | null> {
+        if (parent.type !== ChannelType.GuildText) return null;
+        if (!this.canStartPrivate(parent)) return null;
+        const thread = await parent.threads.create({
+            ...settings,
+            type: ChannelType.PrivateThread,
+            invitable: info.invitable === true,
+        });
+        if (thread.type === ChannelType.PrivateThread) return thread;
+        // Never leave a private conversation's copy public.
+        await thread.delete();
+        return null;
     }
 
     // ---- HistoryPorts

@@ -8,7 +8,7 @@ import {
     type ParkedMessageStore,
 } from './parkedMessages';
 import type { ThreadRelayStore } from './store';
-import type { ThreadMirror } from './threadMirror';
+import type { ThreadMirror, ThreadPair } from './threadMirror';
 
 export { MAX_PARKED_MESSAGES } from './parkedMessages';
 
@@ -92,6 +92,12 @@ export interface ThreadRelayDeps {
     readonly mirror?: ThreadMirror['mirror'];
     /** Where parked replies are kept; in memory when unset. */
     readonly parked?: ParkedMessageStore;
+    /**
+     * True for a link whose channel is excluded (BF_ADDONS_EXCLUDE_CHANNELS):
+     * the channel or its category is listed. Its threads are never relayed
+     * or copied, even when the link remains.
+     */
+    readonly excluded?: (link: LinkedChannel) => Promise<boolean>;
     readonly now: () => Date;
     readonly logger: AddonLogger;
 }
@@ -106,6 +112,8 @@ export const MAX_THREADS_PER_FLUSH = 50;
 export const MAX_SENDS_PER_THREAD = 100;
 /** A parked reply whose send fails this often is dropped. */
 export const MAX_PARKED_FAILURES = 3;
+/** Upper bound on sent replies remembered because their copy was not recorded. */
+export const MAX_UNRECORDED_SENDS = 1_000;
 
 type Outcome = 'relayed' | 'unmapped' | 'ignored';
 
@@ -120,6 +128,14 @@ export class ThreadRelay {
     private readonly queue = new KeyedQueue();
     private timer: NodeJS.Timeout | null = null;
     private flushing: Promise<void> | null = null;
+    /** Relay work in flight, so stopping can wait for it. */
+    private readonly running = new Set<Promise<void>>();
+    private stopped = false;
+    /**
+     * Replies sent whose copy could not be recorded, as `from:messageId`.
+     * A held one among them is settled, never sent again.
+     */
+    private readonly sentUnrecorded = new Set<string>();
 
     constructor(private readonly deps: ThreadRelayDeps) {
         this.parked = deps.parked ?? new MemoryParkedMessages();
@@ -152,7 +168,34 @@ export class ThreadRelay {
             return null;
         }
         const link = await this.linkFor(from, event.parentId);
-        return !link || this.isOwn(from, event, link) ? null : link;
+        if (!link || this.isOwn(from, event, link)) return null;
+        return (await this.isExcluded(link)) ? null : link;
+    }
+
+    private async isExcluded(link: LinkedChannel): Promise<boolean> {
+        return (await this.deps.excluded?.(link)) === true;
+    }
+
+    /** The link of a thread's parent, unless its channel is excluded. */
+    private async includedLink(from: SnapshotSide, parentId: string) {
+        const link = await this.linkFor(from, parentId);
+        return link && !(await this.isExcluded(link)) ? link : null;
+    }
+
+    /**
+     * Runs one piece of relay work and tracks it until it settles, so
+     * {@link stop} can wait for it. Nothing new starts once stopped.
+     */
+    private track(work: () => Promise<void>): Promise<void> {
+        if (this.stopped) return Promise.resolve();
+        const task = work();
+        const settled = task.then(
+            () => undefined,
+            () => undefined
+        );
+        this.running.add(settled);
+        void settled.then(() => this.running.delete(settled));
+        return task;
     }
 
     /**
@@ -184,6 +227,7 @@ export class ThreadRelay {
         );
         if (pair || from !== 'fluxer' || !this.deps.mirror) return { pair };
         const mirrored = await this.deps.mirror(link, event, raw);
+        if (mirrored === 'skip') return { pair: null, skipped: true };
         return {
             pair: mirrored?.pair ?? null,
             starterCopied: mirrored?.starterCopied === true,
@@ -197,13 +241,14 @@ export class ThreadRelay {
         event: ThreadMessageEvent,
         raw: unknown
     ): Promise<Outcome> {
-        const { pair, starterCopied } = await this.pairFor(
+        const { pair, starterCopied, skipped } = await this.pairFor(
             from,
             link,
             event,
             raw
         );
         if (starterCopied) return 'relayed';
+        if (skipped) return 'ignored';
         if (!pair) return 'unmapped';
         // History copies Discord to Fluxer only, so only Discord replies
         // wait for it. A Fluxer reply is never in the history it copies.
@@ -212,17 +257,57 @@ export class ThreadRelay {
         const to = other(from);
         const threadId = to === 'fluxer' ? pair.fluxerId : pair.discordId;
         const copyId = await this.deps.ports.send(to, link, threadId, raw);
-        await this.deps.store.saveThreadMessage(
-            {
-                guildLinkId: pair.guildLinkId,
-                discordThreadId: pair.discordId,
-                fluxerThreadId: pair.fluxerId,
-                discordMessageId: from === 'discord' ? event.id : copyId,
-                fluxerMessageId: from === 'fluxer' ? event.id : copyId,
-            },
-            this.deps.now()
-        );
+        await this.recordCopy(from, event.id, pair, copyId);
         return 'relayed';
+    }
+
+    /**
+     * Records a sent copy. The send went through, so a failure here is
+     * logged and the reply counts as relayed: sending it again would post
+     * it twice. Its later edits and deletes do not follow.
+     */
+    private async recordCopy(
+        from: SnapshotSide,
+        messageId: string,
+        pair: ThreadPair,
+        copyId: string
+    ): Promise<void> {
+        try {
+            await this.deps.store.saveThreadMessage(
+                {
+                    guildLinkId: pair.guildLinkId,
+                    discordThreadId: pair.discordId,
+                    fluxerThreadId: pair.fluxerId,
+                    discordMessageId: from === 'discord' ? messageId : copyId,
+                    fluxerMessageId: from === 'fluxer' ? messageId : copyId,
+                },
+                this.deps.now()
+            );
+        } catch (error) {
+            this.rememberUnrecorded(from, messageId);
+            const detail = error instanceof Error ? error.message : error;
+            this.deps.logger.warn(
+                `[guild-sync] Thread relay sent ${messageId} as ${copyId} but could not record the copy: ${detail}`
+            );
+        }
+    }
+
+    private rememberUnrecorded(from: SnapshotSide, messageId: string) {
+        this.sentUnrecorded.add(threadKey(from, messageId));
+        if (this.sentUnrecorded.size <= MAX_UNRECORDED_SENDS) return;
+        const oldest = this.sentUnrecorded.values().next();
+        if (!oldest.done) this.sentUnrecorded.delete(oldest.value);
+    }
+
+    /** True when a copy of the held reply was sent already. */
+    private async alreadySent(parked: ParkedMessage): Promise<boolean> {
+        const key = threadKey(parked.from, parked.messageId);
+        if (this.sentUnrecorded.has(key)) return true;
+        const copy = await this.deps.store.findThreadMessage(
+            parked.from,
+            parked.messageId
+        );
+        return copy !== null;
     }
 
     private async park(from: SnapshotSide, event: ThreadMessageEvent) {
@@ -246,7 +331,7 @@ export class ThreadRelay {
     ): Promise<void> {
         if (!this.deps.active()) return;
         const key = threadKey(from, event.channelId);
-        await this.queue.run(key, () =>
+        await this.queued(key, () =>
             this.guarded('send', async () => {
                 const link = await this.relayable(from, event);
                 if (!link) return;
@@ -273,7 +358,7 @@ export class ThreadRelay {
             await this.parked.expire(cutoff);
             const threads = await this.parked.threads(MAX_THREADS_PER_FLUSH);
             for (const { from, threadId } of threads) {
-                await this.queue.run(threadKey(from, threadId), () =>
+                await this.queued(threadKey(from, threadId), () =>
                     this.guarded('send', () => this.drain(from, threadId))
                 );
             }
@@ -316,6 +401,8 @@ export class ThreadRelay {
 
     private async resend(parked: ParkedMessage): Promise<boolean> {
         if (await this.coveredByHistory(parked)) return true;
+        // Sent before but still held: dropping it from the list failed.
+        if (await this.alreadySent(parked)) return true;
         const event: ThreadMessageEvent = {
             id: parked.messageId,
             channelId: parked.threadId,
@@ -381,6 +468,32 @@ export class ThreadRelay {
         this.timer = null;
     }
 
+    /** Runs work in a thread's queue, tracked for {@link stop}. */
+    private queued(key: string, work: () => Promise<void>): Promise<void> {
+        return this.track(() => this.queue.run(key, work));
+    }
+
+    /**
+     * Stops taking work and waits up to `timeoutMs` for work in flight, so
+     * a send is not cut off between posting a copy and recording it.
+     * Returns false when work was still running at the deadline.
+     */
+    async stop(timeoutMs: number): Promise<boolean> {
+        this.stopped = true;
+        this.stopFlushing();
+        if (this.running.size === 0) return true;
+        let timer: NodeJS.Timeout | undefined;
+        const deadline = new Promise<boolean>((resolve) => {
+            timer = setTimeout(() => resolve(false), timeoutMs);
+        });
+        const idle = Promise.all([...this.running]).then(() => true);
+        try {
+            return await Promise.race([idle, deadline]);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
     async edited(
         from: SnapshotSide,
         event: ThreadMessageEvent,
@@ -389,22 +502,30 @@ export class ThreadRelay {
         // A webhook edit is the relay's own write on this side.
         if (!this.deps.active() || event.webhookId || !event.parentId) return;
         const parentId = event.parentId;
-        await this.guarded('edit', async () => {
-            const copy = await this.deps.store.findThreadMessage(
-                from,
-                event.id
-            );
-            const link = copy ? await this.linkFor(from, parentId) : null;
-            if (!copy || !link) return;
-            const to = other(from);
-            await this.deps.ports.edit(
-                to,
-                link,
-                to === 'fluxer' ? copy.fluxerThreadId : copy.discordThreadId,
-                to === 'fluxer' ? copy.fluxerMessageId : copy.discordMessageId,
-                raw
-            );
-        });
+        await this.track(() =>
+            this.guarded('edit', () =>
+                this.editCopy(from, event.id, parentId, raw)
+            )
+        );
+    }
+
+    private async editCopy(
+        from: SnapshotSide,
+        messageId: string,
+        parentId: string,
+        raw: unknown
+    ): Promise<void> {
+        const copy = await this.deps.store.findThreadMessage(from, messageId);
+        const link = copy ? await this.includedLink(from, parentId) : null;
+        if (!copy || !link) return;
+        const to = other(from);
+        await this.deps.ports.edit(
+            to,
+            link,
+            to === 'fluxer' ? copy.fluxerThreadId : copy.discordThreadId,
+            to === 'fluxer' ? copy.fluxerMessageId : copy.discordMessageId,
+            raw
+        );
     }
 
     /**
@@ -423,8 +544,8 @@ export class ThreadRelay {
             this.guarded('delete', () =>
                 this.removeCopy(from, messageId, parentId)
             );
-        if (!threadId) return work();
-        await this.queue.run(threadKey(from, threadId), work);
+        if (!threadId) return this.track(work);
+        await this.queued(threadKey(from, threadId), work);
     }
 
     private async removeCopy(
@@ -435,7 +556,7 @@ export class ThreadRelay {
         const { store, ports } = this.deps;
         if (await this.parked.remove(from, messageId)) return;
         const copy = await store.findThreadMessage(from, messageId);
-        const link = copy ? await this.linkFor(from, parentId) : null;
+        const link = copy ? await this.includedLink(from, parentId) : null;
         if (!copy || !link) return;
         await store.deleteThreadMessage(from, messageId);
         const to = other(from);

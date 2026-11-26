@@ -73,6 +73,11 @@ export type PlanOp =
           readonly kind: SyncKind;
           readonly sourceId: string;
           readonly destId: string;
+          /**
+           * Not created by sync (adopted, or a mirrored pair a person
+           * made). Needs approval, like a hard delete of one.
+           */
+          readonly adopted?: boolean;
       }
     | {
           readonly op: 'hard-delete';

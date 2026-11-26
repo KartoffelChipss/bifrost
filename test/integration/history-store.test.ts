@@ -65,15 +65,72 @@ describe('PostgresHistoryStore readiness and retry', { skip: !url }, () => {
         assert.deepEqual([...ready].sort(), ['archived', 'done', 'ready']);
     });
 
+    it('lists open jobs and key columns, and tells a waiting link', async () => {
+        const store = new PostgresHistoryStore(db);
+        const open = await store.listOpenJobs(linkId);
+        assert.deepEqual(open.map((j) => j.discordId).sort(), [
+            'archived',
+            'importing',
+            'ready',
+        ]);
+        const keys = await store.jobKeys(linkId);
+        assert.equal(keys.length, 5);
+        assert.deepEqual(Object.keys(keys[0] ?? {}).sort(), [
+            'discordId',
+            'fluxerId',
+            'id',
+            'kind',
+        ]);
+        // The ready channel waits for its bridge.
+        assert.equal(await store.hasWaitingJob(linkId, new Date()), true);
+        assert.equal(
+            await store.hasWaitingJob(randomUUID(), new Date()),
+            false
+        );
+    });
+
+    it('lists past the old limit of 10,000 jobs and sums jobs in SQL', async () => {
+        const store = new PostgresHistoryStore(db);
+        const big = randomUUID();
+        await db.query(
+            `INSERT INTO guild_links (id, "createdAt") VALUES ($1, now())`,
+            { bind: [big] }
+        );
+        await db.query(
+            `INSERT INTO ${TABLES.historyJobs} (id, "guildLinkId", kind, "discordId", status, imported, skipped, "createdAt", "updatedAt")
+             SELECT gen_random_uuid(), $1, 'thread', 't' || g, 'done', 2, 1, now(), now()
+             FROM generate_series(1, 10001) AS g`,
+            { bind: [big] }
+        );
+        assert.equal((await store.listJobs(big)).length, 10_001);
+        assert.equal((await store.jobKeys(big)).length, 10_001);
+        assert.deepEqual(await store.listOpenJobs(big), []);
+        assert.deepEqual(await store.jobTotals(big), {
+            jobs: 10_001,
+            open: 0,
+            imported: 20_002,
+            skipped: 10_001,
+            failed: 0,
+        });
+        assert.equal(await store.hasWaitingJob(big, new Date()), false);
+    });
+
     it('knows its archive threads', async () => {
         const store = new PostgresHistoryStore(db);
         assert.equal(await store.isArchiveThread('f-archive'), true);
         assert.equal(await store.isArchiveThread('other'), false);
     });
 
-    it('puts failed jobs back to work', async () => {
+    it('puts failed jobs back to work with a fresh skip streak', async () => {
         const store = new PostgresHistoryStore(db);
+        await db.query(
+            `UPDATE ${TABLES.historyJobs} SET "skipStreak" = 7 WHERE "discordId" = 'failed'`
+        );
         assert.equal(await store.retryFailed(linkId, new Date()), 1);
+        const [retried] = (await store.listJobs(linkId)).filter(
+            (j) => j.discordId === 'failed'
+        );
+        assert.equal(retried?.skipStreak, 0);
         const ready = await store.channelsReadyToBridge(linkId);
         assert.equal(ready.has('failed'), false);
         assert.equal(await store.retryFailed(linkId, new Date()), 0);

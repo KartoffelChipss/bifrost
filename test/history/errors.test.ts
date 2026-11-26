@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
     MessageError,
+    closedThreadCode,
+    isTargetError,
     isTransient,
+    isUnknownWebhook,
     isUploadError,
 } from '../../src/history/errors';
 import { WaitThrottle, WAIT_POLL_MS, importLinks } from '../../src/history';
@@ -75,6 +78,70 @@ describe('error classes', () => {
     });
 });
 
+describe('target errors', () => {
+    it('blames the target for a gone webhook, channel or guild, lost access and a refused login', () => {
+        for (const error of [
+            withFields('Unknown Webhook', {
+                statusCode: 404,
+                code: 'UNKNOWN_WEBHOOK',
+            }),
+            withFields('Unknown Channel', {
+                statusCode: 404,
+                code: 'UNKNOWN_CHANNEL',
+            }),
+            withFields('Missing Permissions', {
+                statusCode: 403,
+                code: 'MISSING_PERMISSIONS',
+            }),
+            withFields('Thread locked', {
+                statusCode: 400,
+                code: 'THREAD_LOCKED',
+            }),
+            withFields('Missing Access', { status: 403, code: 50001 }),
+            withFields('Unauthorized', { statusCode: 401, code: 'OTHER' }),
+            withFields('HTTP 404: No body', { statusCode: 404 }),
+            new MessageError(
+                '1',
+                withFields('x', { statusCode: 404, code: 'UNKNOWN_WEBHOOK' })
+            ),
+        ]) {
+            assert.equal(isTargetError(error), true, String(error));
+        }
+    });
+
+    it('leaves errors about one message to that message', () => {
+        for (const error of [
+            withFields('Invalid Form Body', { statusCode: 400 }),
+            withFields('Unknown Sticker', {
+                statusCode: 404,
+                code: 'UNKNOWN_STICKER',
+            }),
+            withFields('big', { statusCode: 413, code: 'FILE_SIZE_TOO_LARGE' }),
+            withFields('down', { statusCode: 503 }),
+            new Error('no status'),
+        ]) {
+            assert.equal(isTargetError(error), false, String(error));
+        }
+    });
+
+    it('recognises an unknown webhook and a closed thread', () => {
+        assert.equal(
+            isUnknownWebhook(withFields('x', { code: 'UNKNOWN_WEBHOOK' })),
+            true
+        );
+        assert.equal(isUnknownWebhook(withFields('x', { code: 10015 })), true);
+        assert.equal(
+            isUnknownWebhook(withFields('x', { code: 'UNKNOWN_CHANNEL' })),
+            false
+        );
+        assert.equal(
+            closedThreadCode(withFields('x', { code: 'THREAD_ARCHIVED' })),
+            'THREAD_ARCHIVED'
+        );
+        assert.equal(closedThreadCode(withFields('x', { code: 'X' })), null);
+    });
+});
+
 describe('history loop', () => {
     it('polls a waiting job every WAIT_POLL_MS instead of every second', () => {
         let now = 0;
@@ -111,5 +178,31 @@ describe('history loop', () => {
         assert.deepEqual(ran, ['b']);
         assert.deepEqual(result, { more: false, waiting: true });
         assert.equal(logger.entries.length, 1);
+    });
+
+    it('starts no link once the leader lock is lost, and hands the check to the importer', async () => {
+        const passed: unknown[] = [];
+        const importer = {
+            run: async (_link: unknown, _deadline: number, held: unknown) => {
+                passed.push(held);
+                return false;
+            },
+            waiting: async () => false,
+        } as unknown as HistoryImporter;
+        const links = {
+            listGuildLinks: async () => [
+                { id: 'a', discordGuildId: '1', fluxerGuildId: '2' },
+                { id: 'b', discordGuildId: '3', fluxerGuildId: '4' },
+            ],
+        };
+        let held = true;
+        const check = async () => held;
+        const logger = createRecordingLogger();
+        await importLinks(links, importer, logger, check);
+        assert.deepEqual(passed, [check, check]);
+        held = false;
+        const result = await importLinks(links, importer, logger, check);
+        assert.equal(passed.length, 2);
+        assert.deepEqual(result, { more: false, waiting: false });
     });
 });

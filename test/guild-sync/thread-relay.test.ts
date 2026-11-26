@@ -23,6 +23,7 @@ import {
     fluxerAllowedMentions,
     fluxerThreadWebhook,
 } from '../../src/guild-sync/threadWebhook';
+import { excludedLinks, type LinkedChannel } from '../../src/guild-sync/links';
 import { createRecordingLogger } from '../addons/fakes';
 import { FakeLinker } from './fake-store';
 
@@ -82,7 +83,13 @@ async function setup(parked?: ParkedMessageStore) {
     });
     const calls: string[] = [];
     const posted: Posted = new Map();
-    const state = { active: true, now: 0, failSend: false, seq: 0 };
+    const state = {
+        active: true,
+        now: 0,
+        failSend: false,
+        seq: 0,
+        excluded: false,
+    };
     const logger = createRecordingLogger();
     const relay = new ThreadRelay({
         store,
@@ -105,6 +112,7 @@ async function setup(parked?: ParkedMessageStore) {
         },
         active: () => state.active,
         parked,
+        excluded: async () => state.excluded,
         now: () => new Date(state.now),
         logger,
     });
@@ -418,6 +426,169 @@ describe('ThreadRelay', () => {
         );
         assert.deepEqual(store.messages, []);
     });
+
+    it('never sends a held reply twice when its copy cannot be recorded', async () => {
+        const { relay, calls, store, logger } = await setup();
+        await relay.created('discord', inNew('m1'), 'once');
+        store.pairs.push(NEW_PAIR);
+        store.saveThreadMessage = async () => {
+            throw new Error('connection reset');
+        };
+        await relay.flush();
+        await relay.flush();
+        assert.deepEqual(calls, ['send fluxer f-new once']);
+        assert.ok(
+            logger.entries.some((e) =>
+                e.message.includes('could not record the copy')
+            )
+        );
+    });
+
+    it('never resends a held reply that could not be dropped after sending', async () => {
+        const parked = new FlakyParked();
+        const { relay, calls, store } = await setup(parked);
+        await relay.created('discord', inNew('m1'), 'once');
+        store.pairs.push(NEW_PAIR);
+        parked.failRemoves = 1;
+        await relay.flush();
+        assert.equal(parked.size, 1);
+        await relay.flush();
+        assert.deepEqual(calls, ['send fluxer f-new once']);
+        assert.equal(parked.size, 0);
+    });
+
+    it('never resends a held reply when neither the copy nor the drop is saved', async () => {
+        const parked = new FlakyParked();
+        const { relay, calls, store } = await setup(parked);
+        await relay.created('discord', inNew('m1'), 'once');
+        store.pairs.push(NEW_PAIR);
+        store.saveThreadMessage = async () => {
+            throw new Error('connection reset');
+        };
+        parked.failRemoves = 1;
+        await relay.flush();
+        await relay.flush();
+        assert.deepEqual(calls, ['send fluxer f-new once']);
+        assert.equal(parked.size, 0);
+    });
+
+    it('relays, edits and deletes nothing in an excluded channel', async () => {
+        const { relay, calls, state } = await setup();
+        await relay.created('discord', inPost('m1'), 'hello');
+        state.excluded = true;
+        await relay.created('discord', inPost('m2'), 'excluded');
+        await relay.edited('discord', inPost('m1'), 'hello again');
+        await relay.deleted('discord', 'm1', 'd-forum');
+        assert.deepEqual(calls, ['send fluxer f-post hello']);
+    });
+});
+
+/** Fails the next `failRemoves` drops, as a database outage would. */
+class FlakyParked extends MemoryParkedMessages {
+    failRemoves = 0;
+
+    async remove(from: SnapshotSide, messageId: string): Promise<boolean> {
+        if (this.failRemoves > 0) {
+            this.failRemoves -= 1;
+            throw new Error('connection reset');
+        }
+        return super.remove(from, messageId);
+    }
+}
+
+describe('stopping the thread relay', () => {
+    /** A relay whose sends wait until `release` is called. */
+    async function gated() {
+        const s = await setup();
+        let release = () => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        let entered = () => {};
+        const sending = new Promise<void>((resolve) => {
+            entered = resolve;
+        });
+        const relay = new ThreadRelay({
+            store: s.store,
+            links: s.links,
+            ports: {
+                async send(to, _l, threadId, raw) {
+                    entered();
+                    await gate;
+                    s.calls.push(`send ${to} ${threadId} ${String(raw)}`);
+                    return 'copy';
+                },
+                async edit() {},
+                async remove() {},
+                async fetch() {
+                    return null;
+                },
+            },
+            active: () => true,
+            now: () => new Date(0),
+            logger: createRecordingLogger(),
+        });
+        return { ...s, relay, release, sending };
+    }
+
+    it('waits for a send in flight to be recorded', async () => {
+        const s = await gated();
+        const pending = s.relay.created('discord', inPost('m1'), 'hello');
+        await s.sending;
+        const stopping = s.relay.stop(5_000);
+        s.release();
+        assert.equal(await stopping, true);
+        assert.equal(s.store.messages.length, 1);
+        await pending;
+    });
+
+    it('gives up waiting at its deadline', async () => {
+        const s = await gated();
+        const pending = s.relay.created('discord', inPost('m1'), 'hello');
+        await s.sending;
+        assert.equal(await s.relay.stop(5), false);
+        s.release();
+        await pending;
+    });
+
+    it('takes no new work once stopped', async () => {
+        const { relay, calls } = await setup();
+        assert.equal(await relay.stop(5), true);
+        await relay.created('discord', inPost('m1'), 'late');
+        assert.deepEqual(calls, []);
+    });
+});
+
+describe('excludedLinks', () => {
+    const link = (discordChannelId: string): LinkedChannel => ({
+        id: 'l',
+        guildLinkId: 'link-1',
+        discordChannelId,
+        fluxerChannelId: 'f',
+        discordWebhook: { id: 'dw', token: 'secret' },
+        fluxerWebhook: { id: 'fw', token: 'secret' },
+    });
+    const categories = new Map([
+        ['d-in-cat', 'd-cat'],
+        ['d-free', null],
+    ]);
+    const check = excludedLinks(
+        new Set(['d-listed', 'd-cat']),
+        async (id) => categories.get(id) ?? null
+    );
+
+    it('covers a listed channel and the channels of a listed category', async () => {
+        assert.equal(await check(link('d-listed')), true);
+        assert.equal(await check(link('d-in-cat')), true);
+        assert.equal(await check(link('d-free')), false);
+    });
+
+    it('excludes nothing when nothing is listed', async () => {
+        const none = excludedLinks(new Set(), async () => {
+            throw new Error('not asked');
+        });
+        assert.equal(await none(link('d-listed')), false);
+    });
 });
 
 describe('thread webhooks', () => {
@@ -445,10 +616,12 @@ describe('thread webhooks', () => {
             body: { content: 'hi' },
         });
         await webhook.client.rest.patch('/webhooks/w1/secret/messages/m1', {});
+        await webhook.client.rest.get('/webhooks/w1/secret/messages/m1', {});
         assert.deepEqual(
             calls.map((c) => c.route),
             [
                 '/webhooks/w1/secret?wait=true&thread_id=t%201',
+                '/webhooks/w1/secret/messages/m1?thread_id=t%201',
                 '/webhooks/w1/secret/messages/m1?thread_id=t%201',
             ]
         );

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { HistoryEditor } from '../../src/history/editor';
+import { HistoryEditor, type EditorThreads } from '../../src/history/editor';
 import { CopyFormatter } from '../../src/history/format';
 import type { HistoryMode } from '../../src/history/importer';
 import { HistoryMirror } from '../../src/history/mirror';
@@ -96,5 +96,105 @@ describe('HistoryMirror', () => {
         };
         await s.mirror.edited('11', s.load('new'));
         assert.match(s.logger.entries[0]?.message ?? '', /edit: 404/);
+    });
+});
+
+describe('HistoryEditor in a closed Fluxer thread', () => {
+    const closed = (code: string) =>
+        Object.assign(new Error(code), { statusCode: 400, code });
+
+    /** A copy in an archive thread of history, or in an imported thread. */
+    async function threadCopy(where: 'archive' | 'thread') {
+        const store = new FakeHistoryStore();
+        const ports = new FakeHistoryPorts();
+        const links = new FakeLinker();
+        const archive = where === 'archive';
+        await store.ensureJob(
+            'link-1',
+            archive ? 'channel' : 'thread',
+            archive ? '10' : '200',
+            archive ? null : '20'
+        );
+        const job = store.jobs[0];
+        await store.updateJob(job.id, {
+            status: 'done',
+            fluxerId: archive ? 'f10' : 'f200',
+            importWebhook: archive
+                ? { id: 'import-f10', token: 'secret' }
+                : null,
+            archiveThreadId: archive ? 'thread-of-f10' : null,
+        });
+        await links.link('link-1', '20', 'f20');
+        const copy = {
+            discordMessageId: '11',
+            jobId: job.id,
+            discordAuthorId: 'author',
+            fluxerMessageId: 'copy-11',
+            fluxerTargetId: archive ? 'thread-of-f10' : 'f200',
+            inThread: true,
+            webhookId: archive ? 'import-f10' : 'fw-f20',
+        };
+        await store.startMessage(copy);
+        const states: string[] = [];
+        const discord = { archived: true, locked: false };
+        const threads: EditorThreads = {
+            discordState: async () => discord,
+            setState: async (linkId, id, state) => {
+                states.push(`${linkId} ${id} ${JSON.stringify(state)}`);
+            },
+        };
+        /** Edits fail with `codes`, in turn, then go through. */
+        const refuse = (...codes: string[]) => {
+            const original = ports.editCopy.bind(ports);
+            ports.editCopy = async (target, id, content) => {
+                const code = codes.shift();
+                if (code) throw closed(code);
+                return original(target, id, content);
+            };
+        };
+        const editor = new HistoryEditor(store, links, ports, threads);
+        return { copy, ports, states, discord, refuse, editor };
+    }
+
+    const OPENED = '{"archived":false,"locked":false}';
+
+    it('opens a closed archive thread for the edit and closes it again', async () => {
+        const s = await threadCopy('archive');
+        s.refuse('THREAD_ARCHIVED');
+        await s.editor.replace(s.copy, 'fixed');
+        assert.deepEqual(s.ports.edits, ['edit import-f10 copy-11 fixed']);
+        assert.deepEqual(s.states, [
+            `link-1 thread-of-f10 ${OPENED}`,
+            'link-1 thread-of-f10 {"archived":true,"locked":true}',
+        ]);
+    });
+
+    it('puts an imported thread back as it was: locked only, or archived as on Discord', async () => {
+        const s = await threadCopy('thread');
+        s.refuse('THREAD_LOCKED');
+        await s.editor.replace(s.copy, 'fixed');
+        assert.deepEqual(s.states, [
+            `link-1 f200 ${OPENED}`,
+            'link-1 f200 {"archived":false,"locked":true}',
+        ]);
+
+        const t = await threadCopy('thread');
+        t.refuse('THREAD_ARCHIVED');
+        await t.editor.replace(t.copy, 'fixed');
+        assert.deepEqual(t.states, [
+            `link-1 f200 ${OPENED}`,
+            'link-1 f200 {"archived":true,"locked":false}',
+        ]);
+        assert.deepEqual(t.ports.edits, ['edit fw-f20 copy-11 fixed']);
+    });
+
+    it('closes the thread again when the second try fails too', async () => {
+        const s = await threadCopy('archive');
+        s.refuse('THREAD_ARCHIVED', 'THREAD_ARCHIVED');
+        await assert.rejects(s.editor.replace(s.copy, 'fixed'));
+        assert.deepEqual(s.states, [
+            `link-1 thread-of-f10 ${OPENED}`,
+            'link-1 thread-of-f10 {"archived":true,"locked":true}',
+        ]);
     });
 });

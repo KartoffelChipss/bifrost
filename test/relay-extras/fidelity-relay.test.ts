@@ -18,6 +18,9 @@ function install(ports = new FakePorts()) {
 
 afterEach(() => installFidelity(null));
 
+/** The pings of a copy fidelity could not resolve: none. */
+const QUIET = { everyone: false, users: [], roles: [], repliedUser: false };
+
 describe('fidelity mentions, Discord to Fluxer', () => {
     const transformer = new DiscordMessageTransformer();
 
@@ -26,7 +29,7 @@ describe('fidelity mentions, Discord to Fluxer', () => {
             discordMessage({ content: '<@101> <@&111> <#121>' })
         );
         assert.equal(out.content, '@alice @Mods #unknown-channel');
-        assert.equal(out.fidelity, undefined);
+        assert.deepEqual(out.fidelity, { pings: QUIET });
     });
 
     it('maps linked users, synced roles, channels and threads', async () => {
@@ -84,7 +87,7 @@ describe('fidelity mentions, Discord to Fluxer', () => {
             discordMessage({ guildId: 'elsewhere', content: '<@101>' })
         );
         assert.equal(out.content, '@alice');
-        assert.equal(out.fidelity, undefined);
+        assert.deepEqual(out.fidelity, { pings: QUIET });
     });
 
     it('caches the maps between messages', async () => {

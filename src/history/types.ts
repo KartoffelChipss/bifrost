@@ -42,6 +42,8 @@ export interface HistoryJob {
     readonly retryAt: Date | null;
     /** Messages given up on after repeated lasting errors. */
     readonly skipped: number;
+    /** Messages skipped in a row; a copied message resets it. */
+    readonly skipStreak: number;
     readonly messageCount: number | null;
     readonly attachmentCount: number | null;
     readonly surveyedAt: Date | null;
@@ -68,6 +70,7 @@ export type JobPatch = Partial<
         | 'retries'
         | 'retryAt'
         | 'skipped'
+        | 'skipStreak'
         | 'messageCount'
         | 'attachmentCount'
         | 'surveyedAt'
@@ -76,6 +79,25 @@ export type JobPatch = Partial<
         | 'lastError'
     >
 >;
+
+/** The columns of a job that planning and target mapping need. */
+export type JobKey = Pick<HistoryJob, 'id' | 'kind' | 'discordId' | 'fluxerId'>;
+
+/** A link's jobs in sum, for the end-of-import report. */
+export interface JobTotals {
+    readonly jobs: number;
+    /** Jobs neither done nor failed. */
+    readonly open: number;
+    readonly imported: number;
+    readonly skipped: number;
+    readonly failed: number;
+}
+
+/** A thread's state on either platform. */
+export interface ThreadFlags {
+    readonly archived: boolean;
+    readonly locked: boolean;
+}
 
 /** One reaction on a Discord message: the emoji as text, and its count. */
 export interface Reaction {

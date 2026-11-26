@@ -6,6 +6,8 @@ import {
     HistoryImporter,
     MAX_FAILURES,
     MAX_GAP_PAGES,
+    MAX_SKIP_STREAK,
+    RECOVERY_SCAN,
     MAX_PARALLEL,
     PAGE_SIZE,
     PASS_BUDGET_MS,
@@ -18,6 +20,7 @@ import {
     type ImporterDeps,
 } from '../../src/history/importer';
 import { contentHash } from '../../src/history/format';
+import { MAX_JOBS } from '../../src/history/store';
 import { SURVEY_MAX_PAGES, estimateMinutes } from '../../src/history/survey';
 import type { HistoryJob } from '../../src/history/types';
 import { createRecordingLogger } from '../addons/fakes';
@@ -61,6 +64,7 @@ function setup(
         snapshot: source() as GuildSnapshot | null,
         clock: Date.parse('2026-11-25T12:00:00Z'),
         clockMoves: true,
+        admin: null as string | null,
     };
     const reports: string[] = [];
     const threadEdits: string[] = [];
@@ -75,6 +79,7 @@ function setup(
         ports,
         links,
         excluded: new Set(excluded),
+        adminChannel: async () => state.admin,
         inlineMax,
         writer: {
             async updateThread(_guild, id, patch) {
@@ -333,17 +338,6 @@ describe('copying a channel', () => {
             ['import-f10', 'fw-f10']
         );
         assert.equal(s.store.job('10').status, 'done');
-    });
-
-    it('marks a channel failed when it was bridged before its history', async () => {
-        const s = setup();
-        s.ports.add('10', '11');
-        s.map('channel', '10', 'f10');
-        await s.links.link(LINK.id, '10', 'f10');
-        await s.drain();
-        assert.equal(s.store.job('10').status, 'failed');
-        assert.deepEqual(s.ports.sent, []);
-        assert.match(s.reports.join('\n'), /bridged before its history/);
     });
 
     it('pages through more than one page', async () => {
@@ -1141,5 +1135,328 @@ describe('pass budget', () => {
         assert.equal(s.ports.sent.length, perPass);
         await s.drain();
         assert.equal(s.ports.sent.length, PAGE_SIZE);
+    });
+});
+
+/** A Discord snowflake made at `ms` since the Unix epoch. */
+const snowflakeOf = (ms: number) =>
+    (BigInt(ms - 1_420_070_400_000) << BigInt(22)).toString();
+/** When test bridges were made: before the test clock. */
+const LINKED_AT = Date.parse('2026-11-20T09:00:00Z');
+
+/** A text channel, the admin channel and a thread inside it. */
+function adminGuild(): GuildSnapshot {
+    return discordGuild({
+        channels: [
+            channel('10', { name: 'general' }),
+            channel('40', { name: 'admin' }),
+        ],
+        threads: [
+            {
+                id: '400',
+                parentId: '40',
+                name: 'T',
+                archived: false,
+                locked: false,
+                tags: [],
+            },
+        ],
+    });
+}
+
+describe('the admin channel', () => {
+    it('never gets a job, nor do its threads, and the end is still reported', async () => {
+        const s = setup();
+        s.state.snapshot = adminGuild();
+        s.state.admin = '40';
+        s.ports.add('10', '11');
+        s.ports.add('40', '41');
+        s.ports.add('400', '401');
+        s.map('channel', '10', 'f10');
+        s.map('channel', '40', 'f40');
+        s.map('thread', '400', 'f400');
+        await s.drain();
+        assert.deepEqual(
+            s.store.jobs.map((j) => j.discordId),
+            ['10']
+        );
+        await s.links.link(LINK.id, '10', 'f10');
+        await s.drain();
+        assert.equal(s.ports.sent.length, 1);
+        assert.match(
+            s.reports.join('\n'),
+            /History import finished: 1 messages copied/
+        );
+        assert.equal(await s.importer.waiting(LINK.id), false);
+    });
+
+    it('retires jobs made before the channel became the admin channel', async () => {
+        const s = setup();
+        s.state.snapshot = adminGuild();
+        s.ports.add('40', '41');
+        s.map('channel', '10', 'f10');
+        s.map('channel', '40', 'f40');
+        await s.drain();
+        assert.equal(s.store.job('40').status, 'ready');
+        assert.equal(s.store.job('400').status, 'pending');
+        s.state.admin = '40';
+        s.ports.add('40', '42');
+        await s.links.link(LINK.id, '10', 'f10');
+        await s.drain();
+        assert.equal(s.store.job('40').status, 'done');
+        assert.equal(s.store.job('400').status, 'done');
+        assert.match(s.store.job('40').lastError ?? '', /admin channel/);
+        assert.equal(s.ports.sent.length, 1);
+        assert.equal(await s.importer.waiting(LINK.id), false);
+        assert.match(s.reports.join('\n'), /History import finished/);
+    });
+});
+
+describe('errors about the target', () => {
+    it('fails the job instead of skipping messages when the import webhook is gone, and a retry makes a new one', async () => {
+        const s = setup('apply', ['20', '30']);
+        s.ports.add('10', '11');
+        s.ports.add('10', '12');
+        s.map('channel', '10', 'f10');
+        s.ports.failure = Object.assign(new Error('Unknown Webhook'), {
+            statusCode: 404,
+            code: 'UNKNOWN_WEBHOOK',
+        });
+        s.ports.failNext = MAX_FAILURES;
+        for (let i = 0; i < MAX_FAILURES; i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+        }
+        const job = s.store.job('10');
+        assert.equal(job.status, 'failed');
+        assert.equal(job.skipped, 0);
+        assert.equal(job.importWebhook, null);
+        assert.deepEqual(s.store.messages, []);
+        assert.match(
+            s.reports.join('\n'),
+            /History import stopped for channel 10: Unknown Webhook/
+        );
+        assert.equal(await s.store.retryFailed(LINK.id), 1);
+        await s.drain();
+        assert.equal(s.ports.sent.length, 2);
+        assert.equal(s.ports.webhooks, MAX_FAILURES + 1);
+    });
+
+    it('fails a job once MAX_SKIP_STREAK messages in a row are skipped, counting again after a copy', async () => {
+        const s = setup('apply', ['20', '30']);
+        for (let i = 0; i < 2 * MAX_SKIP_STREAK; i++)
+            s.ports.add('10', String(100 + i));
+        s.map('channel', '10', 'f10');
+        const ok = String(100 + MAX_SKIP_STREAK - 1);
+        const original = s.ports.sendCopy.bind(s.ports);
+        s.ports.sendCopy = async (target, payload) => {
+            if (payload.content.startsWith(`message ${ok}\n`))
+                return original(target, payload);
+            throw Object.assign(new Error('Invalid Form Body'), {
+                statusCode: 400,
+            });
+        };
+        const runs = 2 * MAX_SKIP_STREAK * MAX_FAILURES;
+        for (let i = 0; i < runs; i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+            if (s.store.job('10').status === 'failed') break;
+        }
+        const job = s.store.job('10');
+        assert.equal(job.status, 'failed');
+        assert.equal(job.imported, 1);
+        assert.equal(job.skipped, 2 * MAX_SKIP_STREAK - 1);
+        assert.match(
+            s.reports.join('\n'),
+            new RegExp(
+                `${MAX_SKIP_STREAK} messages in a row could not be copied`
+            )
+        );
+    });
+});
+
+describe('job limit', () => {
+    it('stops making jobs at MAX_JOBS, warns once, and runs the jobs it has', async () => {
+        const s = setup('apply', ['20']);
+        await s.store.ensureJob(LINK.id, 'channel', 'filler', null);
+        const filler = s.store.job('filler');
+        s.store.jobs = Array.from({ length: MAX_JOBS - 1 }, (_, i) => ({
+            ...filler,
+            id: `filler-${i}`,
+            discordId: `x${i}`,
+            status: 'done' as const,
+        }));
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        await s.drain();
+        assert.equal(s.store.jobs.length, MAX_JOBS);
+        assert.equal(s.store.job('10').status, 'ready');
+        assert.throws(() => s.store.job('30'));
+        assert.equal(s.ports.sent.length, 1);
+        assert.equal(s.reports.filter((r) => /reached/.test(r)).length, 1);
+    });
+
+    it('reads only open jobs while applying', async () => {
+        const s = setup();
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        assert.equal(s.store.listings.get('listJobs'), undefined);
+        assert.ok((s.store.listings.get('listOpenJobs') ?? 0) > 0);
+    });
+});
+
+describe('channels bridged before their history', () => {
+    it('copies the history from before the link into an archive thread, then is done', async () => {
+        const s = setup('apply', ['20', '30']);
+        const before = snowflakeOf(LINKED_AT - 60_000);
+        const relayed = snowflakeOf(LINKED_AT - 30_000);
+        const after = snowflakeOf(LINKED_AT + 60_000);
+        s.ports.add('10', '11');
+        s.ports.add('10', '12', { webhookId: 'dw-10' });
+        s.ports.add('10', before);
+        s.ports.add('10', relayed);
+        s.ports.add('10', after);
+        s.ports.relayed.add(relayed);
+        s.map('channel', '10', 'f10');
+        await s.links.link(LINK.id, '10', 'f10');
+        s.ports.linkTimes.set('10', new Date(LINKED_AT));
+        await s.drain();
+        assert.deepEqual(
+            s.ports.sent.map((m) => [
+                m.webhook,
+                m.threadId,
+                m.content.split('\n')[0],
+            ]),
+            [
+                ['import-f10', 'thread-of-f10', 'message 11'],
+                ['import-f10', 'thread-of-f10', `message ${before}`],
+            ]
+        );
+        assert.equal(s.threadEdits[0], 'create f10 History before 2026-11-20');
+        assert.equal(
+            s.threadEdits[s.threadEdits.length - 1],
+            'thread-of-f10 {"archived":true,"locked":true}'
+        );
+        assert.equal(s.store.job('10').status, 'done');
+        assert.ok((await s.store.channelsReadyToBridge(LINK.id)).has('10'));
+        assert.doesNotMatch(s.reports.join('\n'), /stopped/);
+    });
+
+    it('marks a voice channel bridged first done with a notice, as it cannot hold a thread', async () => {
+        const s = setup('apply', ['10', '20']);
+        s.ports.add('30', '31');
+        s.map('channel', '30', 'f30');
+        await s.links.link(LINK.id, '30', 'f30');
+        await s.drain();
+        assert.deepEqual(s.ports.sent, []);
+        assert.equal(s.store.job('30').status, 'done');
+        const reports = s.reports.join('\n');
+        assert.match(
+            reports,
+            /bridged before its history was copied, and its Fluxer channel cannot hold an archive thread/
+        );
+        assert.match(reports, /History import finished/);
+    });
+
+    it('lets an admin retry a job that failed because its channel was bridged first', async () => {
+        const s = setup('apply', ['20', '30']);
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        await s.importer.planJobs(LINK);
+        await s.store.updateJob(s.store.job('10').id, {
+            status: 'failed',
+            lastError: 'the channel was bridged before its history was copied',
+        });
+        await s.links.link(LINK.id, '10', 'f10');
+        s.ports.linkTimes.set('10', new Date(LINKED_AT));
+        assert.equal(await s.store.retryFailed(LINK.id), 1);
+        await s.drain();
+        assert.equal(s.store.job('10').status, 'done');
+        assert.deepEqual(
+            s.ports.sent.map((m) => m.threadId),
+            ['thread-of-f10']
+        );
+    });
+});
+
+describe('archive threads and a late bridge', () => {
+    it('keeps the archive open until the bridge exists, then copies up to the link', async () => {
+        const s = setup('apply', ['20', '30'], 2);
+        for (const id of ['11', '12', '13']) s.ports.add('10', id);
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        assert.equal(s.store.job('10').status, 'ready');
+        assert.ok(!s.threadEdits.some((e) => e.includes('"archived":true')));
+        assert.equal(await s.importer.waiting(LINK.id), true);
+        const gap = snowflakeOf(LINKED_AT - 60_000);
+        const relayed = snowflakeOf(LINKED_AT - 30_000);
+        const live = snowflakeOf(LINKED_AT + 60_000);
+        s.ports.add('10', gap);
+        s.ports.add('10', relayed);
+        s.ports.add('10', live);
+        s.ports.relayed.add(relayed);
+        await s.links.link(LINK.id, '10', 'f10');
+        s.ports.linkTimes.set('10', new Date(LINKED_AT));
+        await s.drain();
+        assert.deepEqual(
+            s.ports.sent.map((m) => m.content.split('\n')[0]),
+            ['message 11', 'message 12', 'message 13', `message ${gap}`]
+        );
+        assert.ok(s.ports.sent.every((m) => m.threadId === 'thread-of-f10'));
+        assert.equal(s.store.job('10').status, 'done');
+        assert.equal(
+            s.threadEdits[s.threadEdits.length - 1],
+            'thread-of-f10 {"archived":true,"locked":true}'
+        );
+    });
+});
+
+describe('leader lock', () => {
+    it('stops copying once the lock is lost', async () => {
+        const s = setup();
+        for (const id of ['11', '12', '13']) s.ports.add('10', id);
+        s.map('channel', '10', 'f10');
+        let checks = 0;
+        const held = async () => ++checks <= 1;
+        await s.importer.run(LINK, s.state.clock + PASS_BUDGET_MS, held);
+        assert.equal(s.ports.sent.length, 1);
+        assert.equal(s.store.job('10').failures, 0);
+    });
+
+    it('looks for a cut-off copy across a full page of recent Fluxer messages', async () => {
+        const s = setup();
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        await s.importer.planJobs(LINK);
+        const job = s.store.job('10');
+        await s.store.updateJob(job.id, {
+            status: 'importing',
+            cutoffId: '11',
+            importWebhook: { id: 'import-f10', token: 'secret' },
+        });
+        await s.store.startMessage({
+            discordMessageId: '11',
+            jobId: job.id,
+            discordAuthorId: 'author',
+            fluxerMessageId: null,
+            fluxerTargetId: 'f10',
+            inThread: false,
+            webhookId: 'import-f10',
+        });
+        // Ours is last in a full page: Fluxer returns up to 100 messages.
+        assert.equal(RECOVERY_SCAN, 100);
+        s.ports.recentCopies = [
+            ...Array.from({ length: 99 }, (_, i) => ({
+                id: `chat-${i}`,
+                webhookId: 'someone',
+                content: '',
+            })),
+            { id: 'ours', webhookId: 'import-f10', content: '' },
+        ];
+        await s.drain();
+        assert.deepEqual(s.ports.sent, []);
+        assert.equal(s.store.messages[0]?.fluxerMessageId, 'ours');
     });
 });

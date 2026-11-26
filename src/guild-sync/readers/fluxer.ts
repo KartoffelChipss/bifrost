@@ -138,7 +138,7 @@ export function fluxerChannel(c: GuildChannel): ChannelSnap {
  */
 const MAX_ARCHIVE_PAGES = 20;
 
-function fluxerThread(
+export function fluxerThread(
     t: ThreadChannel,
     tagNames: ReadonlyMap<string, string>
 ): ThreadSnap {

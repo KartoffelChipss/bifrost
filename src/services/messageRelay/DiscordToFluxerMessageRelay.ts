@@ -94,14 +94,21 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
             return;
         }
 
+        // Fork: what is queued on failure; never a field Fluxer rejected.
+        let queued = msg;
         try {
             const webhook = await webhookService.getFluxerWebhook(
                 linkedChannel.fluxerWebhookId,
                 linkedChannel.fluxerWebhookToken
             );
 
-            const { messageId: webhookMessageId } =
-                await webhookService.sendMessageViaFluxerWebhook(webhook, msg);
+            const sent = await webhookService.sendCopyViaFluxerWebhook(
+                webhook,
+                msg
+            );
+            queued = sent.payload;
+            if (!sent.ok) throw sent.error;
+            const webhookMessageId = sent.messageId;
 
             if (message.type !== MessageType.UserJoin) {
                 await linkService.createMessageLink({
@@ -124,7 +131,7 @@ export default class DiscordToFluxerMessageRelay extends MessageRelay<
                 'discord_to_fluxer',
                 linkedChannel.id,
                 message.id,
-                toSerializable(msg)
+                toSerializable(queued)
             );
         }
     }

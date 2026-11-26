@@ -119,6 +119,40 @@ export default class DiscordMessageTransformer extends MessageTransformer<
         return { text: 'From another server' };
     }
 
+    private buildQuoteEmbed(
+        referencedMessage: { readonly author: DiscordMessage['author'] | null },
+        content: string,
+        refrenceEmoji: string,
+        footer: WebhookEmbedFooter | null
+    ): WebhookEmbed {
+        const referencedAuthor = referencedMessage.author;
+        return new WebhookEmbed({
+            description: `${content}`,
+            color: 0x0b0d0e,
+            author: {
+                name: referencedAuthor
+                    ? `${referencedAuthor.username} ${refrenceEmoji}`
+                    : `Forwarded message ${refrenceEmoji}`,
+                iconURL: referencedAuthor?.avatarURL() || undefined,
+            },
+            footer,
+        });
+    }
+
+    /**
+     * Fork: the quote a native reply replaces, or null when the replied-to
+     * message is gone or has no text. A lost quote never costs the copy.
+     */
+    private async nativeReplyQuote(
+        message: DiscordMessage
+    ): Promise<WebhookEmbed | null> {
+        const referenced = await message.fetchReference().catch(() => null);
+        if (!referenced) return null;
+        const content = this.sanitizeContent(referenced);
+        if (!content || content.trim() === '') return null;
+        return this.buildQuoteEmbed(referenced, content, '↩️', null);
+    }
+
     public async transformMessage(
         message: DiscordMessage,
         fluxerEmojis: GeneralEmoji[] = []
@@ -150,8 +184,23 @@ export default class DiscordMessageTransformer extends MessageTransformer<
 
         const embeds: WebhookEmbed[] = this.buildRichEmbeds(message);
 
-        // Fork: a native reply on Fluxer replaces the quote embed.
-        if (message.reference && !fidelity.nativeReply) {
+        // Fork: a native reply on Fluxer replaces the quote embed, which
+        // is kept aside for a rejected send or an edit
+        // (src/relay-extras/fidelity/fallback.ts).
+        if (message.reference && fidelity.nativeReply) {
+            return fidelity.finish(
+                {
+                    content: messageContent,
+                    username: message.author.username,
+                    avatarURL: message.author.avatarURL() || '',
+                    attachments: attachments,
+                    embeds,
+                },
+                await this.nativeReplyQuote(message)
+            );
+        }
+
+        if (message.reference) {
             const isForwarded = message.flags.has(MessageFlags.HasSnapshot);
             const referencedMessage = isForwarded
                 ? message.messageSnapshots.first()
@@ -174,23 +223,17 @@ export default class DiscordMessageTransformer extends MessageTransformer<
             const content = this.sanitizeContent(referencedMessage);
             const refrenceEmoji = isForwarded ? '⏩' : '↩️';
             if (content && content.trim() !== '') {
-                const referencedAuthor = referencedMessage.author;
                 const footer = isForwarded
                     ? this.buildForwardSourceFooter(message)
                     : null;
                 embeds.unshift(
-                    new WebhookEmbed({
-                        description: `${content}`,
-                        color: 0x0b0d0e,
-                        author: {
-                            name: referencedAuthor
-                                ? `${referencedAuthor.username} ${refrenceEmoji}`
-                                : `Forwarded message ${refrenceEmoji}`,
-                            iconURL: referencedAuthor?.avatarURL() || undefined,
-                        },
-                        footer,
-                    })
-                );
+                    this.buildQuoteEmbed(
+                        referencedMessage,
+                        content,
+                        refrenceEmoji,
+                        footer
+                    )
+                ); // Fork: shared with nativeReplyQuote
             } else if (attachments.length > 0 || embeds.length > 0) {
                 embeds.unshift(
                     new WebhookEmbed({

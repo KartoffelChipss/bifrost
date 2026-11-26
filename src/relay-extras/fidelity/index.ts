@@ -6,14 +6,15 @@ import {
     type FluxerSource,
 } from './sources';
 import type { FidelityView, SourceFacts } from './types';
-import { NO_FIDELITY } from './view';
+import { NO_FIDELITY, NO_PINGS, plainView } from './view';
 
 /**
  * The hooks upstream's message transformers call. Upstream builds its
  * transformers in src/discord.ts, src/fluxer.ts and upstreamBridge.ts
  * without a way to pass dependencies, so the service is installed here
- * when the relay extras start and removed when they stop. Without it
- * every hook returns NO_FIDELITY: upstream's behaviour.
+ * when the relay extras start and removed when they stop. Without it, or
+ * when a lookup fails, every hook returns upstream's formatting with
+ * explicit pings (view.ts plainView).
  */
 
 export type { FidelityView } from './types';
@@ -57,12 +58,28 @@ async function viewFor<M extends object>(
     return service.prepare(quoted ? { ...read, reply: null } : read);
 }
 
-/** Fidelity for a Discord message copied to Fluxer. */
-export function discordFidelity(message: DiscordSource): Promise<FidelityView> {
-    return viewFor(message, discordFacts);
+/**
+ * Fidelity for a Discord message copied to Fluxer. Without it, the copy
+ * may still ping everyone when the Discord message did: Discord sets
+ * `mention_everyone` only when the author may mention everyone. Like the
+ * thread relay (upstreamBridge.toFluxerPayload), nothing else pings.
+ */
+export async function discordFidelity(
+    message: DiscordSource
+): Promise<FidelityView> {
+    const view = await viewFor(message, discordFacts);
+    if (view !== NO_FIDELITY) return view;
+    const everyone = message.mentions?.everyone === true;
+    return plainView({ ...NO_PINGS, everyone });
 }
 
-/** Fidelity for a Fluxer message copied to Discord. */
-export function fluxerFidelity(message: FluxerSource): Promise<FidelityView> {
-    return viewFor(message, fluxerFacts);
+/**
+ * Fidelity for a Fluxer message copied to Discord. Without it, upstream
+ * breaks every `@` in the text, and the copy pings no one.
+ */
+export async function fluxerFidelity(
+    message: FluxerSource
+): Promise<FidelityView> {
+    const view = await viewFor(message, fluxerFacts);
+    return view === NO_FIDELITY ? plainView(NO_PINGS) : view;
 }

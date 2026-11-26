@@ -1,3 +1,4 @@
+import type { Webhook as FluxerWebhook } from '@fluxerjs/core';
 import { Op } from 'sequelize';
 import { QueuedMessageModel } from '../db/models/QueuedMessageModel';
 import WebhookEmbed from './WebhookEmbed';
@@ -13,6 +14,7 @@ import {
     isFluxerApiBlocked,
     markFluxerApiBlocked,
 } from '../utils/fluxerApiGuard';
+import type { CopyFidelity } from '../relay-extras/fidelity/types';
 
 export type SerializableEmbed = ReturnType<WebhookEmbed['toPlainObject']>;
 
@@ -22,6 +24,7 @@ export type SerializableWebhookMessageData = {
     avatarURL: string;
     attachments?: WebhookAttachment[];
     embeds?: SerializableEmbed[];
+    fidelity?: CopyFidelity; // Fork: plain JSON (relay-extras/fidelity)
 };
 
 export function toSerializable(
@@ -114,11 +117,13 @@ export default class MessageQueueService {
                         channelLink.fluxerWebhookId,
                         channelLink.fluxerWebhookToken
                     );
-                    const { messageId: fluxerMessageId } =
-                        await webhookService.sendMessageViaFluxerWebhook(
-                            webhook,
-                            payload
-                        );
+                    // Fork: a field Fluxer rejected leaves the queue too.
+                    const fluxerMessageId = await this.sendQueuedToFluxer(
+                        entry,
+                        webhookService,
+                        webhook,
+                        payload
+                    );
                     await linkService.createMessageLink({
                         discordMessageId: entry.sourceMessageId,
                         fluxerMessageId,
@@ -163,6 +168,30 @@ export default class MessageQueueService {
                 );
             }
         }
+    }
+
+    /**
+     * Fork: sends a queued copy to Fluxer. When the send failed after
+     * dropping a native reply or sticker Fluxer rejected, the entry keeps
+     * the payload without it, so a later retry does not send it again.
+     */
+    private async sendQueuedToFluxer(
+        entry: QueuedMessageModel,
+        webhookService: WebhookService,
+        webhook: FluxerWebhook,
+        payload: WebhookMessageData
+    ): Promise<string> {
+        const sent = await webhookService.sendCopyViaFluxerWebhook(
+            webhook,
+            payload
+        );
+        if (sent.ok) return sent.messageId;
+        if (sent.payload !== payload) {
+            await entry.update({
+                payload: JSON.stringify(toSerializable(sent.payload)),
+            });
+        }
+        throw sent.error;
     }
 
     startDrainInterval(

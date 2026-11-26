@@ -47,29 +47,61 @@ export class ArchiveThreads {
         channelType: number | undefined,
         cutoff: Date
     ): Promise<string | null> {
-        const { inlineMax, writer, logger } = this.deps;
+        const { inlineMax, logger } = this.deps;
         if (inlineMax <= 0 || job.kind !== 'channel' || !job.fluxerId)
             return null;
         if (channelType === undefined || !THREAD_PARENTS.has(channelType))
             return null;
         if ((await this.countUpTo(job, inlineMax)) <= inlineMax) return null;
         try {
-            const id = await writer.createThread(link.fluxerGuildId, {
-                parentId: job.fluxerId,
-                parentType: channelType,
-                name: archiveName(cutoff),
-                tags: [],
-                starter: null,
-                webhook: null,
-            });
-            await writer.updateThread(link.fluxerGuildId, id, { locked: true });
-            return id;
+            return await this.create(link, job.fluxerId, channelType, cutoff);
         } catch (error) {
             logger.warn(
                 `[history] No archive thread for channel ${job.discordId}, importing inline: ${describeError(error)}`
             );
             return null;
         }
+    }
+
+    /**
+     * Makes the archive thread for a channel that was bridged before its
+     * history was copied, whatever its size: inline copies would land
+     * below the live messages. Returns null when its Fluxer copy cannot
+     * hold a thread. Throws when the thread cannot be made, so the job
+     * retries rather than losing its history.
+     */
+    async openForBridged(
+        link: LinkedGuild,
+        job: HistoryJob,
+        channelType: number | undefined,
+        linkedAt: Date
+    ): Promise<string | null> {
+        if (job.kind !== 'channel' || !job.fluxerId) return null;
+        if (channelType === undefined) {
+            throw new Error('the channel type is not known yet');
+        }
+        if (!THREAD_PARENTS.has(channelType)) return null;
+        return this.create(link, job.fluxerId, channelType, linkedAt);
+    }
+
+    /** Creates a locked archive thread named after the day it ends. */
+    private async create(
+        link: LinkedGuild,
+        parentId: string,
+        parentType: number,
+        cutoff: Date
+    ): Promise<string> {
+        const { writer } = this.deps;
+        const id = await writer.createThread(link.fluxerGuildId, {
+            parentId,
+            parentType,
+            name: archiveName(cutoff),
+            tags: [],
+            starter: null,
+            webhook: null,
+        });
+        await writer.updateThread(link.fluxerGuildId, id, { locked: true });
+        return id;
     }
 
     /** Locks and archives a finished archive thread for good. */
