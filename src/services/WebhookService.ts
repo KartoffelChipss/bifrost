@@ -283,7 +283,7 @@ export class WebhookService {
                 const field = rejectedField(error, payload.fidelity);
                 if (!field) {
                     logger.error(
-                        'Error sending message via Fluxer webhook:',
+                        `Error sending message via Fluxer webhook${describeRejection(error, payload)}:`,
                         error
                     );
                     return { ok: false, error, payload };
@@ -417,3 +417,25 @@ export type FluxerCopyResult =
           readonly error: unknown;
           readonly payload: WebhookMessageData;
       };
+
+/**
+ * Fork: which fields Fluxer refused and the copy's shape, for the log.
+ * Never the text itself: only lengths and counts.
+ */
+export function describeRejection(
+    error: unknown,
+    payload: WebhookMessageData
+): string {
+    const errors = (error as { errors?: unknown } | null)?.errors;
+    const paths = Array.isArray(errors)
+        ? errors
+              .slice(0, 5)
+              .map(
+                  (e: { path?: unknown; code?: unknown }) =>
+                      `${String(e?.path ?? '?')}=${String(e?.code ?? '?')}`
+              )
+              .join(', ')
+        : '';
+    const shape = `content ${payload.content.length} chars, username ${payload.username.length} chars, ${payload.attachments?.length ?? 0} files, ${payload.embeds?.length ?? 0} embeds`;
+    return paths ? ` (${paths}; ${shape})` : ` (${shape})`;
+}
