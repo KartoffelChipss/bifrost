@@ -32,6 +32,25 @@ import {
     type ThreadSpec,
 } from './writer';
 
+/**
+ * The body of a Fluxer role update, as the library's Role.edit builds it
+ * (toRoleEditBody), plus `icon` and `unicode_emoji`, which the library
+ * treats as read-only but Fluxer's role update takes
+ * (GuildRequestSchemas.ts).
+ */
+export function roleUpdateBody(patch: RolePatch): Record<string, unknown> {
+    const body: Record<string, unknown> = {};
+    if (patch.name !== undefined) body.name = patch.name;
+    if (patch.color !== undefined) body.color = patch.color;
+    if (patch.hoist !== undefined) body.hoist = patch.hoist;
+    if (patch.mentionable !== undefined) body.mentionable = patch.mentionable;
+    if (patch.permissions !== undefined) body.permissions = patch.permissions;
+    if (patch.unicodeEmoji !== undefined)
+        body.unicode_emoji = patch.unicodeEmoji;
+    if (patch.icon !== undefined) body.icon = patch.icon;
+    return body;
+}
+
 function toOverwrites(overwrites: readonly OverwriteSpec[]) {
     return overwrites.map((o) => ({
         id: o.id,
@@ -234,24 +253,16 @@ export class FluxerGuildWriter implements GuildWriter {
         patch: RolePatch
     ): Promise<void> {
         const guild = await this.guild(guildId);
-        const { unicodeEmoji, icon, ...fields } = patch;
-        if (Object.keys(fields).length > 0) {
-            const role = await timedWrite(
-                'Fluxer role fetch',
-                guild.fetchRole(roleId)
-            );
-            await timedWrite('Fluxer role edit', role.edit(fields));
-        }
-        if (unicodeEmoji === undefined && icon === undefined) return;
-        // The library treats the role icon as read-only; Fluxer's role
-        // update takes `icon` and `unicode_emoji` (GuildRequestSchemas.ts).
-        const body: Record<string, unknown> = {};
-        if (unicodeEmoji !== undefined) body.unicode_emoji = unicodeEmoji;
-        if (icon !== undefined) body.icon = icon;
+        const body = roleUpdateBody(patch);
+        if (Object.keys(body).length === 0) return;
+        // Fluxer has no route to read one role (GuildRoleController.ts
+        // has GET /guilds/:id/roles only), so the library's fetchRole
+        // always fails. Patch the role directly, as Role.edit would.
         await timedWrite(
-            'Fluxer role icon',
+            'Fluxer role edit',
             guild.client.rest.patch(Routes.guildRole(guildId, roleId), {
                 body,
+                auth: true,
             })
         );
     }
@@ -410,11 +421,14 @@ export class FluxerGuildWriter implements GuildWriter {
 
     async deleteRole(guildId: string, roleId: string): Promise<void> {
         const guild = await this.guild(guildId);
-        const role = await timedWrite(
-            'Fluxer role fetch',
-            guild.fetchRole(roleId)
+        // No fetchRole first: Fluxer cannot read one role (updateRole).
+        await timedWrite(
+            'Fluxer role delete',
+            guild.client.rest.delete(Routes.guildRole(guildId, roleId), {
+                auth: true,
+            })
         );
-        await timedWrite('Fluxer role delete', role.delete());
+        guild.roles.delete(roleId);
     }
 
     async deleteChannel(guildId: string, channelId: string): Promise<void> {
