@@ -23,6 +23,8 @@ export interface FailureLedger {
     blocked(key: string, now: Date): boolean;
     failed(key: string, now: Date): void;
     succeeded(key: string): void;
+    /** Failures in a row so far; 0 for an op never failed or since forgotten. */
+    count(key: string): number;
 }
 
 /** The wait after `count` failures in a row, or 0 before the threshold. */
@@ -55,5 +57,9 @@ export class MemoryFailureLedger implements FailureLedger {
 
     succeeded(key: string): void {
         this.entries.delete(key);
+    }
+
+    count(key: string): number {
+        return this.entries.get(key)?.count ?? 0;
     }
 }

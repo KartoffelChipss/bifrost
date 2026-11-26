@@ -17,6 +17,14 @@ import type { Plan } from './plan';
 import { MAX_CHANNELS_PER_CATEGORY } from './diff';
 import { ORDER_PENDING } from './order';
 import {
+    MAX_BLOCKING_FAILURES,
+    PostBlockers,
+    WAITS_FOR_OLDER,
+    isThreadCreate,
+    threadParents,
+    type ThreadCreate,
+} from './postOrder';
+import {
     botHeldBits,
     everyoneHidden,
     maxBitrateOf,
@@ -24,7 +32,11 @@ import {
     projectSourceSettings,
     type Fields,
 } from './project';
-import { THREAD_ONLY_TYPES, type GuildSnapshot } from './snapshot';
+import {
+    THREAD_ONLY_TYPES,
+    compareSnowflakes,
+    type GuildSnapshot,
+} from './snapshot';
 import type { GuildSyncStore } from './store';
 import {
     ARCHIVE_CATEGORY,
@@ -157,6 +169,8 @@ interface RunState {
      * Channel creates wait for it (see everyoneGate).
      */
     everyonePending: boolean;
+    /** Older posts not created this run, which newer ones wait for. */
+    readonly posts: PostBlockers;
 }
 
 function buildMap(state: RunState): IdMap {
@@ -771,10 +785,14 @@ function messageOf(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
-/** The ledger key for one op: the same op on the same object. */
-function opKey(plan: Plan, op: PlanOp): string {
+/** The ledger key for one op of a link: the same op on the same object. */
+export function failureKey(guildLinkId: string, op: PlanOp): string {
     const target = 'sourceId' in op ? op.sourceId : op.scope;
-    return `${plan.guildLinkId}:${op.op}:${op.kind}:${target}`;
+    return `${guildLinkId}:${op.op}:${op.kind}:${target}`;
+}
+
+function opKey(plan: Plan, op: PlanOp): string {
+    return failureKey(plan.guildLinkId, op);
 }
 
 /** True for an update of the destination @everyone role. */
@@ -1165,13 +1183,88 @@ function newState(input: ApplyInput, deps: ApplyDeps): RunState {
             ...input.plan.body.ops,
             ...input.plan.body.deferred,
         ].some((op) => isEveryoneUpdate(op, input.destination.everyoneRoleId)),
+        posts: deferredPosts(input),
     };
+}
+
+/**
+ * Blockers for the posts deferred over the write cap: a newer post in
+ * the same channel must not be created before them.
+ */
+function deferredPosts(input: ApplyInput): PostBlockers {
+    const posts = new PostBlockers(threadParents(input.source.threads));
+    for (const op of input.plan.body.deferred) posts.block(op);
+    return posts;
+}
+
+/**
+ * Warns when a post was created after a newer one in its channel: it was
+ * let go after MAX_BLOCKING_FAILURES, and its copy is out of order.
+ */
+function warnIfLate(state: RunState, op: ThreadCreate): void {
+    const parent = state.posts.parentOf(op);
+    const newer = state.input.source.threads.find(
+        (t) =>
+            t.parentId === parent &&
+            compareSnowflakes(t.id, op.sourceId) > 0 &&
+            state.map.dest('thread', t.id) !== null
+    );
+    if (!newer) return;
+    state.deps.logger.warn(
+        `[guild-sync] Post ${op.sourceId} was created after the newer post ${newer.id} in channel ${parent}: it is out of order on the destination`
+    );
+}
+
+/**
+ * After a thread create: one not created this run holds up the newer
+ * posts in its channel, unless it failed MAX_BLOCKING_FAILURES times.
+ */
+function notePost(
+    state: RunState,
+    op: PlanOp,
+    outcome: 'written' | 'skipped' | 'failed'
+): void {
+    if (!isThreadCreate(op)) return;
+    if (outcome === 'written') return warnIfLate(state, op);
+    const { failures, logger } = state.deps;
+    const count = failures?.count(opKey(state.input.plan, op)) ?? 0;
+    if (count < MAX_BLOCKING_FAILURES) return state.posts.block(op);
+    logger.warn(
+        `[guild-sync] Post ${op.sourceId} failed ${count} times in a row; newer posts in its channel no longer wait for it`
+    );
+}
+
+/** Applies one op, or skips it, and counts the outcome. */
+async function runOp(state: RunState, op: PlanOp): Promise<void> {
+    const older = state.posts.waitsFor(op);
+    if (older !== null) {
+        state.skipped.push({ op, reason: `${WAITS_FOR_OLDER} (${older})` });
+        return;
+    }
+    const bucket = bucketOf(op);
+    const kindFailures = state.failedByKind.get(bucket) ?? 0;
+    if (kindFailures >= MAX_FAILURES_PER_KIND) {
+        state.skipped.push({
+            op,
+            reason: `${kindFailures} ${bucket} writes failed this cycle`,
+        });
+        notePost(state, op, 'skipped');
+        return;
+    }
+    const outcome = await applyOp(state, op);
+    if (outcome === 'written') state.applied += 1;
+    else if (outcome === 'failed') {
+        state.failed += 1;
+        state.failedByKind.set(bucket, kindFailures + 1);
+    }
+    notePost(state, op, outcome);
 }
 
 /**
  * Applies a plan's ops in order (design: Cycle step 7). A failed write is
  * recorded and the run goes on, up to MAX_FAILURES_PER_KIND for one kind
- * and MAX_FAILURES_PER_CYCLE in all. The next cycle plans again from fresh
+ * and MAX_FAILURES_PER_CYCLE in all. A post not created this run holds up
+ * the newer posts in its channel (postOrder.ts). The next cycle plans again from fresh
  * snapshots, and an op that keeps failing waits out a backoff.
  */
 export async function applyPlan(
@@ -1183,21 +1276,7 @@ export async function applyPlan(
     for (const op of input.plan.body.ops) {
         stopped = await stopReason(state);
         if (stopped !== null) break;
-        const bucket = bucketOf(op);
-        const kindFailures = state.failedByKind.get(bucket) ?? 0;
-        if (kindFailures >= MAX_FAILURES_PER_KIND) {
-            state.skipped.push({
-                op,
-                reason: `${kindFailures} ${bucket} writes failed this cycle`,
-            });
-            continue;
-        }
-        const outcome = await applyOp(state, op);
-        if (outcome === 'written') state.applied += 1;
-        else if (outcome === 'failed') {
-            state.failed += 1;
-            state.failedByKind.set(bucket, kindFailures + 1);
-        }
+        await runOp(state, op);
     }
     if (stopped === null && state.failed === 0) await recordBaselines(state);
     return {

@@ -92,6 +92,57 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         assert.equal(stableJson(loaded), stableJson(snapshot));
     });
 
+    it('refreshes the newest healthy snapshot in place', async () => {
+        const post = (lastMessageId: string) => ({
+            id: '500',
+            parentId: 'c1',
+            name: 'post',
+            archived: false,
+            locked: false,
+            tags: [],
+            lastMessageId,
+        });
+        // Newer than the snapshots earlier tests saved.
+        const at = new Date(Date.now() + 60 * 60_000);
+        await store.saveSnapshot(
+            linkId,
+            discordGuild({ name: 'older', threads: [post('600')] }),
+            true,
+            new Date(at.getTime() - 60_000)
+        );
+        await store.saveSnapshot(
+            linkId,
+            discordGuild({ threads: [post('600')] }),
+            true,
+            at
+        );
+        // An unhealthy read is newer, but never the one refreshed.
+        await store.saveSnapshot(
+            linkId,
+            discordGuild({ name: 'broken' }),
+            false,
+            new Date(at.getTime() + 60_000)
+        );
+        const count = async () =>
+            (await db.query(`SELECT id FROM ${TABLES.snapshots}`))[0].length;
+        const before = await count();
+        await store.refreshSnapshot(
+            linkId,
+            discordGuild({ threads: [post('700')] })
+        );
+        assert.equal(await count(), before);
+        const loaded = await store.lastSnapshot(linkId, 'discord', true);
+        assert.equal(loaded?.name, 'Server');
+        assert.equal(loaded?.threads[0].lastMessageId, '700');
+        const [older] = await db.query<{ payload: { threads: unknown[] } }>(
+            `SELECT payload FROM ${TABLES.snapshots} WHERE payload->>'name' = 'older'`,
+            { type: QueryTypes.SELECT }
+        );
+        assert.deepEqual(older.payload.threads, [post('600')]);
+        const unhealthy = await store.lastSnapshot(linkId, 'discord', false);
+        assert.equal(unhealthy?.name, 'broken');
+    });
+
     it('prunes old snapshots but keeps the newest healthy one', async () => {
         const old = new Date('2020-01-01T00:00:00Z');
         await store.saveSnapshot(

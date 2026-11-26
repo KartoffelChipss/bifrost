@@ -94,6 +94,19 @@ export class FakeStore implements GuildSyncStore {
         this.snapshots.push({ snapshot, healthy });
     }
 
+    /** How often a snapshot was refreshed in place. */
+    refreshes = 0;
+
+    async refreshSnapshot(_link: string, snapshot: GuildSnapshot) {
+        let index = -1;
+        this.snapshots.forEach((s, i) => {
+            if (s.snapshot.side === snapshot.side && s.healthy) index = i;
+        });
+        if (index < 0) return;
+        this.snapshots[index] = { snapshot, healthy: true };
+        this.refreshes += 1;
+    }
+
     async saveMissing(updates: readonly MissingUpdate[]) {
         if (updates.length === 0) return;
         this.missingWrites.push([...updates]);
