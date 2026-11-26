@@ -5,6 +5,8 @@ import {
     FILE_DOWNLOAD_TIMEOUT_MS,
     FileGoneError,
     FLUXER_MAX_FILE_BYTES,
+    FLUXER_MAX_FILENAME_LENGTH,
+    fluxerFilename,
     prepareFiles,
     withLines,
 } from '../../src/services/fluxerFiles';
@@ -130,5 +132,44 @@ describe('files Discord no longer serves', () => {
             }),
             /500/
         );
+    });
+});
+
+describe('filenames for a Fluxer copy', () => {
+    it('keeps a name within the limit as it is', () => {
+        const name = `${'a'.repeat(FLUXER_MAX_FILENAME_LENGTH - 4)}.png`;
+        assert.equal(fluxerFilename(name), name);
+        assert.equal(fluxerFilename('cat.gif'), 'cat.gif');
+    });
+
+    it('names an unnamed file', () => {
+        assert.equal(fluxerFilename(''), 'attachment');
+    });
+
+    it('cuts a long name to the limit and keeps its extension', () => {
+        const out = fluxerFilename(`${'a'.repeat(300)}.jpeg`);
+        assert.equal(out.length, FLUXER_MAX_FILENAME_LENGTH);
+        assert.ok(out.endsWith('.jpeg'));
+        assert.ok(out.startsWith('aaaa'));
+    });
+
+    it('cuts a long name without an extension', () => {
+        const out = fluxerFilename('b'.repeat(400));
+        assert.equal(out, 'b'.repeat(FLUXER_MAX_FILENAME_LENGTH));
+    });
+
+    it('treats an over-long ending as part of the name', () => {
+        const out = fluxerFilename(`x.${'c'.repeat(300)}`);
+        assert.equal(out.length, FLUXER_MAX_FILENAME_LENGTH);
+        assert.ok(out.startsWith('x.ccc'));
+    });
+
+    it('never splits a character made of two code units', () => {
+        // Each emoji is two UTF-16 code units. 251 units are left after
+        // ".png": 125 emojis fit, and a 126th would need 252.
+        const out = fluxerFilename(`${'😀'.repeat(200)}.png`);
+        assert.ok(out.length <= FLUXER_MAX_FILENAME_LENGTH);
+        assert.equal(out, `${'😀'.repeat(125)}.png`);
+        assert.doesNotMatch(out, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     });
 });
