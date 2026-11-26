@@ -69,7 +69,7 @@ describe('posting lock while history imports', () => {
         await s.cycle();
         const linker = s.depsFor().links;
         assert.ok(linker);
-        assert.ok((await linker.linkedDiscordChannels()).has('text'));
+        assert.ok((await linker.linkedDiscordChannels('link-1')).has('text'));
         s.historyReady(new Set());
         await s.cycle();
         const general = s.guild.snapshot.channels.find(
