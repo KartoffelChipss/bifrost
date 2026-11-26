@@ -31,6 +31,7 @@ const MIGRATIONS = [
     '00012-object-map-dest-missing',
     '00013-history-mentions',
     '00014-failure-counts',
+    '00015-discord-archive',
 ];
 
 describe('add-on tables on Postgres', { skip: !url }, () => {

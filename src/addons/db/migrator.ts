@@ -16,6 +16,7 @@ import * as statusMessage from './migrations/00011-settings-status-message';
 import * as destMissing from './migrations/00012-object-map-dest-missing';
 import * as historyMentions from './migrations/00013-history-mentions';
 import * as failureCounts from './migrations/00014-failure-counts';
+import * as discordArchive from './migrations/00015-discord-archive';
 import { MIGRATIONS_MODEL, MIGRATIONS_TABLE } from './schema';
 
 /**
@@ -85,6 +86,11 @@ const MIGRATIONS: RunnableMigration<QueryInterface>[] = [
         name: '00014-failure-counts',
         up: failureCounts.up,
         down: failureCounts.down,
+    },
+    {
+        name: '00015-discord-archive',
+        up: discordArchive.up,
+        down: discordArchive.down,
     },
 ];
 

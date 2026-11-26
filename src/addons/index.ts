@@ -1,5 +1,5 @@
 import type { Sequelize } from 'sequelize';
-import type { AddonConfig } from './config';
+import { DEFAULT_ARCHIVE_MIN_FREE_GB, type AddonConfig } from './config';
 import {
     initAddonDatabase as migrateAddonDatabase,
     type AddonDatabaseState,
@@ -8,6 +8,7 @@ import { AddonHost, selectAddons, type AddonFactories } from './host';
 import { IsolationBoundary, type AddonLogger } from './isolation';
 import { AddonModeController } from './mode';
 import { addonDatabaseState, recordAddonDatabaseState } from './state';
+import { createArchiveAddon } from '../archive';
 import { createGuildSyncAddon, type GuildSyncDeps } from '../guild-sync';
 import { discordNoticeSender } from '../guild-sync/notifier';
 import { FluxerGuildWriter } from '../guild-sync/writers/fluxer';
@@ -115,6 +116,22 @@ export function addonFactories(
                     ? historyLinkHook(deps)
                     : undefined,
             }),
+        ...(config.archiveDir
+            ? {
+                  archive: () =>
+                      createArchiveAddon({
+                          discordClient: deps.discordClient,
+                          sequelize: deps.sequelize,
+                          listGuildLinks: deps.listGuildLinks,
+                          excludedChannels: config.excludedChannels,
+                          dir: config.archiveDir ?? '',
+                          minFreeBytes:
+                              (config.archiveMinFreeGb ??
+                                  DEFAULT_ARCHIVE_MIN_FREE_GB) *
+                              1024 ** 3,
+                      }),
+              }
+            : {}),
     };
 }
 
