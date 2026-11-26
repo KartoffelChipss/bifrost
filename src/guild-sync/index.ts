@@ -4,6 +4,7 @@ import { Events, type Client as DiscordClient } from 'discord.js';
 import type { Client as FluxerClient } from '@fluxerjs/core';
 import type { Sequelize } from 'sequelize';
 import type { Addon, AddonContext } from '../addons/host';
+import type { AddonLogger } from '../addons/isolation';
 import { DiscordAssetSource } from './assets';
 import {
     resolveMode,
@@ -228,13 +229,54 @@ export function mirrorMayWrite(
     };
 }
 
-/** The category of a Discord channel, or null. */
-function discordCategory(client: DiscordClient) {
+/** How often a channel whose category cannot be read is logged again. */
+export const CATEGORY_WARN_INTERVAL_MS = 60 * 60_000;
+
+/** Upper bound on channels remembered as logged; past it, all are forgotten. */
+export const MAX_CATEGORY_WARNINGS = 1_000;
+
+/**
+ * True when `key` was not let through in the last `intervalMs`, and
+ * remembers that it now was. Bounded by MAX_CATEGORY_WARNINGS keys.
+ */
+function oncePerInterval(intervalMs: number, now: () => Date) {
+    const last = new Map<string, number>();
+    return (key: string): boolean => {
+        const at = now().getTime();
+        const before = last.get(key);
+        if (before !== undefined && at - before < intervalMs) return false;
+        if (last.size >= MAX_CATEGORY_WARNINGS) last.clear();
+        last.set(key, at);
+        return true;
+    };
+}
+
+/**
+ * The category of a Discord channel, or null. A channel that cannot be
+ * fetched has no category, so its link is excluded only when the channel
+ * itself is listed; the failure is logged once per channel per interval.
+ */
+export function discordCategory(
+    client: Pick<DiscordClient, 'channels'>,
+    logger: AddonLogger,
+    now: () => Date = () => new Date()
+) {
+    const shouldWarn = oncePerInterval(CATEGORY_WARN_INTERVAL_MS, now);
     return async (channelId: string): Promise<string | null> => {
-        const channel =
-            client.channels.cache.get(channelId) ??
-            (await client.channels.fetch(channelId));
-        return channel && 'parentId' in channel ? channel.parentId : null;
+        try {
+            const channel =
+                client.channels.cache.get(channelId) ??
+                (await client.channels.fetch(channelId));
+            return channel && 'parentId' in channel ? channel.parentId : null;
+        } catch (error) {
+            if (shouldWarn(channelId)) {
+                const detail = error instanceof Error ? error.message : error;
+                logger.warn(
+                    `[guild-sync] Could not read the category of Discord channel ${channelId}; only an exclusion of the channel itself applies to it: ${String(detail)}`
+                );
+            }
+            return null;
+        }
     };
 }
 
@@ -274,7 +316,7 @@ function startThreadRelay(
         // Excluded channels are never bridged, even while a link remains.
         excluded: excludedLinks(
             deps.excludedChannels,
-            discordCategory(deps.discordClient)
+            discordCategory(deps.discordClient, context.logger)
         ),
         now: () => new Date(),
         logger: context.logger,

@@ -34,9 +34,9 @@ const removals = (rows: MapRow[]) =>
     ).ops;
 
 /** A plan of the rows' removals, waiting for approval. */
-function pendingPlan(rows: MapRow[]): Plan {
+function pendingPlan(rows: MapRow[], removalsToday = 0): Plan {
     const ops = removals(rows);
-    const budget = checkDeleteBudget(ops, GUARDS, 0);
+    const budget = checkDeleteBudget(ops, GUARDS, removalsToday);
     assert.ok(budget.needsApproval);
     return {
         id: 'p1',
@@ -70,6 +70,24 @@ describe('removals of objects sync did not create', () => {
         const next = pendingPlan(ids.map((id) => gone(id, id !== 'b')));
         assert.equal(isApproved(next, approved), false);
         assert.equal(isApproved(next, next), true);
+    });
+
+    it('keeps an approval when one of its causes drops off', () => {
+        // Over the cycle and daily budgets; then the day slides past.
+        const rows = ['a', 'b', 'c', 'd'].map((id) => gone(id));
+        const approved = pendingPlan(rows, 8);
+        assert.match(approved.body.approvalReason ?? '', /cycle budget.*daily/);
+        const next = pendingPlan(rows, 0);
+        assert.doesNotMatch(next.body.approvalReason ?? '', /daily/);
+        assert.equal(isApproved(next, approved), true);
+    });
+
+    it('voids an approval when a new cause appears', () => {
+        const rows = ['a', 'b', 'c', 'd'].map((id) => gone(id));
+        const approved = pendingPlan(rows, 0);
+        const next = pendingPlan(rows, 8);
+        assert.match(next.body.approvalReason ?? '', /daily/);
+        assert.equal(isApproved(next, approved), false);
     });
 
     it('holds the archive of a mirrored pair for approval in a cycle', async () => {
