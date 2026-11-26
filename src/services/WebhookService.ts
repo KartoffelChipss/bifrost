@@ -1,4 +1,11 @@
 import {
+    EMBED_RETRY_DELAY_MS,
+    embedFallback,
+    MAX_EMBED_FALLBACKS,
+    withoutEmbedPart,
+    type EmbedFallback,
+} from '../relay-extras/fidelity/embedFallback';
+import {
     fetchFile,
     prepareFiles,
     withLines,
@@ -265,6 +272,36 @@ export class WebhookService {
     }
 
     /**
+     * Fork: the copy to try next after a failed send, or null when no
+     * fallback applies: a rejected reply or sticker (fallback.ts), then
+     * embed images and embeds after a 503 (embedFallback.ts).
+     */
+    private async nextFallback(
+        error: unknown,
+        payload: WebhookMessageData,
+        tried: Set<EmbedFallback>
+    ): Promise<WebhookMessageData | null> {
+        const field = rejectedField(error, payload.fidelity);
+        if (field) {
+            logger.warn(
+                `Fluxer rejected the copy's ${field}, sending it without: ${String(error)}`
+            );
+            return withoutField(payload, field);
+        }
+        const part = embedFallback(error, payload, tried);
+        if (!part) return null;
+        tried.add(part);
+        if (part === 'retry') {
+            await new Promise((r) => setTimeout(r, EMBED_RETRY_DELAY_MS));
+            return payload;
+        }
+        logger.warn(
+            `Fluxer refused the copy twice with 503, sending it without its ${part === 'embeds' ? 'embeds' : 'embed images'}: ${String(error)}`
+        );
+        return withoutEmbedPart(payload, part);
+    }
+
+    /**
      * Fork: sends a copy, and on a rejection of its native reply or
      * stickers sends it again with upstream's quote or sticker images
      * (src/relay-extras/fidelity/fallback.ts). `payload` is the last
@@ -275,26 +312,33 @@ export class WebhookService {
         data: WebhookMessageData
     ): Promise<FluxerCopyResult> {
         let payload = data;
-        for (let attempt = 0; attempt <= MAX_FALLBACKS; attempt++) {
+        // The copy as it was before any embed fallback: kept for the queue
+        // when every attempt fails, which is an outage, not the embeds.
+        let whole = data;
+        const tried = new Set<EmbedFallback>();
+        const attempts = MAX_FALLBACKS + MAX_EMBED_FALLBACKS;
+        for (let attempt = 0; attempt <= attempts; attempt++) {
             try {
                 const messageId = await this.postFluxerCopy(webhook, payload);
                 return { ok: true, messageId, payload };
             } catch (error: unknown) {
-                const field = rejectedField(error, payload.fidelity);
-                if (!field) {
+                if (tried.size === 0) whole = payload;
+                const next = await this.nextFallback(error, payload, tried);
+                if (!next) {
                     logger.error(
                         `Error sending message via Fluxer webhook${describeRejection(error, payload)}:`,
                         error
                     );
-                    return { ok: false, error, payload };
+                    return {
+                        ok: false,
+                        error,
+                        payload: tried.size > 0 ? whole : payload,
+                    };
                 }
-                logger.warn(
-                    `Fluxer rejected the copy's ${field}, sending it without: ${String(error)}`
-                );
-                payload = withoutField(payload, field);
+                payload = next;
             }
         }
-        // Unreachable: each fallback drops one of MAX_FALLBACKS fields.
+        // Unreachable: each fallback drops one part of the copy, once.
         const error = new Error('Fluxer send fallbacks exhausted');
         return { ok: false, error, payload };
     }
