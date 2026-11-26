@@ -6,7 +6,8 @@
  * whole copy. Fluxer also refuses any file over its bot limit
  * (ATTACHMENT_MAX_SIZE_BOT, 50 MiB, in packages/constants LimitConstants),
  * which Discord files often exceed. This module downloads files with a
- * longer limit and leaves out files too large for Fluxer, listing them in
+ * longer limit and leaves out files too large for Fluxer, or no longer
+ * served by Discord (a deleted sticker, an expired file), listing them in
  * the text instead, so the rest of the message still arrives.
  */
 
@@ -35,9 +36,24 @@ export type FetchFile = (
     timeoutMs: number
 ) => Promise<ArrayBuffer>;
 
+/** A source file the CDN no longer serves (FileGoneError). */
+export class FileGoneError extends Error {
+    constructor(
+        readonly url: string,
+        readonly status: number
+    ) {
+        super(`Failed to fetch file from ${url}: ${status}`);
+        this.name = 'FileGoneError';
+    }
+}
+
+/** Statuses for a file that is gone for good, such as a deleted sticker. */
+const GONE_STATUSES: ReadonlySet<number> = new Set([403, 404, 410]);
+
 /** Downloads a file, or rejects on a bad status or the time limit. */
 export const fetchFile: FetchFile = async (url, timeoutMs) => {
     const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (GONE_STATUSES.has(res.status)) throw new FileGoneError(url, res.status);
     if (!res.ok) {
         throw new Error(`Failed to fetch file from ${url}: ${res.status}`);
     }
@@ -49,6 +65,11 @@ const isTooLarge = (bytes: number | undefined) =>
 
 function megabytes(bytes: number): string {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** The line that stands in for a file Discord no longer serves. */
+export function goneLine(file: CopyFile): string {
+    return `📎 ${file.name} is no longer available on Discord`;
 }
 
 /** The line that stands in for a file Fluxer cannot take. */
@@ -72,7 +93,11 @@ export async function prepareFiles(
             lines.push(tooLargeLine(file, file.size ?? 0));
             continue;
         }
-        const data = await fetcher(file.url, FILE_DOWNLOAD_TIMEOUT_MS);
+        const data = await download(file, fetcher);
+        if (data === null) {
+            lines.push(goneLine(file));
+            continue;
+        }
         if (isTooLarge(data.byteLength)) {
             lines.push(tooLargeLine(file, data.byteLength));
             continue;
@@ -81,6 +106,19 @@ export async function prepareFiles(
         kept.push(index);
     }
     return { files: out, lines, kept };
+}
+
+/** The file's bytes, or null when Discord no longer serves it. */
+async function download(
+    file: CopyFile,
+    fetcher: FetchFile
+): Promise<ArrayBuffer | null> {
+    try {
+        return await fetcher(file.url, FILE_DOWNLOAD_TIMEOUT_MS);
+    } catch (error) {
+        if (error instanceof FileGoneError) return null;
+        throw error;
+    }
 }
 
 /** The content with the lines below it, within Fluxer's limit. */

@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import type { Webhook as FluxerWebhook } from '@fluxerjs/core';
 import {
     FILE_DOWNLOAD_TIMEOUT_MS,
+    FileGoneError,
     FLUXER_MAX_FILE_BYTES,
     prepareFiles,
     withLines,
@@ -100,6 +101,34 @@ describe('files for a Fluxer copy', () => {
         assert.match(
             String(sent[0].content),
             /^clip\n📎 big\.mp4 \(100\.0 MB\) is too large/
+        );
+    });
+});
+
+describe('files Discord no longer serves', () => {
+    it('leaves out a gone file and lists it, keeping the rest', async () => {
+        const result = await prepareFiles(
+            [
+                { url: 'https://media/sticker.webp', name: 'wave.webp' },
+                { url: 'https://cdn/ok.png', name: 'ok.png' },
+            ],
+            async (url) => {
+                if (url.includes('sticker')) throw new FileGoneError(url, 404);
+                return new TextEncoder().encode(url).buffer;
+            }
+        );
+        assert.deepEqual(result.kept, [1]);
+        assert.deepEqual(result.lines, [
+            '📎 wave.webp is no longer available on Discord',
+        ]);
+    });
+
+    it('still fails on a download error that is not a gone file', async () => {
+        await assert.rejects(
+            prepareFiles([{ url: 'https://cdn/x', name: 'x' }], async () => {
+                throw new Error('Failed to fetch file from https://cdn/x: 500');
+            }),
+            /500/
         );
     });
 });
