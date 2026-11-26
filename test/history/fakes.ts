@@ -1,4 +1,11 @@
 import type { RelayPayload, WebhookRef } from '../../src/guild-sync/links';
+import type {
+    Fixup,
+    FixupPatch,
+    FixupStatus,
+    MentionStore,
+    ScannedMessage,
+} from '../../src/history/mentionStore';
 import type { HistoryStore } from '../../src/history/store';
 import type {
     FluxerCopy,
@@ -23,6 +30,8 @@ export class FakeHistoryStore implements HistoryStore {
     relayedThread = new Set<string>();
     /** Active thread pairs from guild-sync's map: Fluxer ID to Discord ID. */
     threadPairs = new Map<string, string>();
+    /** Recorded mentions by Discord message ID; absent means not recorded. */
+    mentions = new Map<string, string[]>();
     private seq = 0;
 
     /** Calls of each listing, by name. */
@@ -159,6 +168,18 @@ export class FakeHistoryStore implements HistoryStore {
         this.messages = this.messages.filter(
             (m) => m.discordMessageId !== discordId
         );
+        this.mentions.delete(discordId);
+    }
+
+    async recordMentions(discordId: string, userIds: readonly string[]) {
+        if (!this.messages.some((m) => m.discordMessageId === discordId))
+            return;
+        this.mentions.set(discordId, [...userIds]);
+    }
+
+    /** The guild link of an imported message's job. */
+    linkOf(message: ImportedMessage): string | undefined {
+        return this.jobs.find((j) => j.id === message.jobId)?.guildLinkId;
     }
 
     async setContentHash(discordId: string, hash: string) {
@@ -306,9 +327,29 @@ export class FakeHistoryPorts implements HistoryPorts {
     }
 
     async listMessages(id: string, afterId: string, limit: number) {
+        this.listings.push(`${id} ${afterId} ${limit}`);
+        const failure = this.listFailure;
+        if (failure) {
+            this.listFailure = null;
+            throw failure;
+        }
         return (this.discord.get(id) ?? [])
             .filter((m) => BigInt(m.id) > BigInt(afterId))
             .slice(0, limit);
+    }
+
+    /** Discord message reads by fetchMessage, as `channel/message`. */
+    readonly fetches: string[] = [];
+    /** Each listMessages call, as `channel after limit`. */
+    readonly listings: string[] = [];
+    /** What the next listMessages throws, once. */
+    listFailure: unknown = null;
+
+    async fetchMessage(id: string, messageId: string) {
+        this.fetches.push(`${id}/${messageId}`);
+        return (
+            (this.discord.get(id) ?? []).find((m) => m.id === messageId) ?? null
+        );
     }
 
     async newestMessageId(id: string) {
@@ -427,5 +468,203 @@ export class FakeHistoryPorts implements HistoryPorts {
 
     async pinCopy(channelId: string, messageId: string) {
         this.pins.push(`${channelId} ${messageId}`);
+    }
+}
+
+/** A fix-up row in memory, with the time it is due. */
+export type FakeFixup = Fixup & { notBefore: Date };
+
+const later = (a: string, b: string) => BigInt(a) > BigInt(b);
+const byId = (
+    a: { discordMessageId: string },
+    b: { discordMessageId: string }
+) => (later(a.discordMessageId, b.discordMessageId) ? 1 : -1);
+
+/** Mention tables in memory, over a FakeHistoryStore's messages. */
+export class FakeMentionStore implements MentionStore {
+    fixups: FakeFixup[] = [];
+    /** The time of the last fix-up write. */
+    lastWrite: Date | null = null;
+    /** Linked Discord users and when they linked (identity links). */
+    readonly linked = new Map<string, Date>();
+
+    constructor(private readonly history: FakeHistoryStore) {}
+
+    private unrecorded(guildLinkId: string) {
+        return this.history.messages
+            .filter(
+                (m) =>
+                    m.fluxerMessageId &&
+                    !this.history.mentions.has(m.discordMessageId) &&
+                    this.history.linkOf(m) === guildLinkId
+            )
+            .sort(byId);
+    }
+
+    async scanJobs(guildLinkId: string, limit: number) {
+        const ids = new Set(this.unrecorded(guildLinkId).map((m) => m.jobId));
+        return [...ids].sort().slice(0, limit);
+    }
+
+    async unscanned(jobId: string, limit: number) {
+        return this.history.messages
+            .filter(
+                (m) =>
+                    m.jobId === jobId &&
+                    m.fluxerMessageId &&
+                    !this.history.mentions.has(m.discordMessageId)
+            )
+            .sort(byId)
+            .slice(0, limit)
+            .map((m) => ({
+                discordMessageId: m.discordMessageId,
+                discordAuthorId: m.discordAuthorId,
+            }));
+    }
+
+    async recordScan(guildLinkId: string, scanned: readonly ScannedMessage[]) {
+        const first = new Map<string, bigint>();
+        for (const entry of scanned) {
+            this.history.mentions.set(entry.discordMessageId, [
+                ...entry.discordUserIds,
+            ]);
+            const id = BigInt(entry.discordMessageId);
+            for (const user of entry.discordUserIds) {
+                const seen = first.get(user);
+                if (seen === undefined || id < seen) first.set(user, id);
+            }
+        }
+        this.fixups = this.fixups.map((f) => {
+            const at = first.get(f.discordUserId);
+            if (f.guildLinkId !== guildLinkId || at === undefined) return f;
+            if (BigInt(f.doneTo) < at) return f;
+            return {
+                ...f,
+                status: 'pending',
+                doneTo: (at - BigInt(1)).toString(),
+                changed: f.status === 'pending' ? f.changed : 0,
+                failures: 0,
+            };
+        });
+    }
+
+    async abandonScan(jobId: string) {
+        for (const m of this.history.messages) {
+            if (m.jobId !== jobId || !m.fluxerMessageId) continue;
+            if (!this.history.mentions.has(m.discordMessageId))
+                this.history.mentions.set(m.discordMessageId, []);
+        }
+    }
+
+    async scanLeft(guildLinkId: string) {
+        return this.unrecorded(guildLinkId).length > 0;
+    }
+
+    async ensureFixups(
+        guildLinkIds: readonly string[],
+        discordUserId: string | null,
+        notBefore: Date,
+        now?: Date
+    ) {
+        if (now) this.lastWrite = now;
+        let written = 0;
+        for (const guildLinkId of guildLinkIds) {
+            for (const [user, linkedAt] of this.linked) {
+                if (discordUserId !== null && user !== discordUserId) continue;
+                if (this.ensureOne(guildLinkId, user, linkedAt, notBefore))
+                    written += 1;
+            }
+        }
+        return written;
+    }
+
+    private ensureOne(
+        guildLinkId: string,
+        discordUserId: string,
+        linkedAt: Date,
+        notBefore: Date
+    ): boolean {
+        const fresh: FakeFixup = {
+            guildLinkId,
+            discordUserId,
+            linkedAt,
+            status: 'pending',
+            doneTo: '0',
+            changed: 0,
+            failures: 0,
+            notBefore,
+        };
+        const at = this.fixups.findIndex(
+            (f) =>
+                f.guildLinkId === guildLinkId &&
+                f.discordUserId === discordUserId
+        );
+        if (at < 0) {
+            this.fixups.push(fresh);
+            return true;
+        }
+        if (this.fixups[at].linkedAt.getTime() === linkedAt.getTime())
+            return false;
+        this.fixups[at] = fresh;
+        return true;
+    }
+
+    async dueFixups(
+        guildLinkId: string,
+        statuses: readonly FixupStatus[],
+        now: Date,
+        limit: number
+    ) {
+        return this.fixups
+            .filter(
+                (f) =>
+                    f.guildLinkId === guildLinkId &&
+                    statuses.includes(f.status) &&
+                    f.notBefore.getTime() <= now.getTime() &&
+                    this.linked.get(f.discordUserId)?.getTime() ===
+                        f.linkedAt.getTime()
+            )
+            .slice(0, limit);
+    }
+
+    async copiesMentioning(
+        guildLinkId: string,
+        discordUserId: string,
+        afterId: string,
+        limit: number
+    ) {
+        return this.history.messages
+            .filter(
+                (m) =>
+                    m.fluxerMessageId &&
+                    this.history.linkOf(m) === guildLinkId &&
+                    (
+                        this.history.mentions.get(m.discordMessageId) ?? []
+                    ).includes(discordUserId) &&
+                    later(m.discordMessageId, afterId)
+            )
+            .sort(byId)
+            .slice(0, limit);
+    }
+
+    async saveFixup(fixup: Fixup, patch: FixupPatch, now?: Date) {
+        if (now) this.lastWrite = now;
+        this.fixups = this.fixups.map((f) =>
+            f.guildLinkId === fixup.guildLinkId &&
+            f.discordUserId === fixup.discordUserId &&
+            f.linkedAt.getTime() === fixup.linkedAt.getTime()
+                ? { ...f, ...patch }
+                : f
+        );
+    }
+
+    fixup(discordUserId: string, guildLinkId = 'link-1'): FakeFixup {
+        const found = this.fixups.find(
+            (f) =>
+                f.discordUserId === discordUserId &&
+                f.guildLinkId === guildLinkId
+        );
+        if (!found) throw new Error(`no fix-up for ${discordUserId}`);
+        return found;
     }
 }

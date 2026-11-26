@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { QueryTypes, type Sequelize } from 'sequelize';
 import { TABLES } from '../addons/db/schema';
 import { MAX_MAP_ROWS } from '../guild-sync/store';
+import { capMentions } from './mentions';
 import type {
     HistoryJob,
     ImportedMessage,
@@ -43,8 +44,20 @@ export interface HistoryStore {
         fluxerMessageId: string
     ): Promise<void>;
     dropMessage(discordMessageId: string): Promise<void>;
-    /** Replaces the content hash, when a copy is resent with other text. */
+    /**
+     * Replaces the content hash, when a copy is resent or edited with
+     * other text.
+     */
     setContentHash(discordMessageId: string, hash: string): Promise<void>;
+    /**
+     * Replaces the Discord users a copy mentions (mentions.ts) and marks
+     * them recorded, so the backfill skips the copy. Empty for a copy that
+     * no longer renders its source, such as one its author edited.
+     */
+    recordMentions(
+        discordMessageId: string,
+        discordUserIds: readonly string[]
+    ): Promise<void>;
     /** A message that was being sent when the process stopped. */
     unfinishedMessage(jobId: string): Promise<ImportedMessage | null>;
     importedByFluxerId(
@@ -157,7 +170,7 @@ export function parseJob(row: Row): HistoryJob {
     };
 }
 
-function parseImported(row: Row): ImportedMessage {
+export function parseImported(row: Row): ImportedMessage {
     if (typeof row.inThread !== 'boolean') {
         throw new HistoryDataError('inThread is not a boolean');
     }
@@ -383,6 +396,28 @@ export class PostgresHistoryStore implements HistoryStore {
             `UPDATE ${TABLES.historyMessages} SET "contentHash" = $2 WHERE "discordMessageId" = $1`,
             { bind: [discordMessageId, hash] }
         );
+    }
+
+    async recordMentions(
+        discordMessageId: string,
+        discordUserIds: readonly string[]
+    ): Promise<void> {
+        const ids = capMentions(discordUserIds);
+        await this.db.transaction(async (transaction) => {
+            await this.db.query(
+                `DELETE FROM ${TABLES.historyMentions} WHERE "discordMessageId" = $1`,
+                { bind: [discordMessageId], transaction }
+            );
+            await this.db.query(
+                `INSERT INTO ${TABLES.historyMentions} ("discordMessageId", "discordUserId")
+                 SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING`,
+                { bind: [discordMessageId, ids], transaction }
+            );
+            await this.db.query(
+                `UPDATE ${TABLES.historyMessages} SET "mentionsRecorded" = true WHERE "discordMessageId" = $1`,
+                { bind: [discordMessageId], transaction }
+            );
+        });
     }
 
     private async oneMessage(where: string, value: string) {

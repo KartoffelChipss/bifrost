@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { HistoryEditor } from '../../src/history/editor';
+import { contentHash } from '../../src/history/format';
 import {
     CODE_TTL_MS,
     MAX_FAILURES_PER_HOUR,
@@ -243,6 +244,70 @@ describe('account linking', () => {
         assert.deepEqual(s.linked, []);
     });
 
+    it('announces a confirmed link, such as to start a mention fix-up', async () => {
+        const s = setup();
+        const announced: AccountPair[] = [];
+        const deps: FlowDeps = {
+            ...s.deps,
+            accountLinked: async (pair) => {
+                announced.push(pair);
+            },
+        };
+        await handleDm({ side: 'discord', userId: 'd1', text: 'link' }, deps);
+        await handleDm(
+            { side: 'fluxer', userId: 'f1', text: 'link ABCD2345' },
+            deps
+        );
+        assert.deepEqual(announced, []);
+        await handleDm({ side: 'discord', userId: 'd1', text: 'yes' }, deps);
+        assert.deepEqual(announced, [
+            { discordUserId: 'd1', fluxerUserId: 'f1' },
+        ]);
+    });
+
+    it('keeps the link when its announcement fails, and logs it', async () => {
+        const s = setup();
+        const deps: FlowDeps = {
+            ...s.deps,
+            accountLinked: async () => {
+                throw new Error('database down');
+            },
+        };
+        await handleDm({ side: 'discord', userId: 'd1', text: 'link' }, deps);
+        await handleDm(
+            { side: 'fluxer', userId: 'f1', text: 'link ABCD2345' },
+            deps
+        );
+        const done = await handleDm(
+            { side: 'discord', userId: 'd1', text: 'yes' },
+            deps
+        );
+        assert.match(done[0].text, /Your accounts are linked/);
+        assert.deepEqual(s.linked, s.store.pairs);
+        assert.match(
+            s.logger.entries[0]?.message ?? '',
+            /announce the link of d1/
+        );
+    });
+
+    it('announces nothing when a link is cancelled or lost a race', async () => {
+        const s = setup();
+        const announced: AccountPair[] = [];
+        const deps: FlowDeps = {
+            ...s.deps,
+            accountLinked: async (pair) => {
+                announced.push(pair);
+            },
+        };
+        await handleDm({ side: 'discord', userId: 'd1', text: 'link' }, deps);
+        await handleDm(
+            { side: 'fluxer', userId: 'f1', text: 'link ABCD2345' },
+            deps
+        );
+        await handleDm({ side: 'discord', userId: 'd1', text: 'no' }, deps);
+        assert.deepEqual(announced, []);
+    });
+
     it('answers anything else with the command list', async () => {
         const s = setup();
         const [help] = await s.dm('discord', 'd1', 'hello?');
@@ -342,6 +407,18 @@ describe('history requests by DM', () => {
         }
         assert.equal(s.logger.entries.length, 2);
         assert.equal(s.history.messages.length, 1);
+    });
+
+    it('clears the mentions of a copy its author edited, so no fix-up renders over it', async () => {
+        const s = setup();
+        await importedCopy(s);
+        await s.history.recordMentions('11', ['500']);
+        await s.dm('discord', 'd1', 'edit 555555 my own words');
+        assert.deepEqual(s.history.mentions.get('11'), []);
+        assert.equal(
+            s.history.messages[0]?.contentHash,
+            contentHash('my own words\n*Edited by its author*')
+        );
     });
 
     it('cuts an edit to the Fluxer limit and keeps the edit marker', async () => {

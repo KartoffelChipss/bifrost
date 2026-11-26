@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { RelayPayload } from '../guild-sync/links';
 import { MAX_CONTENT_LENGTH } from './limits';
+import { capMentions } from './mentions';
 import type { HistoryStore } from './store';
 import type { HistoryPorts, Reaction, SourceMessage } from './types';
 
@@ -112,6 +113,11 @@ export function optOutPayload(): RelayPayload {
     };
 }
 
+/** The line a copy sent without its files carries above the date note. */
+export function attachmentsNote(names: readonly string[]): string {
+    return `*Attachments not copied: ${names.join(', ')}*`;
+}
+
 export interface FormatterDeps {
     readonly store: Pick<HistoryStore, 'isOptedOut'>;
     readonly ports: Pick<HistoryPorts, 'payload'>;
@@ -142,6 +148,17 @@ export class CopyFormatter {
                 this.deps.commandPrefix
             ),
         };
+    }
+
+    /**
+     * The Discord users the copy of `message` mentions: none for an
+     * opted-out author, whose copy carries no text.
+     */
+    async mentionsOf(message: SourceMessage): Promise<string[]> {
+        const ids = message.mentionIds ?? [];
+        if (ids.length === 0) return [];
+        if (await this.deps.store.isOptedOut(message.authorId)) return [];
+        return capMentions(ids);
     }
 
     /**

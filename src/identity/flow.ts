@@ -48,6 +48,11 @@ export interface FlowDeps {
     } | null;
     /** Called after a pair is saved, so roles can sync at once. */
     readonly onLinked: (pair: AccountPair) => Promise<void>;
+    /**
+     * Told about every new link, such as history's mention fix-up
+     * (history/mentionWork.ts). A failure is logged; the link stands.
+     */
+    readonly accountLinked?: (pair: AccountPair) => Promise<void>;
     /** Called after a pair is removed, so its synced roles go. */
     readonly onUnlinked: (pair: AccountPair) => Promise<void>;
     readonly now: () => Date;
@@ -236,8 +241,22 @@ async function confirm(
             'One of the two accounts was linked in the meantime. Nothing changed.'
         );
     }
+    await announceLink(pair, deps);
     await deps.onLinked(pair);
     return both('Your accounts are linked. Your synced roles will follow you.');
+}
+
+/** Tells accountLinked about a new link; a failure only logs. */
+async function announceLink(pair: AccountPair, deps: FlowDeps) {
+    if (!deps.accountLinked) return;
+    try {
+        await deps.accountLinked(pair);
+    } catch (error) {
+        deps.logger.warn(
+            `[identity] Could not announce the link of ${pair.discordUserId}:`,
+            error
+        );
+    }
 }
 
 async function unlink(input: DmInput, deps: FlowDeps): Promise<DmReply[]> {

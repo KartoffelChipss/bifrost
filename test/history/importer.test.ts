@@ -319,6 +319,37 @@ describe('copying a channel', () => {
         assert.ok(s.store.messages.every((m) => m.fluxerMessageId));
     });
 
+    it('records whom each copy mentions, and nobody for an opted-out author', async () => {
+        const s = setup();
+        s.ports.add('10', '11', { mentionIds: ['500', '501'] });
+        s.ports.add('10', '12', { authorId: 'shy', mentionIds: ['500'] });
+        s.ports.add('10', '13');
+        s.store.optOuts.add('shy');
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        assert.deepEqual(
+            [...s.store.mentions.entries()],
+            [
+                ['11', ['500', '501']],
+                ['12', []],
+                ['13', []],
+            ]
+        );
+    });
+
+    it('sends a copy whose mentions cannot be recorded, for the backfill to record', async () => {
+        const s = setup();
+        s.ports.add('10', '11', { mentionIds: ['500'] });
+        s.store.recordMentions = async () => {
+            throw new Error('database down');
+        };
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        assert.equal(s.ports.sent.length, 1);
+        assert.equal(s.store.messages[0]?.fluxerMessageId, 'copy-1');
+        assert.equal(s.store.mentions.size, 0);
+    });
+
     it('catches up on messages posted while it ran', async () => {
         const s = setup();
         s.ports.add('10', '11');

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { HistoryEditor, type EditorThreads } from '../../src/history/editor';
-import { CopyFormatter } from '../../src/history/format';
+import { CopyFormatter, contentHash } from '../../src/history/format';
 import type { HistoryMode } from '../../src/history/importer';
 import { HistoryMirror } from '../../src/history/mirror';
 import { createRecordingLogger } from '../addons/fakes';
@@ -53,6 +53,20 @@ describe('HistoryMirror', () => {
         assert.deepEqual(s.ports.edits, [
             'edit import-f10 copy-11 ​!b fixed typo\n*Originally posted 2024-03-01 18:22 UTC*',
         ]);
+    });
+
+    it('records the edited text: its mentions and its content hash', async () => {
+        const s = await setup();
+        await s.store.recordMentions('11', ['500']);
+        const list = s.ports.discord.get('10') ?? [];
+        s.ports.discord.set(
+            '10',
+            list.map((m) => ({ ...m, mentionIds: ['600', '601'] }))
+        );
+        await s.mirror.edited('11', s.load('hi <@600> and <@601>'));
+        assert.deepEqual(s.store.mentions.get('11'), ['600', '601']);
+        const sent = s.ports.edits[0]?.slice('edit import-f10 copy-11 '.length);
+        assert.equal(s.store.messages[0]?.contentHash, contentHash(sent ?? ''));
     });
 
     it('deletes the copy and forgets it', async () => {

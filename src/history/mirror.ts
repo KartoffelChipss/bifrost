@@ -14,7 +14,7 @@ import type { HistoryPorts, ImportedMessage } from './types';
 export interface MirrorDeps {
     readonly store: HistoryStore;
     readonly editor: Pick<HistoryEditor, 'replace' | 'remove'>;
-    readonly formatter: Pick<CopyFormatter, 'build'>;
+    readonly formatter: Pick<CopyFormatter, 'build' | 'mentionsOf'>;
     readonly ports: Pick<HistoryPorts, 'describe'>;
     /** The link's mode now: copies change only in apply. */
     readonly mode: (linkId: string) => Promise<HistoryMode>;
@@ -53,11 +53,15 @@ export class HistoryMirror {
             // so an edit made to redact a message reaches the copy too.
             const raw = await load();
             if (raw === null || raw === undefined) return;
-            const payload = await this.deps.formatter.build(
-                this.deps.ports.describe(raw),
-                found.linkId
+            const message = this.deps.ports.describe(raw);
+            const { formatter, editor, store } = this.deps;
+            const payload = await formatter.build(message, found.linkId);
+            await editor.replace(found.copy, payload.content);
+            // The copy renders the edited text, so its mentions follow.
+            await store.recordMentions(
+                found.copy.discordMessageId,
+                await formatter.mentionsOf(message)
             );
-            await this.deps.editor.replace(found.copy, payload.content);
         });
     }
 

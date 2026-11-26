@@ -17,6 +17,8 @@ export const TABLES = {
     historyJobs: 'addon_history_jobs',
     historyMessages: 'addon_history_messages',
     historyOptOuts: 'addon_history_optouts',
+    historyMentions: 'addon_history_mentions',
+    mentionFixups: 'addon_history_mention_fixups',
     identityLinks: 'addon_identity_links',
     identityCodes: 'addon_identity_codes',
     identityPending: 'addon_identity_pending',

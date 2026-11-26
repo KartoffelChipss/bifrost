@@ -11,7 +11,7 @@ import { addonDatabaseState, recordAddonDatabaseState } from './state';
 import { createGuildSyncAddon, type GuildSyncDeps } from '../guild-sync';
 import { discordNoticeSender } from '../guild-sync/notifier';
 import { FluxerGuildWriter } from '../guild-sync/writers/fluxer';
-import { createHistoryAddon, editorThreads } from '../history';
+import { createHistoryAddon, editorThreads, historyLinkHook } from '../history';
 import type { HistoryPorts } from '../history/types';
 import { createIdentityAddon, type IdentityPorts } from '../identity';
 import { createRelayExtras, withRelayExtras } from '../relay-extras';
@@ -110,6 +110,10 @@ export function addonFactories(
                 }),
                 sendNotice,
                 commandPrefix: deps.commandPrefix,
+                // A new link re-renders imported copies that mention them.
+                onAccountLinked: config.history
+                    ? historyLinkHook(deps)
+                    : undefined,
             }),
     };
 }

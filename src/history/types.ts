@@ -142,6 +142,11 @@ export interface SourceMessage {
      */
     readonly reply: { readonly authorId: string | null } | null;
     readonly reactions: readonly Reaction[];
+    /**
+     * Discord users the copy renders as mentions (mentions.ts
+     * renderedMentions), at most MAX_MENTIONS_PER_MESSAGE. Absent: none.
+     */
+    readonly mentionIds?: readonly string[];
     /** The platform message, for the payload builder. */
     readonly raw: unknown;
 }
@@ -189,6 +194,14 @@ export interface HistoryPorts {
         afterId: string,
         limit: number
     ): Promise<SourceMessage[]>;
+    /**
+     * One message of a channel or thread, or null when Discord no longer
+     * has it. Other errors are thrown.
+     */
+    fetchMessage(
+        discordId: string,
+        messageId: string
+    ): Promise<SourceMessage | null>;
     /** The newest message in a channel or thread, or null when empty. */
     newestMessageId(discordId: string): Promise<string | null>;
     /** The relay's payload for a message: text, author name and avatar. */
