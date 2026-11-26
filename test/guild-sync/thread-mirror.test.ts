@@ -388,6 +388,98 @@ describe('a copy an earlier attempt made but did not record', () => {
     });
 });
 
+describe('two same-named Fluxer threads in one channel', () => {
+    /** The store, where a Discord thread pairs once, like the unique index. */
+    class UniqueStore extends MirrorStore {
+        /** Inserts wait for this, so a second mirror can run meanwhile. */
+        gate: Promise<void> = Promise.resolve();
+
+        override async insertMapping(mapping: NewMapping) {
+            await this.gate;
+            if (this.pairs.some((p) => p.discordId === mapping.discordId)) {
+                throw new Error('duplicate key value violates unique index');
+            }
+            return super.insertMapping(mapping);
+        }
+    }
+
+    const thread = (id: string) =>
+        post({ id, forum: false, tags: [], name: 'Same name' });
+
+    function twinSetup() {
+        const store = new UniqueStore();
+        const made: DiscordThreadInfo[] = [];
+        const infos = new Map(
+            [snowflake(0), snowflake(1)].map((id) => [id, thread(id)])
+        );
+        const mirror = new ThreadMirror({
+            store,
+            ports: {
+                fluxerThread: async (id) => infos.get(id) ?? null,
+                fluxerBotId: () => 'fluxer-bot',
+                discordBotId: () => 'discord-bot',
+                activeDiscordThreads: async () => [...made],
+                createDiscordPost: async () => assert.fail('not a forum'),
+                async createDiscordThread(_link, info) {
+                    const copy = {
+                        id: snowflake(1_000 + made.length),
+                        ownerId: 'discord-bot',
+                        look: discordLook(info),
+                    };
+                    made.push(copy);
+                    return copy;
+                },
+                fluxerThreadMembers: async () => [],
+                addDiscordThreadMembers: async () => {},
+            },
+            mayWrite: async () => true,
+            now: () => new Date(0),
+            logger: createRecordingLogger(),
+        });
+        return { store, made, mirror };
+    }
+
+    /** Lets pending promise callbacks run, a bounded number of turns. */
+    const turns = async (count: number) => {
+        for (let i = 0; i < count; i++) {
+            await new Promise((resolve) => setImmediate(resolve));
+        }
+    };
+
+    it('get a Discord copy each, never one shared copy', async () => {
+        const s = twinSetup();
+        const links = new FakeLinker();
+        await links.link('link-1', 'd-forum', 'f-forum');
+        const link = links.links[0];
+        let release = () => {};
+        s.store.gate = new Promise((resolve) => (release = resolve));
+        const first = s.mirror.mirror(
+            link,
+            inFluxerPost('r1', snowflake(0)),
+            'a'
+        );
+        await turns(5);
+        assert.equal(s.made.length, 1, 'the first copy is made, not recorded');
+        const second = s.mirror.mirror(
+            link,
+            inFluxerPost('r2', snowflake(1)),
+            'b'
+        );
+        await turns(5);
+        release();
+        const results = await Promise.all([first, second]);
+        const ids = results.map((r) =>
+            r && r !== 'skip' ? r.pair.discordId : r
+        );
+        assert.equal(s.made.length, 2);
+        assert.deepEqual(
+            ids,
+            s.made.map((t) => t.id)
+        );
+        assert.equal(new Set(ids).size, 2);
+    });
+});
+
 describe('the cycle after a mirror', () => {
     /** The Fluxer thread with settings Discord's new copy did not take. */
     const original = post({
