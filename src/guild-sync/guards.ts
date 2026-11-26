@@ -305,7 +305,8 @@ function budgetReasons(
  * approval. The reason names every cause, so an admin who approves a
  * plan over budget also sees that it touches objects sync did not
  * create, and an approval for the budget alone never covers those
- * (cycle.ts isApproved compares the reasons).
+ * (cycle.ts isApproved refuses a cause the approved plan did not name).
+ * The causes are joined with '; ', which isApproved splits on.
  */
 export function checkDeleteBudget(
     ops: readonly PlanOp[],

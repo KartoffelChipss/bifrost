@@ -651,22 +651,43 @@ export function reasonCategory(reason: string | null): string | null {
     return reason === null ? null : reason.replace(/\d+/g, '#');
 }
 
+/** Separates the causes checkDeleteBudget (guards.ts) joins in a reason. */
+const REASON_SEPARATOR = '; ';
+
+/**
+ * Each cause in an approval reason, by category. A reason without causes
+ * keeps one empty category, so it is covered only by another such reason.
+ */
+function reasonCategories(reason: string | null): Set<string> {
+    if (reason === null) return new Set(['']);
+    return new Set(
+        reason
+            .split(REASON_SEPARATOR)
+            .map((cause) => reasonCategory(cause) ?? '')
+    );
+}
+
 /**
  * True when an admin approved what this plan's removals would do. The
- * approval covers a set of removals for one reason: this plan may do
- * those or fewer, never one more. Creates, updates and findings play no
- * part; they never need approval.
+ * approval covers a set of removals for a set of causes: this plan may do
+ * those removals or fewer, for those causes or fewer, never one more. A
+ * cause that drops off, such as the daily count falling back under the
+ * budget, keeps the approval. Creates, updates and findings play no part;
+ * they never need approval.
  */
 export function isApproved(plan: Plan, approved: Plan | null): boolean {
     if (!plan.body.needsApproval) return true;
     if (approved === null || approved.abortReason !== plan.abortReason) {
         return false;
     }
-    const same =
-        reasonCategory(approved.body.approvalReason) ===
-        reasonCategory(plan.body.approvalReason);
+    const causes = reasonCategories(approved.body.approvalReason);
+    const noNewCause = [...reasonCategories(plan.body.approvalReason)].every(
+        (cause) => causes.has(cause)
+    );
     const covered = removalKeys(approved);
-    return same && [...removalKeys(plan)].every((key) => covered.has(key));
+    return (
+        noNewCause && [...removalKeys(plan)].every((key) => covered.has(key))
+    );
 }
 
 /** The plan without its removals, for a run while they wait for approval. */
