@@ -8,6 +8,7 @@ import type {
     ThreadChannel,
 } from '@fluxerjs/core';
 import type { ReadResult } from '../health';
+import { isNotFound } from '../notFound';
 import type { SyncKind } from '../ops';
 import type {
     ChannelSnap,
@@ -32,10 +33,9 @@ import {
     type GuildReader,
 } from './reader';
 
-/** Fluxer answers 404 for an unknown channel, role, emoji or sticker. */
+/** A 404, or the library's mapped not-found error (notFound.ts). */
 function isUnknown(error: unknown): boolean {
-    if (typeof error !== 'object' || error === null) return false;
-    return (error as { statusCode?: unknown }).statusCode === 404;
+    return isNotFound(error);
 }
 
 interface FluxerTag {
