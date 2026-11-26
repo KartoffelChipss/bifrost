@@ -151,6 +151,12 @@ interface ObjectSpec<T extends { readonly id: string; readonly name: string }> {
      * the create would fail every cycle.
      */
     readonly missingParent?: (item: T) => string | null;
+    /**
+     * The source ID of the item's parent when that parent is not on the
+     * destination and will not be created this cycle, else null. Such an
+     * item waits, so it is never created outside its parent.
+     */
+    readonly waitingParent?: (item: T) => string | null;
 }
 
 /** One finding per missing parent, however many children wait on it. */
@@ -165,6 +171,47 @@ function reportMissingParent(out: Out, kind: SyncKind, parentId: string) {
         id: parentId,
         detail,
     });
+}
+
+/** One finding per parent that is not created, however many children wait. */
+function reportWaitingParent(out: Out, parentId: string) {
+    const detail =
+        'this category is not on Fluxer and is not created this cycle; its channels wait for it';
+    if (out.findings.some((f) => f.id === parentId && f.detail === detail)) {
+        return;
+    }
+    out.findings.push({
+        type: 'skipped',
+        kind: 'category',
+        id: parentId,
+        detail,
+    });
+}
+
+/**
+ * Source categories that are not mapped and that this plan will not
+ * create: their create was skipped, or it waits on a same-named object
+ * the sync does not adopt. Their channels must wait, not land outside.
+ */
+function uncreatedCategories(
+    categories: readonly ChannelSnap[],
+    map: IdMap,
+    ops: readonly PlanOp[]
+): ReadonlySet<string> {
+    const creating = new Set(
+        ops.flatMap((op) =>
+            op.op === 'create' &&
+            op.kind === 'category' &&
+            (op.existingDestId === null || op.adopt === true)
+                ? [op.sourceId]
+                : []
+        )
+    );
+    return new Set(
+        categories
+            .filter((c) => !map.dest('category', c.id) && !creating.has(c.id))
+            .map((c) => c.id)
+    );
 }
 
 /** The mapped destination parent when it is gone from the destination. */
@@ -257,6 +304,11 @@ function planCreate<T extends { readonly id: string; readonly name: string }>(
     item: T,
     out: Out
 ): void {
+    const waiting = spec.waitingParent?.(item) ?? null;
+    if (waiting !== null) {
+        reportWaitingParent(out, waiting);
+        return;
+    }
     const parent = spec.missingParent?.(item) ?? null;
     if (parent === null) {
         out.ops.push(createOp(spec, map, item));
@@ -404,7 +456,23 @@ function diffStructure(input: DiffInput, ctx: ProjectionContext, out: Out) {
         enforce
     );
     diffObjects(channelSpec(isCategory, 'category'), ctx.map, out, enforce);
-    diffObjects(channelSpec(notCategory, 'channel'), ctx.map, out, enforce);
+    const uncreated = uncreatedCategories(
+        source.channels.filter(isCategory),
+        ctx.map,
+        out.ops
+    );
+    diffObjects(
+        {
+            ...channelSpec(notCategory, 'channel'),
+            waitingParent: (c: ChannelSnap) =>
+                c.parentId !== null && uncreated.has(c.parentId)
+                    ? c.parentId
+                    : null,
+        },
+        ctx.map,
+        out,
+        enforce
+    );
 }
 
 function diffExpressions(input: DiffInput, map: IdMap, out: Out) {
