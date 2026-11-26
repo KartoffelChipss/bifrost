@@ -45,9 +45,7 @@ describe('history mention tables on Postgres', { skip: !url }, () => {
     });
 
     beforeEach(async () => {
-        await db.query(
-            `TRUNCATE guild_links, ${TABLES.identityLinks} CASCADE`
-        );
+        await db.query(`TRUNCATE guild_links, ${TABLES.identityLinks} CASCADE`);
         linkId = randomUUID();
         jobId = randomUUID();
         await db.query(
@@ -229,6 +227,10 @@ describe('history mention tables on Postgres', { skip: !url }, () => {
             NOW
         );
         assert.equal(await fixupOf('500'), undefined);
+        const [kept] = await db.query(
+            `SELECT status, "doneTo" FROM ${TABLES.mentionFixups} WHERE "discordUserId" = '500'`
+        );
+        assert.deepEqual(kept, [{ status: 'pending', doneTo: '42' }]);
         assert.equal(
             await mentions.ensureFixups([linkId], '500', notBefore, NOW),
             1
