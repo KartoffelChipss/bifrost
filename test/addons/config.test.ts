@@ -249,3 +249,53 @@ describe('requireAddonConfig', () => {
         assert.equal(config.warnings.length, 1);
     });
 });
+
+describe('archive settings', () => {
+    it('needs an absolute BF_ARCHIVE_DIR when the archive is on', () => {
+        for (const dir of [undefined, '', 'archive']) {
+            const result = parseAddonConfig({
+                ...ON,
+                BF_ADDON_ARCHIVE: 'true',
+                BF_ARCHIVE_DIR: dir,
+            });
+            assert.equal(result.ok, false, String(dir));
+            assert.match(!result.ok ? result.error : '', /BF_ARCHIVE_DIR/);
+        }
+    });
+
+    it('reads the folder and the free-space reserve, defaulting to 20 GB', () => {
+        const on = {
+            ...ON,
+            BF_ADDON_ARCHIVE: 'true',
+            BF_ARCHIVE_DIR: '/data/archive',
+        };
+        const result = parseAddonConfig(on);
+        assert.ok(result.ok);
+        assert.equal(result.config.archive, true);
+        assert.equal(result.config.archiveDir, '/data/archive');
+        assert.equal(result.config.archiveMinFreeGb, 20);
+        const custom = parseAddonConfig({
+            ...on,
+            BF_ARCHIVE_MIN_FREE_GB: '50',
+        });
+        assert.ok(custom.ok);
+        assert.equal(custom.config.archiveMinFreeGb, 50);
+    });
+
+    it('rejects a reserve that is not a whole number', () => {
+        for (const value of ['-1', '2.5', 'lots', '100001']) {
+            const result = parseAddonConfig({
+                ...ON,
+                BF_ARCHIVE_MIN_FREE_GB: value,
+            });
+            assert.equal(result.ok, false, value);
+        }
+    });
+
+    it('leaves the archive off by default without a folder', () => {
+        const result = parseAddonConfig(ON);
+        assert.ok(result.ok);
+        assert.equal(result.config.archive, false);
+        assert.equal(result.config.archiveDir, undefined);
+    });
+});

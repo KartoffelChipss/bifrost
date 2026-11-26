@@ -14,6 +14,18 @@ export interface AddonConfig {
     readonly guildSync: boolean;
     readonly history: boolean;
     readonly identity: boolean;
+    /**
+     * BF_ADDON_ARCHIVE: keeps a local copy of Discord messages, member
+     * names and files (src/archive). Absent while add-ons are off.
+     */
+    readonly archive?: boolean;
+    /** BF_ARCHIVE_DIR: the volume for archived files. Set when archive is on. */
+    readonly archiveDir?: string;
+    /**
+     * BF_ARCHIVE_MIN_FREE_GB: file downloads pause while the volume has
+     * less free space than this. Defaults to 20.
+     */
+    readonly archiveMinFreeGb?: number;
     readonly initialMode: Exclude<AddonMode, 'apply'>;
     /** BF_ADDONS_ALLOW_APPLY. Without it, no add-on writes to a server. */
     readonly allowApply: boolean;
@@ -148,6 +160,7 @@ const BOOL_KEYS = {
     guildSync: 'BF_ADDON_GUILD_SYNC',
     history: 'BF_ADDON_HISTORY',
     identity: 'BF_ADDON_IDENTITY',
+    archive: 'BF_ADDON_ARCHIVE',
     allowApply: 'BF_ADDONS_ALLOW_APPLY',
 } as const;
 
@@ -167,6 +180,7 @@ function parseSettings(env: Env): {
         guildSync: false,
         history: false,
         identity: false,
+        archive: false,
         allowApply: false,
     };
     for (const [field, envName] of Object.entries(BOOL_KEYS)) {
@@ -194,6 +208,42 @@ function parseSettings(env: Env): {
         resetUser: parseResetUser(env.BF_ADDONS_RESET_USER_ID),
         errors,
     };
+}
+
+/** Default for BF_ARCHIVE_MIN_FREE_GB, and its upper bound. */
+export const DEFAULT_ARCHIVE_MIN_FREE_GB = 20;
+const MAX_ARCHIVE_MIN_FREE_GB = 100_000;
+
+/**
+ * Parses the archive's settings. BF_ARCHIVE_DIR is required, as an
+ * absolute path, only while the archive is switched on.
+ */
+function parseArchive(
+    env: Env,
+    on: boolean
+):
+    | { ok: true; dir?: string; minFreeGb: number }
+    | { ok: false; error: string } {
+    const dir = (env.BF_ARCHIVE_DIR ?? '').trim();
+    if (on && !dir.startsWith('/')) {
+        return {
+            ok: false,
+            error: 'BF_ADDON_ARCHIVE needs BF_ARCHIVE_DIR set to an absolute path',
+        };
+    }
+    const text = (env.BF_ARCHIVE_MIN_FREE_GB ?? '').trim();
+    const gb = text === '' ? DEFAULT_ARCHIVE_MIN_FREE_GB : Number(text);
+    if (
+        !/^\d*$/.test(text) ||
+        !Number.isSafeInteger(gb) ||
+        gb > MAX_ARCHIVE_MIN_FREE_GB
+    ) {
+        return {
+            ok: false,
+            error: `BF_ARCHIVE_MIN_FREE_GB must be a whole number from 0 to ${MAX_ARCHIVE_MIN_FREE_GB}`,
+        };
+    }
+    return { ok: true, ...(dir ? { dir } : {}), minFreeGb: gb };
 }
 
 /** Add-ons off. Bad sub-settings become warnings, so the relay still starts. */
@@ -228,7 +278,9 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
         const errors = [...settings.errors, ...resetWarnings];
         return { ok: true, config: disabledConfig(errors) };
     }
-    if (settings.errors.length > 0)
+    const archive = parseArchive(env, settings.flags.archive);
+    if (!archive.ok) settings.errors.push(archive.error);
+    if (settings.errors.length > 0 || !archive.ok)
         return { ok: false, error: settings.errors.join('; ') };
 
     // Read exactly as upstream does (src/utils/env.ts, src/db/sequelize.ts):
@@ -250,6 +302,8 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
             initialMode: settings.mode,
             excludedChannels: settings.excluded,
             historyInlineMax: settings.inlineMax,
+            ...(archive.dir ? { archiveDir: archive.dir } : {}),
+            archiveMinFreeGb: archive.minFreeGb,
             ...(resetUser.id ? { resetUserId: resetUser.id } : {}),
             warnings: resetWarnings,
         },

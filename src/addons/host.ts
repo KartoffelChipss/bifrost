@@ -11,17 +11,22 @@ export interface AddonContext {
     readonly allowApply: boolean;
 }
 
-/** One add-on module: guild-sync, history or identity. */
+/** One add-on module: guild-sync, history, identity or archive. */
 export interface Addon {
     readonly name: string;
     start(context: AddonContext): Promise<void>;
     stop(): Promise<void>;
 }
 
-export type AddonKey = 'guildSync' | 'history' | 'identity';
+export type AddonKey = 'guildSync' | 'history' | 'identity' | 'archive';
 export type AddonFactories = Partial<Record<AddonKey, () => Addon>>;
 
-const ADDON_KEYS: readonly AddonKey[] = ['guildSync', 'history', 'identity'];
+const ADDON_KEYS: readonly AddonKey[] = [
+    'guildSync',
+    'history',
+    'identity',
+    'archive',
+];
 const MAX_ADDONS = ADDON_KEYS.length;
 /**
  * One deadline for stopping every add-on together. Docker sends SIGKILL

@@ -25,6 +25,10 @@ export const TABLES = {
     identityFailures: 'addon_identity_failures',
     parkedMessages: 'addon_parked_messages',
     failureCounts: 'addon_failure_counts',
+    archiveChannels: 'addon_archive_channels',
+    archiveMessages: 'addon_archive_messages',
+    archiveMembers: 'addon_archive_members',
+    archiveFiles: 'addon_archive_files',
 } as const;
 
 /** Umzug's record of applied add-on migrations, apart from upstream's. */
