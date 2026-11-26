@@ -14,7 +14,8 @@ import {
     type LinkedGuild,
 } from './cycle';
 import { CycleBackoff, guardCycle } from './cycleGuard';
-import { MemoryFailureLedger } from './failures';
+import { StoredFailureLedger, type FailureLedger } from './failures';
+import { PostgresFailureCountStore } from './failureStore';
 import { PostgresParkedMessages } from './parkedMessages';
 import { ThreadMirror, type ThreadMirrorPorts } from './threadMirror';
 import { excludedLinks, type ChannelLinker, type ThreadSource } from './links';
@@ -179,7 +180,8 @@ function historyReady(store: PostgresHistoryStore) {
 function buildCycleDeps(
     deps: GuildSyncDeps,
     context: AddonContext,
-    store: GuildSyncStore
+    store: GuildSyncStore,
+    failures: FailureLedger
 ): CycleDeps {
     return {
         store,
@@ -214,7 +216,7 @@ function buildCycleDeps(
         logger: context.logger,
         now: () => new Date(),
         newId: randomUUID,
-        failures: new MemoryFailureLedger(),
+        failures,
         lookups: new Map(),
         linkedMembers: deps.identityEnabled
             ? linkedMembers(deps.sequelize)
@@ -441,7 +443,12 @@ export function createGuildSyncAddon(deps: GuildSyncDeps): Addon {
         name: ADDON_NAME,
         async start(context: AddonContext) {
             const store = new PostgresGuildSyncStore(deps.sequelize);
-            const cycleDeps = buildCycleDeps(deps, context, store);
+            const failures = new StoredFailureLedger(
+                new PostgresFailureCountStore(deps.sequelize),
+                (message) => context.logger.warn(`[guild-sync] ${message}`)
+            );
+            await failures.load();
+            const cycleDeps = buildCycleDeps(deps, context, store, failures);
             const holder = `${hostname()}:${process.pid}`;
             const threads = startThreadRelay(deps, context, store);
             stopRelay = threads.stop;

@@ -30,6 +30,7 @@ const MIGRATIONS = [
     '00011-settings-status-message',
     '00012-object-map-dest-missing',
     '00013-history-mentions',
+    '00014-failure-counts',
 ];
 
 describe('add-on tables on Postgres', { skip: !url }, () => {
