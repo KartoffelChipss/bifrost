@@ -11,6 +11,7 @@ import * as parkedMessages from './migrations/00006-parked-messages';
 import * as historyResilience from './migrations/00007-history-resilience';
 import * as enforceDrift from './migrations/00008-settings-enforce-drift';
 import * as historySkipStreak from './migrations/00009-history-skip-streak';
+import * as historyFailureTracking from './migrations/00010-history-failure-tracking';
 import { MIGRATIONS_MODEL, MIGRATIONS_TABLE } from './schema';
 
 /**
@@ -55,6 +56,11 @@ const MIGRATIONS: RunnableMigration<QueryInterface>[] = [
         name: '00009-history-skip-streak',
         up: historySkipStreak.up,
         down: historySkipStreak.down,
+    },
+    {
+        name: '00010-history-failure-tracking',
+        up: historyFailureTracking.up,
+        down: historyFailureTracking.down,
     },
 ];
 

@@ -121,16 +121,44 @@ describe('PostgresHistoryStore readiness and retry', { skip: !url }, () => {
         assert.equal(await store.isArchiveThread('other'), false);
     });
 
-    it('puts failed jobs back to work with a fresh skip streak', async () => {
+    it('writes and reads where a skip streak began and what errors are about', async () => {
+        const store = new PostgresHistoryStore(db);
+        const [open] = (await store.listJobs(linkId)).filter(
+            (j) => j.discordId === 'importing'
+        );
+        assert.ok(open);
+        assert.equal(open.streakFromId, null);
+        assert.equal(open.failingId, null);
+        await store.updateJob(
+            open.id,
+            { streakFromId: '41', failingId: '42' },
+            new Date()
+        );
+        const written = await store.getJob(open.id);
+        assert.equal(written?.streakFromId, '41');
+        assert.equal(written?.failingId, '42');
+        await store.updateJob(
+            open.id,
+            { streakFromId: null, failingId: null },
+            new Date()
+        );
+        const cleared = await store.getJob(open.id);
+        assert.equal(cleared?.streakFromId, null);
+        assert.equal(cleared?.failingId, null);
+    });
+
+    it('puts failed jobs back to work with a fresh skip streak and error counts', async () => {
         const store = new PostgresHistoryStore(db);
         await db.query(
-            `UPDATE ${TABLES.historyJobs} SET "skipStreak" = 7 WHERE "discordId" = 'failed'`
+            `UPDATE ${TABLES.historyJobs} SET "skipStreak" = 7, "streakFromId" = '5', "failingId" = '6' WHERE "discordId" = 'failed'`
         );
         assert.equal(await store.retryFailed(linkId, new Date()), 1);
         const [retried] = (await store.listJobs(linkId)).filter(
             (j) => j.discordId === 'failed'
         );
         assert.equal(retried?.skipStreak, 0);
+        assert.equal(retried?.streakFromId, null);
+        assert.equal(retried?.failingId, null);
         const ready = await store.channelsReadyToBridge(linkId);
         assert.equal(ready.has('failed'), false);
         assert.equal(await store.retryFailed(linkId, new Date()), 0);
