@@ -23,7 +23,11 @@ export function forkInit(): ForkBootstrap {
         runtime: {
             initAddonDatabase,
             addonDiscordCommands,
-            createBridge: (services) => new UpstreamBridge(services),
+            createBridge: (services) =>
+                new UpstreamBridge({
+                    ...services,
+                    warn: (detail) => logger.warn(detail),
+                }),
             addonFactories,
             startAddons,
         },

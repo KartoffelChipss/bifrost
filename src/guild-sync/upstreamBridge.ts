@@ -52,6 +52,7 @@ import type {
     ThreadSource,
 } from './links';
 import { isNotFound } from './apply';
+import { AuthorMembers, type GuildMembers } from './authorMembers';
 import { discordThread } from './readers/discord';
 import { fluxerThread as snapFluxerThread } from './readers/fluxer';
 import type {
@@ -85,12 +86,28 @@ export interface UpstreamServices {
     readonly fluxerEntityResolver: FluxerEntityResolver;
     /** Upstream's command prefix; read from the environment when unset. */
     readonly commandPrefix?: string;
+    /** Logs a problem that does not stop the work, such as a member lookup. */
+    readonly warn?: (detail: string) => void;
 }
 
 /** A Discord message, as upstream's transformer takes it. */
 type DiscordMessage = Parameters<
     DiscordMessageTransformer['transformMessage']
 >[0];
+
+/**
+ * The member cache of a message's guild, or null for a webhook's message,
+ * which has no member.
+ */
+function authorGuildMembers(message: DiscordMessage): GuildMembers | null {
+    const guild = message.guild;
+    if (!guild || message.webhookId) return null;
+    return {
+        guildId: guild.id,
+        isCached: (userId) => guild.members.cache.has(userId),
+        fetch: (userId) => guild.members.fetch({ user: userId, cache: true }),
+    };
+}
 
 /** Upstream names its Discord bridge webhooks with this prefix. */
 const BRIDGE_HOOK_NAME = 'Fluxer Bridge Webhook for channel';
@@ -126,11 +143,13 @@ export class UpstreamBridge
 {
     private readonly fromDiscord = new DiscordMessageTransformer();
     private readonly fromFluxer = new FluxerMessageTransformer();
+    private readonly authors: AuthorMembers;
 
     private readonly commandPrefix: string;
 
     constructor(private readonly up: UpstreamServices) {
         this.commandPrefix = up.commandPrefix ?? upstreamCommandPrefix();
+        this.authors = new AuthorMembers((detail) => up.warn?.(detail));
     }
 
     /** For the Fluxer writer: upstream's webhook send, with its file handling. */
@@ -947,12 +966,15 @@ export class UpstreamBridge
         return page.first()?.id ?? null;
     }
 
-    payload(
+    async payload(
         raw: unknown,
         guildLinkId: string,
         options: PayloadOptions = {}
     ): Promise<RelayPayload> {
         const message = raw as DiscordMessage;
+        // The copy's name and avatar come from Message.member.
+        const members = authorGuildMembers(message);
+        if (members) await this.authors.load(members, message.author.id);
         // The transformer quotes a reply only when the message has a
         // reference, so a view without one leaves the quote out.
         const source = options.withoutReply
