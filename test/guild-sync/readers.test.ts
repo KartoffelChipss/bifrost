@@ -221,3 +221,38 @@ describe('media channels on Discord', () => {
         });
     });
 });
+
+describe('Fluxer gone check', () => {
+    function readyClient(fetchChannel: () => Promise<unknown>) {
+        return {
+            isReady: () => true,
+            guilds: {
+                fetch: async () => ({
+                    client: { channels: { fetch: fetchChannel } },
+                }),
+            },
+        } as unknown as ConstructorParameters<
+            typeof FluxerGuildReader
+        >[0]['current'];
+    }
+
+    it("counts the library's channel-not-found as gone", async () => {
+        const reader = new FluxerGuildReader({
+            current: readyClient(async () => {
+                throw Object.assign(new Error('Channel t1 not found'), {
+                    code: 'CHANNEL_NOT_FOUND',
+                });
+            }),
+        });
+        assert.equal(await reader.isGone('g1', 'thread', 't1'), true);
+    });
+
+    it('cannot tell when the lookup fails another way', async () => {
+        const reader = new FluxerGuildReader({
+            current: readyClient(async () => {
+                throw new Error('Service unavailable.');
+            }),
+        });
+        assert.equal(await reader.isGone('g1', 'thread', 't1'), null);
+    });
+});
