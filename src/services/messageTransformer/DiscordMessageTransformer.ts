@@ -60,6 +60,7 @@ export default class DiscordMessageTransformer extends MessageTransformer<
                 url: attachment.url,
                 name: attachment.name || 'attachment',
                 spoiler: attachment.spoiler,
+                size: attachment.size,
             })) ?? [];
 
         source.stickers?.forEach((sticker) => {

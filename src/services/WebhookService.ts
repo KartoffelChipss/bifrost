@@ -1,4 +1,10 @@
 import {
+    fetchFile,
+    prepareFiles,
+    withLines,
+    type FetchFile,
+} from './fluxerFiles';
+import {
     Client as FluxerClient,
     TextChannel as FluxerTextChannel,
     Webhook as FluxerWebhook,
@@ -34,6 +40,8 @@ export type WebhookAttachment = {
     url: string;
     name: string;
     spoiler?: boolean;
+    /** Fork: bytes, when the source said (fluxerFiles.ts). */
+    size?: number;
 };
 
 export type WebhookMessageData = {
@@ -48,6 +56,9 @@ export type WebhookMessageData = {
 export class WebhookService {
     private discordClient: DiscordClient | null = null;
     private fluxerClient: FluxerClient | null = null;
+
+    /** Fork: downloads a copy's files (fluxerFiles.ts); tests replace it. */
+    constructor(private readonly fetchFiles: FetchFile = fetchFile) {}
 
     setDiscordClient(client: DiscordClient) {
         this.discordClient = client;
@@ -292,28 +303,31 @@ export class WebhookService {
         webhook: FluxerWebhook,
         data: WebhookMessageData
     ): Promise<string> {
+        // Fork: download files with a longer limit and list those too
+        // large for Fluxer in the text, so the message still arrives.
+        const prepared = await prepareFiles(
+            data.attachments ?? [],
+            this.fetchFiles
+        );
+        const attachments = prepared.kept.map(
+            (index) => (data.attachments ?? [])[index]
+        );
         const msg = await webhook.send(
             {
-                content: data.content,
+                content: withLines(data.content, prepared.lines),
                 username: data.username,
                 // Fork: Fluxer rejects an avatar_url that is not a URL,
                 // such as '' (URLType in WebhookRequestSchemas.ts).
                 avatarUrl: data.avatarURL || undefined,
-                files:
-                    data.attachments?.map((attachment) => ({
-                        url: attachment.url,
-                        name: attachment.name,
-                        filename: attachment.name,
-                    })) || [],
-                attachments:
-                    data.attachments?.map((attachment, index) => ({
-                        id: index,
-                        name: attachment.name,
-                        filename: attachment.name,
-                        flags: attachment.spoiler
-                            ? MessageAttachmentFlags.IS_SPOILER
-                            : undefined,
-                    })) || [],
+                files: prepared.files,
+                attachments: attachments.map((attachment, index) => ({
+                    id: index,
+                    name: attachment.name,
+                    filename: attachment.name,
+                    flags: attachment.spoiler
+                        ? MessageAttachmentFlags.IS_SPOILER
+                        : undefined,
+                })),
                 embeds:
                     data.embeds?.map((embed) => embed.toFluxerEmbed()) || [],
                 ...fluxerSendFields(data.fidelity), // Fork
