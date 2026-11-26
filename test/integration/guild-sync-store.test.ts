@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { DataTypes, QueryTypes, Sequelize } from 'sequelize';
 import { runAddonMigrations } from '../../src/addons/db/migrator';
-import { TABLES } from '../../src/addons/db/schema';
+import { TABLES, type ObjectKind } from '../../src/addons/db/schema';
 import { EMPTY_BODY } from '../../src/guild-sync/plan';
 import { stableJson } from '../../src/guild-sync/snapshot';
 import { latestIntent } from '../../src/guild-sync/adopt';
@@ -12,6 +12,7 @@ import {
     HISTORY_LOCK_KEY,
     PLANS_KEPT_PER_LINK,
     PostgresGuildSyncStore,
+    RESTORE_OP,
     THREAD_RESET_OP,
 } from '../../src/guild-sync/store';
 import { PostgresHistoryStore } from '../../src/history/store';
@@ -905,6 +906,270 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
             );
             assert.equal(cleared.mapRows, 0);
             assert.equal((await store.loadObjectMap(link)).length, 1);
+        });
+    });
+
+    describe('restoreCopy', () => {
+        let link: string;
+        const now = new Date();
+        const history = () => new PostgresHistoryStore(db);
+
+        async function row(
+            kind: ObjectKind,
+            discordId: string,
+            createdBySync = true
+        ) {
+            return store.insertMapping(
+                {
+                    guildLinkId: link,
+                    kind,
+                    discordId,
+                    fluxerId: `f-${discordId}`,
+                    createdBySync,
+                    appliedFields: {},
+                },
+                now
+            );
+        }
+
+        /** A finished history job with one imported message. */
+        async function doneJob(
+            kind: 'channel' | 'thread',
+            discordId: string,
+            parent: string | null
+        ) {
+            await history().ensureJob(link, kind, discordId, parent, now);
+            const found = (await history().listJobs(link)).find(
+                (j) => j.discordId === discordId
+            );
+            assert.ok(found);
+            await history().updateJob(
+                found.id,
+                {
+                    fluxerId: `f-${discordId}`,
+                    status: 'done',
+                    cutoffId: '500',
+                    checkpointId: '500',
+                    imported: 4,
+                },
+                now
+            );
+            await history().startMessage(
+                {
+                    discordMessageId: `restore-h-${discordId}`,
+                    jobId: found.id,
+                    discordAuthorId: 'a',
+                    fluxerMessageId: null,
+                    fluxerTargetId: `f-${discordId}`,
+                    inThread: kind === 'thread',
+                    webhookId: 'w',
+                },
+                now
+            );
+            return found.id;
+        }
+
+        async function intent(kind: ObjectKind, sourceId: string) {
+            await store.audit(
+                {
+                    planId: randomUUID(),
+                    guildLinkId: link,
+                    op: 'create-intent',
+                    kind,
+                    sourceId,
+                    destId: null,
+                    before: null,
+                    after: { name: `name-${sourceId}` },
+                    result: 'intent',
+                },
+                new Date(now.getTime() - 60_000)
+            );
+        }
+
+        const target = (
+            mapped: { id: string; kind: ObjectKind },
+            discordId: string,
+            threads: { rowId: string; discordId: string }[] = []
+        ) => ({
+            rowId: mapped.id,
+            kind: mapped.kind as Exclude<ObjectKind, 'overwrite'>,
+            discordId,
+            fluxerId: `f-${discordId}`,
+            threads: threads.map((t) => ({
+                ...t,
+                fluxerId: `f-${t.discordId}`,
+            })),
+        });
+
+        before(async () => {
+            link = randomUUID();
+            await db.query(
+                `INSERT INTO guild_links (id, "discordGuildId", "fluxerGuildId", "createdAt") VALUES ($1, 'dx', 'fx', now())`,
+                { bind: [link] }
+            );
+        });
+
+        it('saves and reads back the destination absence counters', async () => {
+            const mapped = await row('emoji', 'restore-counter');
+            const since = new Date('2026-11-02T00:00:00Z');
+            await store.saveDestMissing(
+                [
+                    {
+                        rowId: mapped.id,
+                        destMissingCount: 3,
+                        destMissingSince: since,
+                    },
+                ],
+                now
+            );
+            const found = (await store.loadObjectMap(link)).find(
+                (r) => r.id === mapped.id
+            );
+            assert.equal(found?.destMissingCount, 3);
+            assert.equal(
+                found?.destMissingSince?.toISOString(),
+                since.toISOString()
+            );
+            assert.equal(found?.missingCount, 0);
+        });
+
+        it('forgets a channel with its history and thread copies, and audits it', async () => {
+            const chan = await row('channel', 'restore-chan');
+            const copied = await row('thread', 'restore-t1');
+            const mirror = await row('thread', 'restore-t2', false);
+            const other = await row('channel', 'restore-other');
+            const chanJob = await doneJob('channel', 'restore-chan', null);
+            await doneJob('thread', 'restore-t1', 'restore-chan');
+            const otherJob = await doneJob('channel', 'restore-other', null);
+            await intent('channel', 'restore-chan');
+            await intent('channel', 'restore-other');
+            const runId = randomUUID();
+
+            const cleared = await store.restoreCopy(
+                link,
+                target(chan, 'restore-chan', [
+                    { rowId: copied.id, discordId: 'restore-t1' },
+                ]),
+                runId,
+                now
+            );
+
+            assert.deepEqual(cleared, {
+                mapRows: 2,
+                threadMessages: 0,
+                parkedMessages: 0,
+                historyMessages: 2,
+                historyJobs: 2,
+                intents: 1,
+                threads: 1,
+            });
+            const left = (await store.loadObjectMap(link)).map((r) => r.id);
+            assert.ok(!left.includes(chan.id));
+            assert.ok(!left.includes(copied.id));
+            assert.ok(left.includes(mirror.id));
+            assert.ok(left.includes(other.id));
+            const fresh = await history().getJob(chanJob);
+            assert.equal(fresh?.status, 'pending');
+            assert.equal(fresh?.fluxerId, null);
+            assert.equal(fresh?.cutoffId, null);
+            assert.equal(
+                await history().importedByDiscordId('restore-h-restore-chan'),
+                null
+            );
+            assert.equal((await history().getJob(otherJob))?.status, 'done');
+            const intents = await store.createIntents(link, new Date(0));
+            const usable = (sourceId: string) =>
+                latestIntent(intents, {
+                    kind: 'channel',
+                    sourceId,
+                    name: `name-${sourceId}`,
+                });
+            assert.equal(usable('restore-chan'), null);
+            assert.notEqual(usable('restore-other'), null);
+            const audits = await db.query<Record<string, unknown>>(
+                `SELECT kind, "sourceId", "destId", before, after, result FROM ${TABLES.auditLog}
+                 WHERE "planId" = $1 AND op = $2`,
+                { bind: [runId, RESTORE_OP], type: QueryTypes.SELECT }
+            );
+            assert.equal(audits.length, 1);
+            assert.equal(audits[0].kind, 'channel');
+            assert.equal(audits[0].destId, 'f-restore-chan');
+            assert.deepEqual(audits[0].before, { fluxerId: 'f-restore-chan' });
+            assert.equal(
+                (audits[0].after as { fluxerId: unknown }).fluxerId,
+                null
+            );
+            assert.equal(await store.restoresSince(link, new Date(0)), 1);
+            // A restore is not a removal: the delete budget stays untouched.
+            assert.equal(await store.removalsSince(link, new Date(0)), 0);
+        });
+
+        it('forgets a thread copy as a thread reset does', async () => {
+            const copied = await row('thread', 'restore-t3');
+            await doneJob('thread', 'restore-t3', 'p');
+            await store.saveThreadMessage(
+                {
+                    guildLinkId: link,
+                    discordThreadId: 'restore-t3',
+                    fluxerThreadId: 'f-restore-t3',
+                    discordMessageId: 'restore-dm',
+                    fluxerMessageId: 'restore-fm',
+                },
+                now
+            );
+            const cleared = await store.restoreCopy(
+                link,
+                target(copied, 'restore-t3'),
+                randomUUID(),
+                now
+            );
+            assert.deepEqual(cleared, {
+                mapRows: 1,
+                threadMessages: 1,
+                parkedMessages: 0,
+                historyMessages: 1,
+                historyJobs: 1,
+                intents: 0,
+                threads: 0,
+            });
+        });
+
+        it('forgets only the row of a role, emoji, sticker or category', async () => {
+            for (const kind of [
+                'role',
+                'emoji',
+                'sticker',
+                'category',
+            ] as const) {
+                const mapped = await row(kind, `restore-${kind}`);
+                await intent(kind, `restore-${kind}`);
+                const cleared = await store.restoreCopy(
+                    link,
+                    target(mapped, `restore-${kind}`),
+                    randomUUID(),
+                    now
+                );
+                assert.equal(cleared.mapRows, 1, kind);
+                assert.equal(cleared.intents, 1, kind);
+                assert.equal(cleared.historyJobs, 0, kind);
+            }
+        });
+
+        it('changes nothing for a row that is not a copy made by sync', async () => {
+            const adopted = await row('role', 'restore-adopted', false);
+            await intent('role', 'restore-adopted');
+            const before = await store.restoresSince(link, new Date(0));
+            const cleared = await store.restoreCopy(
+                link,
+                target(adopted, 'restore-adopted'),
+                randomUUID(),
+                now
+            );
+            assert.equal(cleared.mapRows, 0);
+            assert.equal(cleared.intents, 0);
+            const ids = (await store.loadObjectMap(link)).map((r) => r.id);
+            assert.ok(ids.includes(adopted.id));
+            assert.equal(await store.restoresSince(link, new Date(0)), before);
         });
     });
 });

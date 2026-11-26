@@ -34,6 +34,8 @@ export function row(
         createdBySync: true,
         missingSince: null,
         missingCount: 0,
+        destMissingCount: 0,
+        destMissingSince: null,
         appliedFields: null,
     };
 }

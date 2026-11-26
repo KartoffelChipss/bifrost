@@ -48,8 +48,45 @@ export class FakeGuild implements GuildReader, GuildWriter {
         return { ok: true, snapshot: this.snapshot };
     }
 
-    async isGone() {
-        return false;
+    /**
+     * Answers isGone when set; otherwise every object exists. Set it to
+     * `goneFromSnapshot` to answer like Fluxer: gone when not listed.
+     */
+    lookup: ((kind: string, id: string) => boolean | null) | null = null;
+    /** Every isGone call, as `kind:id`. */
+    readonly lookups: string[] = [];
+
+    async isGone(_guild: string, kind: string, id: string) {
+        this.lookups.push(`${kind}:${id}`);
+        return this.lookup ? this.lookup(kind, id) : false;
+    }
+
+    /** True when no list in the snapshot holds the ID. */
+    goneFromSnapshot = (_kind: string, id: string): boolean => {
+        const { roles, channels, emojis, stickers, threads } = this.snapshot;
+        return ![roles, channels, emojis, stickers, threads].some((list) =>
+            list.some((item) => item.id === id)
+        );
+    };
+
+    /** Deletes objects as a person on Fluxer would, without a write call. */
+    removeByHand(...ids: string[]): void {
+        const keep = <T extends { id: string }>(list: readonly T[]) =>
+            list.filter((item) => !ids.includes(item.id));
+        this.patch({
+            roles: keep(this.snapshot.roles),
+            channels: keep(this.snapshot.channels).map((c) =>
+                // Fluxer moves a deleted category's channels to the top.
+                c.parentId !== null && ids.includes(c.parentId)
+                    ? { ...c, parentId: null }
+                    : c
+            ),
+            emojis: keep(this.snapshot.emojis),
+            stickers: keep(this.snapshot.stickers),
+            threads: keep(this.snapshot.threads).filter(
+                (t) => !ids.includes(t.parentId)
+            ),
+        });
     }
 
     private patch(next: Partial<GuildSnapshot>) {

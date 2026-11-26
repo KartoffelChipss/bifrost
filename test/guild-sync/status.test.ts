@@ -6,6 +6,7 @@ import {
     statusColor,
     type StatusView,
 } from '../../src/guild-sync/status';
+import { EMPTY_BODY, restoreLines } from '../../src/guild-sync/plan';
 import { EmbedColors } from '../../src/utils/embeds';
 import { DEFAULT_SETTINGS } from './fake-store';
 
@@ -41,6 +42,40 @@ function view(overrides: Partial<StatusView> = {}): StatusView {
 }
 
 describe('renderStatus', () => {
+    it('lists copies deleted on Fluxer that are recreated', () => {
+        const body = {
+            ...EMPTY_BODY,
+            restores: Array.from({ length: 7 }, (_, i) => ({
+                rowId: `row-${i}`,
+                kind: 'channel' as const,
+                discordId: `d${i}`,
+                fluxerId: `f${i}`,
+                name: `chan-${i}`,
+            })),
+            restoreHold: null,
+        };
+        const embed = renderStatus(
+            view({
+                plan: {
+                    id: 'plan-1',
+                    status: 'dry-run',
+                    abortReason: null,
+                    deferred: 0,
+                    at: AT,
+                    restores: restoreLines(body),
+                },
+            })
+        );
+        const lines = embed.description.split('\n');
+        assert.ok(lines.includes('**Restores:** copies deleted on Fluxer'));
+        assert.ok(
+            lines.includes(
+                '- restore channel "chan-0" (f0): deleted on Fluxer, will be recreated'
+            )
+        );
+        assert.ok(lines.includes('- and 2 more lines'));
+    });
+
     it('shows a healthy apply link in green', () => {
         const embed = renderStatus(view());
         assert.equal(embed.title, STATUS_TITLE);

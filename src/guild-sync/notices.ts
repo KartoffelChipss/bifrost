@@ -61,12 +61,15 @@ export interface Alert {
 /** Identifies what a plan would do, apart from its ID and time. */
 export function planFingerprint(plan: Plan): string {
     const { ops, deferred, needsApproval, approvalReason } = plan.body;
+    const restores = plan.body.restores ?? [];
     return stableJson({
         ops,
         deferred,
         needsApproval,
         approvalReason,
         abortReason: plan.abortReason,
+        // Absent without restores, so older fingerprints stay the same.
+        ...(restores.length > 0 ? { restores } : {}),
     });
 }
 

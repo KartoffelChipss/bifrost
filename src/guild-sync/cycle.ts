@@ -6,7 +6,7 @@ import { applyPlan, failureKey, type ApplyResult } from './apply';
 import { holdNewerPosts, threadParents, type CreateHistory } from './postOrder';
 import type { FailureLedger } from './failures';
 import type { AssetSource } from './assets';
-import { diff, type DiffInput } from './diff';
+import { diff, type DiffInput, type MissingCopy } from './diff';
 import {
     applyMissing,
     checkDeleteBudget,
@@ -27,10 +27,22 @@ import {
     type Alert,
     type NoticeBoard,
 } from './notices';
-import type { MapRow, PlanOp } from './ops';
+import type { Finding, MapRow, PlanOp } from './ops';
 import { destIdOf, isRemoval, sourceIdOf } from './ops';
 import { EMPTY_BODY, summarizePlan, type Plan, type PlanBody } from './plan';
 import type { GuildReader } from './readers/reader';
+import {
+    allowedRestores,
+    applyDestMissing,
+    destinationHealthy,
+    trackDestMissing,
+} from './restore';
+import {
+    NO_RESTORES,
+    planRestores,
+    runRestores,
+    type RestorePlan,
+} from './restoreCycle';
 import type { GuildSnapshot } from './snapshot';
 import {
     countObjects,
@@ -93,6 +105,8 @@ export interface CycleDeps {
     readonly newId: () => string;
     /** False once the leader lock is lost; checked before every write. */
     readonly stillLeader?: () => Promise<boolean>;
+    /** Names this process in a lock row; DEFAULT_HOLDER when unset. */
+    readonly holder?: string;
     /** Ops that keep failing wait out a backoff (failures.ts). */
     readonly failures?: FailureLedger;
     /**
@@ -128,6 +142,9 @@ export type CycleOutcome =
           /** True when writes went through and more ops are waiting. */
           readonly more: boolean;
       };
+
+/** The lock holder name used when the deps name none. */
+const DEFAULT_HOLDER = 'guild-sync';
 
 /** Direct lookups per cycle for guard 4. The rest wait for a later cycle. */
 export const MAX_LOOKUPS_PER_CYCLE = 20;
@@ -372,7 +389,31 @@ async function bridgedChannels(
     return deps.links.linkedDiscordChannels(link.discordGuildId);
 }
 
-/** The map with missing counts updated (guard 4), and the diff. */
+/**
+ * The map with both absence counters updated: from the source for
+ * removals (guard 4), and from the destination for restores. A
+ * destination snapshot that is not plausible advances nothing.
+ */
+async function trackedRows(
+    link: LinkedGuild,
+    direction: SyncDirection,
+    gated: Extract<GateOutcome, { ok: true }>,
+    deps: CycleDeps,
+    now: Date
+): Promise<MapRow[]> {
+    const { source, destination } = gated;
+    const loaded = await deps.store.loadObjectMap(link.id);
+    const missing = trackMissing(loaded, source, direction, now);
+    await deps.store.saveMissing(missing, now);
+    const rows = applyMissing(loaded, missing);
+    const destMissing = destinationHealthy(destination)
+        ? trackDestMissing(rows, destination, direction, now)
+        : [];
+    await deps.store.saveDestMissing(destMissing, now);
+    return applyDestMissing(rows, destMissing);
+}
+
+/** The map with missing counts updated, and the diff. */
 async function diffWithMap(
     link: LinkedGuild,
     settings: SyncSettings,
@@ -383,10 +424,7 @@ async function diffWithMap(
     const { direction } = settings;
     const { source, destination } = gated;
     const members = await membersFor(deps, direction);
-    const loaded = await deps.store.loadObjectMap(link.id);
-    const missing = trackMissing(loaded, source, direction, now);
-    await deps.store.saveMissing(missing, now);
-    const rows = applyMissing(loaded, missing);
+    const rows = await trackedRows(link, direction, gated, deps, now);
     const excluded = excludedIds(source, deps.excludedChannels ?? new Set());
     const bridged = await bridgedChannels(link, deps);
     const links = await linkState(link, settings, deps, bridged);
@@ -484,6 +522,11 @@ async function buildBody(
         now,
         pinned
     );
+    const restores = await plannedRestores(link, settings, gated, rows, {
+        missing: found.missing,
+        deps,
+        now,
+    });
     const map = IdMap.from(rows, settings.direction, source, destination);
     const adopted = await withAdoptions(link, gated, found.ops, map, deps, now);
     const owned = enforceOwnership(
@@ -498,20 +541,86 @@ async function buildBody(
     const ordered = inPostOrder(link, source, owned.kept, deps, now);
     const budget = checkDeleteBudget(ordered.kept, settings, removalsToday);
     const capped = orderAndCap(ordered.kept, settings.writeCapPerCycle);
-    const body: PlanBody = {
-        ops: capped.now,
-        deferred: capped.deferred,
+    const body = assembleBody({
+        capped,
         findings: [
-            ...found.findings,
+            ...withoutRestored(found.findings, restores),
             ...removals.findings,
             ...owned.dropped,
             ...ordered.findings,
+            ...restores.findings,
         ],
-        needsApproval: budget.needsApproval,
-        approvalReason: budget.needsApproval ? budget.reason : null,
+        budget,
         removalRowIds: removals.rowIds,
-    };
+        restores,
+    });
     return { body, rows, members, historyLocked };
+}
+
+/** The restores a cycle plans (restoreCycle.ts); none without Fluxer. */
+async function plannedRestores(
+    link: LinkedGuild,
+    settings: SyncSettings,
+    gated: Extract<GateOutcome, { ok: true }>,
+    rows: readonly MapRow[],
+    extra: { missing: readonly MissingCopy[]; deps: CycleDeps; now: Date }
+): Promise<RestorePlan> {
+    const { deps } = extra;
+    if (settings.direction !== 'discord-to-fluxer') return NO_RESTORES;
+    return planRestores(
+        {
+            guildLinkId: link.id,
+            fluxerGuildId: link.fluxerGuildId,
+            settings,
+            rows,
+            missing: extra.missing,
+            destination: gated.destination,
+            now: extra.now,
+        },
+        { store: deps.store, reader: deps.readers.fluxer }
+    );
+}
+
+/** The diff's findings less the missing copies a restore reports. */
+function withoutRestored(
+    findings: readonly Finding[],
+    restores: RestorePlan
+): Finding[] {
+    const restored = new Set(restores.restores.map((r) => r.fluxerId));
+    return findings.filter(
+        (f) => f.type !== 'missing-on-destination' || !restored.has(f.id)
+    );
+}
+
+/**
+ * The plan body. Removals over budget and restores held by the mass
+ * check both wait for approval; the causes are joined as
+ * checkDeleteBudget joins its own, so isApproved can tell them apart.
+ */
+function assembleBody(parts: {
+    capped: ReturnType<typeof orderAndCap>;
+    findings: Finding[];
+    budget: ReturnType<typeof checkDeleteBudget>;
+    removalRowIds: string[];
+    restores: RestorePlan;
+}): PlanBody {
+    const { capped, budget, restores } = parts;
+    const reasons = [
+        ...(budget.needsApproval ? [budget.reason] : []),
+        ...(restores.hold !== null ? [restores.hold] : []),
+    ];
+    return {
+        ops: capped.now,
+        deferred: capped.deferred,
+        findings: parts.findings,
+        needsApproval: reasons.length > 0,
+        approvalReason:
+            reasons.length > 0 ? reasons.join(REASON_SEPARATOR) : null,
+        removalRowIds: parts.removalRowIds,
+        ...(restores.restores.length > 0 || restores.hold !== null
+            ? { restores: restores.restores, restoreHold: restores.hold }
+            : {}),
+    };
 }
 
 /**
@@ -820,16 +929,62 @@ async function planAndApply(
     const applied = runnable
         ? await applySaved(run, gated, built, deps, held)
         : null;
-    if (!applied) return { status: 'planned', plan, more: false };
+    const restored =
+        mode.mode === 'apply'
+            ? await applyRestores(link, plan, approved, gated, deps)
+            : 0;
+    if (!applied) return { status: 'planned', plan, more: restored > 0 };
     await postAlert(link.id, settings, deps, applyAlert(plan, applied));
     // Only clean progress asks for another cycle, so a failing write is
     // retried at the normal pace and never in a tight loop.
     const more =
-        applied.applied > 0 &&
-        applied.failed === 0 &&
-        applied.stopped === null &&
-        (body.deferred.length > 0 || applied.postponed > 0);
+        restored > 0 ||
+        (applied.applied > 0 &&
+            applied.failed === 0 &&
+            applied.stopped === null &&
+            (body.deferred.length > 0 || applied.postponed > 0));
     return { status: 'planned', plan, applied, more };
+}
+
+/**
+ * Forgets the rows of the plan's restores (restoreCycle.ts), so the next
+ * cycle creates the copies again. Only in apply mode, and only with a
+ * Fluxer writer to recreate them. Returns how many were forgotten.
+ */
+async function applyRestores(
+    link: LinkedGuild,
+    plan: Plan,
+    approved: Plan | null,
+    gated: Extract<GateOutcome, { ok: true }>,
+    deps: CycleDeps
+): Promise<number> {
+    const items = allowedRestores(
+        plan.body.restores ?? [],
+        plan.body.restoreHold ?? null,
+        approved?.body ?? null
+    );
+    if (items.length === 0 || plan.direction !== 'discord-to-fluxer') return 0;
+    if (!deps.writers.fluxer) return 0;
+    const result = await runRestores(
+        {
+            guildLinkId: link.id,
+            fluxerGuildId: link.fluxerGuildId,
+            items,
+            runId: plan.id,
+            source: gated.source,
+        },
+        {
+            store: deps.store,
+            reader: deps.readers.fluxer,
+            links: deps.links,
+            writesStopped: () => applyStopped(link.id, deps),
+            stillLeader: deps.stillLeader,
+            holder: deps.holder ?? DEFAULT_HOLDER,
+            now: deps.now,
+            logger: deps.logger,
+        }
+    );
+    return result.restored;
 }
 
 /**

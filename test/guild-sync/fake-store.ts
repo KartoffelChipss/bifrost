@@ -13,12 +13,15 @@ import type { GuildReader } from '../../src/guild-sync/readers/reader';
 import type { GuildSnapshot } from '../../src/guild-sync/snapshot';
 import {
     LEADER_LOCK_KEY,
+    RESTORE_OP,
     THREAD_RESET_OP,
     type AuditEntry,
     type CopiedThread,
     type GuildSyncStore,
     type MappedCounts,
     type NewMapping,
+    type RestoreCleared,
+    type RestoreTarget,
     type StatusMessageRef,
     type SyncSettings,
     type ThreadMessage,
@@ -26,6 +29,24 @@ import {
     type ThreadResetCleared,
 } from '../../src/guild-sync/store';
 import type { HistoryJob } from '../../src/history/types';
+import type { DestMissingUpdate } from '../../src/guild-sync/restore';
+
+/** One map row a fake forget acts on. */
+interface FakeTarget {
+    readonly rowId: string;
+    readonly kind: MapRow['kind'];
+    readonly discordId: string;
+    readonly fluxerId: string;
+}
+
+const EMPTY_CLEARED: ThreadResetCleared = {
+    mapRows: 0,
+    threadMessages: 0,
+    parkedMessages: 0,
+    historyMessages: 0,
+    historyJobs: 0,
+    intents: 0,
+};
 
 /** A parked reply, as `addon_parked_messages` keys it. */
 export interface FakeParked {
@@ -118,6 +139,11 @@ export class FakeStore implements GuildSyncStore {
     readonly forgotten: CopiedThread[] = [];
     /** Set by a test to make forgetCopiedThread fail. */
     failForget = false;
+    /** Every copy restoreCopy was asked to forget, in order. */
+    readonly restored: RestoreTarget[] = [];
+    /** Set by a test to make restoreCopy fail. */
+    failRestore = false;
+    destMissingWrites: DestMissingUpdate[][] = [];
     private mapSeq = 0;
 
     async withLeaderLock<T>(
@@ -230,6 +256,8 @@ export class FakeStore implements GuildSyncStore {
             createdBySync: mapping.createdBySync,
             missingSince: null,
             missingCount: 0,
+            destMissingCount: 0,
+            destMissingSince: null,
             appliedFields: mapping.appliedFields,
         };
         this.rows = [...this.rows, row];
@@ -335,14 +363,13 @@ export class FakeStore implements GuildSyncStore {
     ): Promise<ThreadResetCleared> {
         if (this.failForget) throw new Error('database unavailable');
         this.forgotten.push(thread);
-        const cleared: ThreadResetCleared = {
-            mapRows: this.dropMapRow(thread),
-            threadMessages: this.dropThreadMessages(thread),
-            parkedMessages: this.dropParked(thread),
-            historyMessages: this.dropHistoryMessages(thread.discordId),
-            historyJobs: this.resetJobs(thread.discordId),
-            intents: this.refuseIntents(guildLinkId, thread, audit, now),
-        };
+        const target = { ...thread, kind: 'thread' as const };
+        const cleared = this.forgetThread(
+            guildLinkId,
+            target,
+            audit.runId,
+            now
+        );
         await this.audit(
             {
                 planId: audit.runId,
@@ -360,13 +387,130 @@ export class FakeStore implements GuildSyncStore {
         return cleared;
     }
 
-    private dropMapRow(t: CopiedThread): number {
+    async saveDestMissing(updates: readonly DestMissingUpdate[]) {
+        if (updates.length === 0) return;
+        this.destMissingWrites.push([...updates]);
+        const byRow = new Map(updates.map((u) => [u.rowId, u]));
+        this.rows = this.rows.map((row) => {
+            const update = byRow.get(row.id);
+            return update
+                ? {
+                      ...row,
+                      destMissingCount: update.destMissingCount,
+                      destMissingSince: update.destMissingSince,
+                  }
+                : row;
+        });
+    }
+
+    async restoresSince(_link: string, since: Date) {
+        return this.audits.filter(
+            (a, i) =>
+                a.op === RESTORE_OP &&
+                a.result === 'ok' &&
+                this.auditTimes[i] >= since
+        ).length;
+    }
+
+    async restoreCopy(
+        guildLinkId: string,
+        target: RestoreTarget,
+        runId: string,
+        now: Date
+    ): Promise<RestoreCleared> {
+        if (this.failRestore) throw new Error('database unavailable');
+        this.restored.push(target);
+        if (this.dropMapRow(target) === 0) {
+            return { ...EMPTY_CLEARED, threads: 0 };
+        }
+        const cleared = this.cleanUp(guildLinkId, target, runId, now);
+        await this.audit(
+            {
+                planId: runId,
+                guildLinkId,
+                op: RESTORE_OP,
+                kind: target.kind,
+                sourceId: target.discordId,
+                destId: target.fluxerId,
+                before: { fluxerId: target.fluxerId },
+                after: { fluxerId: null, cleared: { ...cleared } },
+                result: 'ok',
+            },
+            now
+        );
+        return cleared;
+    }
+
+    /** Everything restoreCopy clears once the map row went. */
+    private cleanUp(
+        guildLinkId: string,
+        target: RestoreTarget,
+        runId: string,
+        now: Date
+    ): RestoreCleared {
+        if (target.kind === 'thread') {
+            const rest = this.forgetThread(
+                guildLinkId,
+                target,
+                runId,
+                now,
+                true
+            );
+            return { ...rest, mapRows: 1, threads: 0 };
+        }
+        const history = target.kind === 'channel';
+        const own = {
+            ...EMPTY_CLEARED,
+            mapRows: 1,
+            historyMessages: history ? this.dropHistoryMessages(target) : 0,
+            historyJobs: history ? this.resetJobs(target) : 0,
+            intents: this.refuseIntents(guildLinkId, target, runId, now),
+        };
+        if (!history) return { ...own, threads: 0 };
+        const total: Record<keyof ThreadResetCleared, number> = { ...own };
+        let threads = 0;
+        for (const thread of target.threads) {
+            const t = { ...thread, kind: 'thread' as const };
+            // A thread row that changed meanwhile is left as it is.
+            if (this.dropMapRow(t) === 0) continue;
+            const rest = this.forgetThread(guildLinkId, t, runId, now, true);
+            for (const key of Object.keys(total) as (keyof typeof total)[]) {
+                total[key] += rest[key];
+            }
+            total.mapRows += 1;
+            threads += 1;
+        }
+        return { ...total, threads };
+    }
+
+    /**
+     * Forgets one thread copy. `rowGone` when its row went already; a
+     * reset clears the rest even when the row changed, as the store does.
+     */
+    private forgetThread(
+        guildLinkId: string,
+        t: FakeTarget,
+        runId: string,
+        now: Date,
+        rowGone = false
+    ): ThreadResetCleared {
+        return {
+            mapRows: rowGone ? 0 : this.dropMapRow(t),
+            threadMessages: this.dropThreadMessages(t),
+            parkedMessages: this.dropParked(t),
+            historyMessages: this.dropHistoryMessages(t),
+            historyJobs: this.resetJobs(t),
+            intents: this.refuseIntents(guildLinkId, t, runId, now),
+        };
+    }
+
+    private dropMapRow(t: FakeTarget): number {
         const before = this.rows.length;
         this.rows = this.rows.filter(
             (r) =>
                 !(
                     r.id === t.rowId &&
-                    r.kind === 'thread' &&
+                    r.kind === t.kind &&
                     r.state === 'active' &&
                     r.createdBySync &&
                     r.discordId === t.discordId &&
@@ -376,7 +520,7 @@ export class FakeStore implements GuildSyncStore {
         return before - this.rows.length;
     }
 
-    private dropThreadMessages(t: CopiedThread): number {
+    private dropThreadMessages(t: FakeTarget): number {
         const before = this.threadMessages.length;
         this.threadMessages = this.threadMessages.filter(
             (m) =>
@@ -386,7 +530,7 @@ export class FakeStore implements GuildSyncStore {
         return before - this.threadMessages.length;
     }
 
-    private dropParked(t: CopiedThread): number {
+    private dropParked(t: FakeTarget): number {
         const before = this.parked.length;
         this.parked = this.parked.filter((p) =>
             p.side === 'discord'
@@ -396,16 +540,16 @@ export class FakeStore implements GuildSyncStore {
         return before - this.parked.length;
     }
 
-    private threadJobIds(discordId: string): Set<string> {
+    private jobIds(t: FakeTarget): Set<string> {
         return new Set(
             this.historyJobs
-                .filter((j) => j.kind === 'thread' && j.discordId === discordId)
+                .filter((j) => j.kind === t.kind && j.discordId === t.discordId)
                 .map((j) => j.id)
         );
     }
 
-    private dropHistoryMessages(discordId: string): number {
-        const jobs = this.threadJobIds(discordId);
+    private dropHistoryMessages(t: FakeTarget): number {
+        const jobs = this.jobIds(t);
         const before = this.historyMessages.length;
         this.historyMessages = this.historyMessages.filter(
             (m) => !jobs.has(m.jobId)
@@ -413,12 +557,13 @@ export class FakeStore implements GuildSyncStore {
         return before - this.historyMessages.length;
     }
 
-    private resetJobs(discordId: string): number {
-        const jobs = this.threadJobIds(discordId);
+    private resetJobs(t: FakeTarget): number {
+        const jobs = this.jobIds(t);
         this.historyJobs = this.historyJobs.map((j) =>
             jobs.has(j.id)
                 ? freshJob(j.id, j.discordId, {
                       guildLinkId: j.guildLinkId,
+                      kind: j.kind,
                       parentDiscordId: j.parentDiscordId,
                   })
                 : j
@@ -428,8 +573,8 @@ export class FakeStore implements GuildSyncStore {
 
     private refuseIntents(
         guildLinkId: string,
-        t: CopiedThread,
-        audit: ThreadResetAudit,
+        t: FakeTarget,
+        runId: string,
         now: Date
     ): number {
         const names = new Set<string>();
@@ -438,7 +583,7 @@ export class FakeStore implements GuildSyncStore {
             if (
                 entry.op === 'create-intent' &&
                 entry.result === 'intent' &&
-                entry.kind === 'thread' &&
+                entry.kind === t.kind &&
                 entry.sourceId === t.discordId &&
                 typeof name === 'string'
             ) {
@@ -447,10 +592,10 @@ export class FakeStore implements GuildSyncStore {
         }
         for (const name of names) {
             this.audits.push({
-                planId: audit.runId,
+                planId: runId,
                 guildLinkId,
                 op: 'create-intent',
-                kind: 'thread',
+                kind: t.kind,
                 sourceId: t.discordId,
                 destId: null,
                 before: null,

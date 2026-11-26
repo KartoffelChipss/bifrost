@@ -2,7 +2,7 @@ import type { AddonMode } from '../addons/config';
 import type { AddonLogger } from '../addons/isolation';
 import type { JobTotals } from '../history/types';
 import { resolveMode, type CycleOutcome } from './cycle';
-import type { Plan } from './plan';
+import { restoreLines, type Plan } from './plan';
 import {
     renderStatus,
     statusBody,
@@ -114,6 +114,7 @@ function planInfo(plan: Plan | null, slot: LinkSlot): PlanInfo | null {
         abortReason: plan.abortReason,
         deferred: plan.body.deferred.length,
         at,
+        restores: restoreLines(plan.body),
     };
 }
 

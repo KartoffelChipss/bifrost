@@ -87,14 +87,28 @@ export interface DiffInput {
     readonly enforceDrift?: boolean;
 }
 
+/**
+ * A mapped source object the diff would sync, whose destination copy is
+ * not in the destination snapshot. restore.ts decides whether the copy is
+ * restored; the diff only reports it.
+ */
+export interface MissingCopy {
+    readonly kind: SyncKind;
+    readonly sourceId: string;
+    readonly destId: string;
+    readonly name: string;
+}
+
 export interface DiffResult {
     readonly ops: PlanOp[];
     readonly findings: Finding[];
+    readonly missing: MissingCopy[];
 }
 
 interface Out {
     readonly ops: PlanOp[];
     readonly findings: Finding[];
+    readonly missing: MissingCopy[];
 }
 
 const same = (a: unknown, b: unknown) =>
@@ -322,6 +336,22 @@ function planCreate<T extends { readonly id: string; readonly name: string }>(
     );
 }
 
+/** A mapped object whose copy is not on the destination. */
+function reportMissingCopy(
+    out: Out,
+    kind: SyncKind,
+    item: { readonly id: string; readonly name: string },
+    destId: string
+): void {
+    out.findings.push({
+        type: 'missing-on-destination',
+        kind,
+        id: destId,
+        detail: `mapped from ${item.id}, not found on the destination`,
+    });
+    out.missing.push({ kind, sourceId: item.id, destId, name: item.name });
+}
+
 function diffObjects<T extends { readonly id: string; readonly name: string }>(
     spec: ObjectSpec<T>,
     map: IdMap,
@@ -348,12 +378,7 @@ function diffObjects<T extends { readonly id: string; readonly name: string }>(
         }
         const dest = destById.get(destId);
         if (!dest) {
-            out.findings.push({
-                type: 'missing-on-destination',
-                kind: spec.kind,
-                id: destId,
-                detail: `mapped from ${item.id}, not found on the destination`,
-            });
+            reportMissingCopy(out, spec.kind, item, destId);
             continue;
         }
         const compared = compareMapped(
@@ -819,7 +844,7 @@ export function diff(input: DiffInput): DiffResult {
         }),
         everyoneMask: botHeldBits(input.destination) ?? undefined,
     };
-    const out: Out = { ops: [], findings: [] };
+    const out: Out = { ops: [], findings: [], missing: [] };
     diffStructure(input, ctx, out);
     diffExpressions(input, map, out);
     diffLinks(input, map, out);

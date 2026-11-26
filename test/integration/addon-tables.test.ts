@@ -28,6 +28,7 @@ const MIGRATIONS = [
     '00009-history-skip-streak',
     '00010-history-failure-tracking',
     '00011-settings-status-message',
+    '00012-object-map-dest-missing',
 ];
 
 describe('add-on tables on Postgres', { skip: !url }, () => {
@@ -124,6 +125,27 @@ describe('add-on tables on Postgres', { skip: !url }, () => {
         );
         await assert.rejects(insertMapping('webhook', 'd1', 'f1'));
         await assert.rejects(insertMapping('role', null, null));
+    });
+
+    it('starts mappings with no destination absence counted', async () => {
+        const id = randomUUID();
+        await db.query(
+            `INSERT INTO ${TABLES.objectMap} (id, "guildLinkId", kind, "discordId", "fluxerId", "createdBySync", "createdAt", "updatedAt") VALUES ($1, $2, 'emoji', 'de', 'fe', true, now(), now())`,
+            { bind: [id, guildLinkId] }
+        );
+        const [rows] = await db.query(
+            `SELECT "destMissingCount", "destMissingSince" FROM ${TABLES.objectMap} WHERE id = $1`,
+            { bind: [id] }
+        );
+        assert.deepEqual(rows, [
+            { destMissingCount: 0, destMissingSince: null },
+        ]);
+        await assert.rejects(
+            db.query(
+                `UPDATE ${TABLES.objectMap} SET "destMissingCount" = -1 WHERE id = $1`,
+                { bind: [id] }
+            )
+        );
     });
 
     it('keeps one mapping per source and per destination object', async () => {

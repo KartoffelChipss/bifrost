@@ -96,7 +96,11 @@ export type FindingType =
     | 'permission-dropped'
     | 'not-held-by-bot'
     | 'dropped-by-ownership'
-    | 'removal-deferred';
+    | 'removal-deferred'
+    /** A copy deleted on Fluxer that is recreated (restore.ts). */
+    | 'restore'
+    /** A copy deleted on Fluxer whose restore waits, with why. */
+    | 'restore-held';
 
 /** Something the plan reports but does not act on. */
 export interface Finding {
@@ -116,6 +120,13 @@ export interface MapRow {
     readonly createdBySync: boolean;
     readonly missingSince: Date | null;
     readonly missingCount: number;
+    /**
+     * Consecutive healthy checks in which the destination object was absent
+     * from the destination snapshot, and since when (restore.ts). Separate
+     * from the source counters above, which decide removals.
+     */
+    readonly destMissingCount: number;
+    readonly destMissingSince: Date | null;
     /** Field values of the last successful write, or null if never written. */
     readonly appliedFields: Readonly<Record<string, JsonValue>> | null;
 }

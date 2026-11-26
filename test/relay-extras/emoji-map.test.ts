@@ -18,6 +18,8 @@ function row(over: Partial<MapRow>): MapRow {
         createdBySync: true,
         missingSince: null,
         missingCount: 0,
+        destMissingCount: 0,
+        destMissingSince: null,
         appliedFields: null,
         ...over,
     };

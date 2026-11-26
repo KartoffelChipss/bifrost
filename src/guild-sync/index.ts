@@ -143,7 +143,7 @@ export async function runAll(
     const result = await store.withLeaderLock(holder, async (held) => {
         for (const link of await linksToSync(deps, cycleDeps)) {
             const outcome = await guardCycle(`link ${link.id}`, guard, () =>
-                runCycle(link, { ...cycleDeps, stillLeader: held })
+                runCycle(link, { ...cycleDeps, stillLeader: held, holder })
             );
             observe(link.id, outcome.ok ? outcome.value : null);
             if (!outcome.ok) continue;
