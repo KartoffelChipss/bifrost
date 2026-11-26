@@ -27,6 +27,7 @@ const MIGRATIONS = [
     '00008-settings-enforce-drift',
     '00009-history-skip-streak',
     '00010-history-failure-tracking',
+    '00011-settings-status-message',
 ];
 
 describe('add-on tables on Postgres', { skip: !url }, () => {
@@ -95,6 +96,16 @@ describe('add-on tables on Postgres', { skip: !url }, () => {
                 gracePeriodDays: 14,
                 writeCapPerCycle: 50,
             },
+        ]);
+    });
+
+    it('starts settings with no status message', async () => {
+        const [rows] = await db.query(
+            `SELECT "statusChannelId", "statusMessageId" FROM ${TABLES.settings} WHERE "guildLinkId" = $1`,
+            { bind: [guildLinkId] }
+        );
+        assert.deepEqual(rows, [
+            { statusChannelId: null, statusMessageId: null },
         ]);
     });
 

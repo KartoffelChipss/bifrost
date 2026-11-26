@@ -7,6 +7,7 @@ import { RepeatingTask } from '../addons/loop';
 import { resolveMode, type LinkedGuild } from '../guild-sync/cycle';
 import type { ChannelLinker } from '../guild-sync/links';
 import { NoticeBoard, type SendNotice } from '../guild-sync/notices';
+import type { StatusSignal } from '../guild-sync/statusSignal';
 import { HISTORY_LOCK_KEY, PostgresGuildSyncStore } from '../guild-sync/store';
 import type { GuildWriter } from '../guild-sync/writers/writer';
 import { HistoryEditor, type EditorThreads } from './editor';
@@ -42,6 +43,8 @@ export interface HistoryDeps {
     readonly excludedChannels: ReadonlySet<string>;
     /** Upstream's command prefix, which copies must not start with. */
     readonly commandPrefix: string;
+    /** Tells guild-sync's status message that a link's history moved on. */
+    readonly statusSignal?: StatusSignal;
 }
 
 type Sync = PostgresGuildSyncStore;
@@ -50,6 +53,15 @@ const IDLE: PassResult = { more: false, waiting: false };
 
 const pause = (ms: number) =>
     new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The dedupe category of a history notice: its key up to the first colon
+ * (`done`, `failed`, `full`, ...), so one kind cannot reset another's.
+ */
+export function noticeCategory(key: string): string {
+    const end = key.indexOf(':');
+    return end < 0 ? key : key.slice(0, end);
+}
 
 /** History is copied from Discord to Fluxer only, and written in apply. */
 function modeOf(sync: Sync, context: AddonContext) {
@@ -104,6 +116,7 @@ function buildImporter(deps: HistoryDeps, context: AddonContext) {
             const settings = await sync.loadSettings(id);
             await notices.post(
                 `history:${id}`,
+                noticeCategory(key),
                 settings.adminChannelId,
                 key,
                 text
@@ -190,10 +203,11 @@ async function importLink(
  * Runs the importer for each guild link until the pass budget is spent,
  * which keeps the leader lock's transaction short. `held` reports whether
  * the leader lock is still held; once it is lost, no new work starts, so
- * two instances never copy at once.
+ * two instances never copy at once. After each link, guild-sync's status
+ * message is told to refresh; it throttles the edits itself.
  */
 export async function importLinks(
-    deps: Pick<HistoryDeps, 'listGuildLinks'>,
+    deps: Pick<HistoryDeps, 'listGuildLinks' | 'statusSignal'>,
     importer: HistoryImporter,
     logger: AddonLogger,
     held: () => Promise<boolean> = async () => true
@@ -206,6 +220,7 @@ export async function importLinks(
         if (Date.now() >= deadline) return { more: true, waiting };
         if (!(await held())) return IDLE;
         const result = await importLink(importer, link, deadline, logger, held);
+        deps.statusSignal?.notify(link.id);
         more = more || result.more;
         waiting = waiting || result.waiting;
     }

@@ -7,6 +7,7 @@ import { SyncDiscordCommandHandler } from '../guild-sync/commandHandler';
 import type { LinkedGuild } from '../guild-sync/cycle';
 import { PostgresHistoryStore } from '../history/store';
 import { PostgresGuildSyncStore } from '../guild-sync/store';
+import type { StatusSignal } from '../guild-sync/statusSignal';
 import { EmbedColors } from '../utils/embeds';
 import type { AddonConfig } from './config';
 import type { AddonDatabaseState } from './db/migrator';
@@ -22,6 +23,8 @@ export interface AddonCommandDeps {
     ) => Promise<LinkedGuild | null>;
     readonly discordOwnerId: string | null;
     readonly isChannelLinked: (discordChannelId: string) => Promise<boolean>;
+    /** Asks guild-sync to update a link's status message after a change. */
+    readonly statusSignal?: StatusSignal;
 }
 
 export const ADDONS_OFF_REPLY =
@@ -67,6 +70,7 @@ export function addonDiscordCommands(
                 allowApply: config.allowApply,
                 ownerId: deps.discordOwnerId,
                 isChannelLinked: deps.isChannelLinked,
+                changed: (id) => deps.statusSignal?.notify(id),
                 retryHistory: config.history
                     ? (linkId, now) => history.retryFailed(linkId, now)
                     : undefined,

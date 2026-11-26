@@ -1,5 +1,6 @@
 import type { Sequelize } from 'sequelize';
 import type { GatewayIntentBits, Partials } from 'discord.js';
+import { StatusSignal } from '../guild-sync/statusSignal';
 import type { UpstreamServices } from '../guild-sync/upstreamBridge';
 import type { LinkService } from '../services/LinkService';
 import type { AddonCommandDeps, DiscordCommandFactory } from './commands';
@@ -90,7 +91,8 @@ function channelLinkCheck(
 function buildDiscordExtension(
     deps: ForkBootstrapDeps,
     config: AddonConfig,
-    linkService: AddonLinkService
+    linkService: AddonLinkService,
+    statusSignal: StatusSignal
 ): DiscordClientExtension {
     return {
         intents: addonDiscordIntents(config),
@@ -100,6 +102,7 @@ function buildDiscordExtension(
             findGuildLink: (id) => linkService.getGuildLinkForDiscordGuild(id),
             discordOwnerId: deps.discordOwnerId,
             isChannelLinked: channelLinkCheck(linkService),
+            statusSignal,
         }),
     };
 }
@@ -107,7 +110,8 @@ function buildDiscordExtension(
 async function startForkAddons(
     deps: ForkBootstrapDeps,
     config: AddonConfig,
-    services: UpstreamServices
+    services: UpstreamServices,
+    statusSignal: StatusSignal
 ): Promise<void> {
     const { runtime, logger } = deps;
     const addons = await runtime.startAddons(
@@ -122,6 +126,7 @@ async function startForkAddons(
                 commandPrefix: deps.commandPrefix,
                 sequelize: deps.sequelize,
                 bridge: runtime.createBridge(services),
+                statusSignal,
             },
             config
         )
@@ -135,6 +140,8 @@ async function startForkAddons(
  */
 export function createForkBootstrap(deps: ForkBootstrapDeps): ForkBootstrap {
     const config = requireAddonConfig(deps.env);
+    // Shared by the `sync` command and the add-ons, which start later.
+    const statusSignal = new StatusSignal();
     return {
         config,
         initDatabase: async () => {
@@ -145,7 +152,8 @@ export function createForkBootstrap(deps: ForkBootstrapDeps): ForkBootstrap {
             );
         },
         discordExtension: (linkService) =>
-            buildDiscordExtension(deps, config, linkService),
-        start: (services) => startForkAddons(deps, config, services),
+            buildDiscordExtension(deps, config, linkService, statusSignal),
+        start: (services) =>
+            startForkAddons(deps, config, services, statusSignal),
     };
 }

@@ -83,7 +83,20 @@ describe('cycle errors', () => {
             pruned.push('plans');
             return 0;
         };
-        await runAll(s.store, deps, s.depsFor(), 'me', new CycleBackoff());
+        const seen: [string, string | null][] = [];
+        await runAll(
+            s.store,
+            deps,
+            s.depsFor(),
+            'me',
+            new CycleBackoff(),
+            (id, outcome) => seen.push([id, outcome?.status ?? null])
+        );
+        // Every link's result reaches the status board, a failure as null.
+        assert.deepEqual(seen, [
+            ['bad', null],
+            ['good', 'planned'],
+        ]);
         assert.deepEqual(pruned, ['plans']);
         assert.ok(s.store.plans.some((p) => p.guildLinkId === 'good'));
         assert.ok(!s.store.plans.some((p) => p.guildLinkId === 'bad'));

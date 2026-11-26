@@ -578,4 +578,46 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         await store.setEnforceDrift(linkId, false, new Date());
         assert.equal((await store.loadSettings(linkId)).enforceDrift, false);
     });
+    it('saves, reads and clears the status message place', async () => {
+        assert.equal(await store.loadStatusMessage(linkId), null);
+        const before = await store.loadSettings(linkId);
+        const ref = { channelId: 'admin-1', messageId: 'msg-1' };
+        await store.saveStatusMessage(linkId, ref);
+        assert.deepEqual(await store.loadStatusMessage(linkId), ref);
+        // The place is not a setting: loading settings is unchanged.
+        assert.deepEqual(await store.loadSettings(linkId), before);
+        await store.saveStatusMessage(linkId, null);
+        assert.equal(await store.loadStatusMessage(linkId), null);
+    });
+
+    it('counts active map rows by kind', async () => {
+        const otherLink = randomUUID();
+        await db.query(
+            `INSERT INTO guild_links (id, "discordGuildId", "fluxerGuildId", "createdAt") VALUES ($1, 'd2', 'f2', now())`,
+            { bind: [otherLink] }
+        );
+        assert.deepEqual(await store.countMapped(otherLink), {});
+        const now = new Date();
+        const mapping = (kind: 'role' | 'channel', discordId: string) =>
+            store.insertMapping(
+                {
+                    guildLinkId: otherLink,
+                    kind,
+                    discordId,
+                    fluxerId: `f-${discordId}`,
+                    createdBySync: true,
+                    appliedFields: {},
+                },
+                now
+            );
+        await mapping('role', 'count-r1');
+        await mapping('role', 'count-r2');
+        await mapping('channel', 'count-c1');
+        const archived = await mapping('channel', 'count-c2');
+        await store.setRowState(archived.id, 'archived', now);
+        assert.deepEqual(await store.countMapped(otherLink), {
+            role: 2,
+            channel: 1,
+        });
+    });
 });

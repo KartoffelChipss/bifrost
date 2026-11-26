@@ -14,7 +14,9 @@ import type { GuildSnapshot } from '../../src/guild-sync/snapshot';
 import type {
     AuditEntry,
     GuildSyncStore,
+    MappedCounts,
     NewMapping,
+    StatusMessageRef,
     SyncSettings,
 } from '../../src/guild-sync/store';
 
@@ -45,6 +47,7 @@ export class FakeStore implements GuildSyncStore {
     audits: AuditEntry[] = [];
     /** When each audit row was written, by index into `audits`. */
     auditTimes: Date[] = [];
+    statusMessage: StatusMessageRef | null = null;
     lockHeld = false;
     /** Set by a test to make the held check fail. */
     lockLost = false;
@@ -228,6 +231,23 @@ export class FakeStore implements GuildSyncStore {
 
     async lastPlan() {
         return this.plans[this.plans.length - 1] ?? null;
+    }
+
+    async loadStatusMessage() {
+        return this.statusMessage;
+    }
+
+    async saveStatusMessage(_link: string, ref: StatusMessageRef | null) {
+        this.statusMessage = ref;
+    }
+
+    async countMapped(): Promise<MappedCounts> {
+        const counts: Partial<Record<MapRow['kind'], number>> = {};
+        for (const row of this.rows) {
+            if (row.state !== 'active') continue;
+            counts[row.kind] = (counts[row.kind] ?? 0) + 1;
+        }
+        return counts;
     }
 }
 
