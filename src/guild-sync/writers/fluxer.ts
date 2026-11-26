@@ -53,6 +53,20 @@ export function roleUpdateBody(patch: RolePatch): Record<string, unknown> {
     return body;
 }
 
+/**
+ * True when an edit must unarchive the thread to be accepted: Fluxer
+ * refuses any change but `archived` to a thread that stays archived
+ * (THREAD_ARCHIVED, threadPatchRequirement in ThreadPermissionUtils.ts).
+ */
+export function needsReopen(archived: boolean, edit: object): boolean {
+    if (!archived || (edit as { archived?: unknown }).archived === false) {
+        return false;
+    }
+    return Object.entries(edit).some(
+        ([key, value]) => key !== 'archived' && value !== undefined
+    );
+}
+
 function toOverwrites(overwrites: readonly OverwriteSpec[]) {
     return overwrites.map((o) => ({
         id: o.id,
@@ -576,7 +590,15 @@ export class FluxerGuildWriter implements GuildWriter {
             const parent = await this.channel(guildId, thread.parentId);
             Object.assign(edit, { appliedTags: tagIds(parent, tags) });
         }
+        const reopen = needsReopen(thread.archived === true, edit);
+        if (reopen) edit.archived = false;
         await timedWrite('Fluxer thread edit', thread.edit(edit));
+        if (reopen && patch.archived === undefined) {
+            await timedWrite(
+                'Fluxer thread re-archive',
+                thread.edit({ archived: true })
+            );
+        }
     }
 
     async deleteThread(guildId: string, threadId: string): Promise<void> {
