@@ -11,14 +11,69 @@ import type { MapRow } from '../../src/guild-sync/ops';
 import type { Plan } from '../../src/guild-sync/plan';
 import type { GuildReader } from '../../src/guild-sync/readers/reader';
 import type { GuildSnapshot } from '../../src/guild-sync/snapshot';
-import type {
-    AuditEntry,
-    GuildSyncStore,
-    MappedCounts,
-    NewMapping,
-    StatusMessageRef,
-    SyncSettings,
+import {
+    LEADER_LOCK_KEY,
+    THREAD_RESET_OP,
+    type AuditEntry,
+    type CopiedThread,
+    type GuildSyncStore,
+    type MappedCounts,
+    type NewMapping,
+    type StatusMessageRef,
+    type SyncSettings,
+    type ThreadMessage,
+    type ThreadResetAudit,
+    type ThreadResetCleared,
 } from '../../src/guild-sync/store';
+import type { HistoryJob } from '../../src/history/types';
+
+/** A parked reply, as `addon_parked_messages` keys it. */
+export interface FakeParked {
+    readonly side: 'discord' | 'fluxer';
+    readonly threadId: string;
+    readonly messageId: string;
+}
+
+/** An imported history message, by its job. */
+export interface FakeHistoryMessage {
+    readonly discordMessageId: string;
+    readonly jobId: string;
+}
+
+/** A history job fresh from ensureJob (history/store.ts). */
+export function freshJob(
+    id: string,
+    discordId: string,
+    overrides: Partial<HistoryJob> = {}
+): HistoryJob {
+    return {
+        id,
+        guildLinkId: 'link-1',
+        kind: 'thread',
+        discordId,
+        parentDiscordId: null,
+        fluxerId: null,
+        status: 'pending',
+        cutoffId: null,
+        checkpointId: '0',
+        catchUps: 0,
+        imported: 0,
+        failures: 0,
+        retries: 0,
+        failingId: null,
+        retryAt: null,
+        skipped: 0,
+        skipStreak: 0,
+        streakFromId: null,
+        messageCount: null,
+        attachmentCount: null,
+        surveyedAt: null,
+        importWebhook: null,
+        archiveThreadId: null,
+        lastError: null,
+        ...overrides,
+    };
+}
 
 export const DEFAULT_SETTINGS: SyncSettings = {
     mode: 'dry-run',
@@ -48,24 +103,42 @@ export class FakeStore implements GuildSyncStore {
     /** When each audit row was written, by index into `audits`. */
     auditTimes: Date[] = [];
     statusMessage: StatusMessageRef | null = null;
+    /** The guild-sync leader lock (LEADER_LOCK_KEY). */
     lockHeld = false;
+    /** Other locks held, by key, such as the history lock. */
+    readonly heldKeys = new Set<number>();
     /** Set by a test to make the held check fail. */
     lockLost = false;
+    /** Rows a thread reset clears, beside the map. */
+    threadMessages: ThreadMessage[] = [];
+    parked: FakeParked[] = [];
+    historyJobs: HistoryJob[] = [];
+    historyMessages: FakeHistoryMessage[] = [];
+    /** Every thread forgetCopiedThread was asked to forget, in order. */
+    readonly forgotten: CopiedThread[] = [];
+    /** Set by a test to make forgetCopiedThread fail. */
+    failForget = false;
     private mapSeq = 0;
 
     async withLeaderLock<T>(
         _holder: string,
-        fn: (held: () => Promise<boolean>) => Promise<T>
+        fn: (held: () => Promise<boolean>) => Promise<T>,
+        key = LEADER_LOCK_KEY
     ) {
-        if (this.lockHeld) return { ran: false as const };
-        this.lockHeld = true;
+        const leader = key === LEADER_LOCK_KEY;
+        if (leader ? this.lockHeld : this.heldKeys.has(key)) {
+            return { ran: false as const };
+        }
+        if (leader) this.lockHeld = true;
+        else this.heldKeys.add(key);
         try {
             return {
                 ran: true as const,
                 value: await fn(async () => !this.lockLost),
             };
         } finally {
-            this.lockHeld = false;
+            if (leader) this.lockHeld = false;
+            else this.heldKeys.delete(key);
         }
     }
 
@@ -239,6 +312,141 @@ export class FakeStore implements GuildSyncStore {
 
     async saveStatusMessage(_link: string, ref: StatusMessageRef | null) {
         this.statusMessage = ref;
+    }
+
+    async forgetCopiedThread(
+        guildLinkId: string,
+        thread: CopiedThread,
+        audit: ThreadResetAudit,
+        now: Date
+    ): Promise<ThreadResetCleared> {
+        if (this.failForget) throw new Error('database unavailable');
+        this.forgotten.push(thread);
+        const cleared: ThreadResetCleared = {
+            mapRows: this.dropMapRow(thread),
+            threadMessages: this.dropThreadMessages(thread),
+            parkedMessages: this.dropParked(thread),
+            historyMessages: this.dropHistoryMessages(thread.discordId),
+            historyJobs: this.resetJobs(thread.discordId),
+            intents: this.refuseIntents(guildLinkId, thread, audit, now),
+        };
+        await this.audit(
+            {
+                planId: audit.runId,
+                guildLinkId,
+                op: THREAD_RESET_OP,
+                kind: 'thread',
+                sourceId: thread.discordId,
+                destId: thread.fluxerId,
+                before: null,
+                after: { gone: audit.gone, cleared: { ...cleared } },
+                result: 'ok',
+            },
+            now
+        );
+        return cleared;
+    }
+
+    private dropMapRow(t: CopiedThread): number {
+        const before = this.rows.length;
+        this.rows = this.rows.filter(
+            (r) =>
+                !(
+                    r.id === t.rowId &&
+                    r.kind === 'thread' &&
+                    r.state === 'active' &&
+                    r.createdBySync &&
+                    r.discordId === t.discordId &&
+                    r.fluxerId === t.fluxerId
+                )
+        );
+        return before - this.rows.length;
+    }
+
+    private dropThreadMessages(t: CopiedThread): number {
+        const before = this.threadMessages.length;
+        this.threadMessages = this.threadMessages.filter(
+            (m) =>
+                m.discordThreadId !== t.discordId &&
+                m.fluxerThreadId !== t.fluxerId
+        );
+        return before - this.threadMessages.length;
+    }
+
+    private dropParked(t: CopiedThread): number {
+        const before = this.parked.length;
+        this.parked = this.parked.filter((p) =>
+            p.side === 'discord'
+                ? p.threadId !== t.discordId
+                : p.threadId !== t.fluxerId
+        );
+        return before - this.parked.length;
+    }
+
+    private threadJobIds(discordId: string): Set<string> {
+        return new Set(
+            this.historyJobs
+                .filter((j) => j.kind === 'thread' && j.discordId === discordId)
+                .map((j) => j.id)
+        );
+    }
+
+    private dropHistoryMessages(discordId: string): number {
+        const jobs = this.threadJobIds(discordId);
+        const before = this.historyMessages.length;
+        this.historyMessages = this.historyMessages.filter(
+            (m) => !jobs.has(m.jobId)
+        );
+        return before - this.historyMessages.length;
+    }
+
+    private resetJobs(discordId: string): number {
+        const jobs = this.threadJobIds(discordId);
+        this.historyJobs = this.historyJobs.map((j) =>
+            jobs.has(j.id)
+                ? freshJob(j.id, j.discordId, {
+                      guildLinkId: j.guildLinkId,
+                      parentDiscordId: j.parentDiscordId,
+                  })
+                : j
+        );
+        return jobs.size;
+    }
+
+    private refuseIntents(
+        guildLinkId: string,
+        t: CopiedThread,
+        audit: ThreadResetAudit,
+        now: Date
+    ): number {
+        const names = new Set<string>();
+        for (const entry of this.audits) {
+            const name = (entry.after as { name?: unknown } | null)?.name;
+            if (
+                entry.op === 'create-intent' &&
+                entry.result === 'intent' &&
+                entry.kind === 'thread' &&
+                entry.sourceId === t.discordId &&
+                typeof name === 'string'
+            ) {
+                names.add(name);
+            }
+        }
+        for (const name of names) {
+            this.audits.push({
+                planId: audit.runId,
+                guildLinkId,
+                op: 'create-intent',
+                kind: 'thread',
+                sourceId: t.discordId,
+                destId: null,
+                before: null,
+                after: { name, refused: true },
+                result: 'refused',
+            });
+            this.auditTimes.push(now);
+        }
+        return names.size;
     }
 
     async countMapped(): Promise<MappedCounts> {
