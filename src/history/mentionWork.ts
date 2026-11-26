@@ -79,15 +79,28 @@ export class MentionWork {
      * left. Returns true when mention work is left for a pass soon.
      */
     async run(busy: boolean, held: () => Promise<boolean>): Promise<boolean> {
-        const links = (await this.deps.listGuildLinks()).slice(0, MAX_LINKS);
+        const links = await this.links();
         await this.ensureOnce(links);
         const budget = budgetFor(busy, this.deps.now);
         let more = false;
         for (const link of links) {
-            if (!budget.open || !(await held())) return more;
+            if (!budget.open) return true;
+            if (!(await held())) return false;
             more = (await this.runLink(link.id, budget, held)) || more;
         }
         return more;
+    }
+
+    /** The guild links; none when they cannot be read, until next pass. */
+    private async links(): Promise<readonly LinkRef[]> {
+        try {
+            return (await this.deps.listGuildLinks()).slice(0, MAX_LINKS);
+        } catch (error) {
+            this.deps.logger.warn(
+                `[history] Mention work could not list guild links: ${describeError(error)}`
+            );
+            return [];
+        }
     }
 
     /**
@@ -96,7 +109,7 @@ export class MentionWork {
      * resumes where it stopped. Retried each pass until it succeeds.
      */
     private async ensureOnce(links: readonly LinkRef[]): Promise<void> {
-        if (this.ensured) return;
+        if (this.ensured || links.length === 0) return;
         const { mentions, now, logger } = this.deps;
         try {
             const at = now();

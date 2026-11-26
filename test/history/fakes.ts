@@ -649,6 +649,8 @@ export class FakeMentionStore implements MentionStore {
 
     async saveFixup(fixup: Fixup, patch: FixupPatch, now?: Date) {
         if (now) this.lastWrite = now;
+        const linkedAt = this.linked.get(fixup.discordUserId);
+        if (linkedAt?.getTime() !== fixup.linkedAt.getTime()) return;
         this.fixups = this.fixups.map((f) =>
             f.guildLinkId === fixup.guildLinkId &&
             f.discordUserId === fixup.discordUserId &&

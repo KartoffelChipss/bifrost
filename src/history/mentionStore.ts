@@ -94,7 +94,10 @@ export interface MentionStore {
         afterId: string,
         limit: number
     ): Promise<ImportedMessage[]>;
-    /** Saves progress, unless the member linked again in the meantime. */
+    /**
+     * Saves progress, unless the member unlinked or linked again in the
+     * meantime: a newer link's fix-up starts over (ensureFixups).
+     */
     saveFixup(fixup: Fixup, patch: FixupPatch, now: Date): Promise<void>;
 }
 
@@ -285,7 +288,9 @@ export class PostgresMentionStore implements MentionStore {
         await this.db.query(
             `UPDATE ${TABLES.mentionFixups}
              SET status = $4, "doneTo" = $5, changed = $6, failures = $7, "updatedAt" = $8
-             WHERE "guildLinkId" = $1 AND "discordUserId" = $2 AND "linkedAt" = $3`,
+             WHERE "guildLinkId" = $1 AND "discordUserId" = $2 AND "linkedAt" = $3
+               AND EXISTS (SELECT 1 FROM ${TABLES.identityLinks} l
+                           WHERE l."discordUserId" = $2 AND l."linkedAt" = $3)`,
             {
                 bind: [
                     fixup.guildLinkId,

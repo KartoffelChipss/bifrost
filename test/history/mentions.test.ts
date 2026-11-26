@@ -424,6 +424,7 @@ describe('mention fix-ups', () => {
             logger: w.logger,
         });
         assert.equal(await work.run(false, w.held), false);
+        assert.equal(await w.fixups.run(LINK, w.budget(), w.held), false);
         assert.deepEqual(w.ports.edits, []);
         assert.deepEqual(w.ports.fetches, []);
         assert.deepEqual(w.ports.listings, []);
@@ -614,6 +615,30 @@ describe('mention work budget', () => {
         await work.run(false, w.held);
         assert.equal(ensured, 1);
         assert.deepEqual(w.edited(), ['edit import-f10 copy-11']);
+    });
+
+    it('logs unreadable guild links and starts fix-ups once they can be read', async () => {
+        const w = await world();
+        state(w).linked();
+        let failing = true;
+        const work = new MentionWork({
+            mentions: w.mentions,
+            backfill: w.newBackfill(),
+            fixups: w.fixups,
+            listGuildLinks: async () => {
+                if (failing) throw new Error('database down');
+                return [{ id: LINK }];
+            },
+            mode: async () => 'apply',
+            now: () => w.state.clock,
+            logger: w.logger,
+        });
+        assert.equal(await work.run(false, w.held), false);
+        assert.match(w.logger.entries[0]?.message ?? '', /list guild links/);
+        assert.deepEqual(w.mentions.fixups, []);
+        failing = false;
+        await work.run(false, w.held);
+        assert.equal(w.mentions.fixup(USER).status, 'pending');
     });
 });
 
