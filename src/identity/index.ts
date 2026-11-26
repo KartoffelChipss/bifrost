@@ -65,6 +65,8 @@ export interface IdentityDeps {
     readonly sendNotice: SendNotice;
     /** Upstream's command prefix. Identity ignores DMs that start with it. */
     readonly commandPrefix: string;
+    /** Told about every new link (FlowDeps.accountLinked). */
+    readonly onAccountLinked?: (pair: AccountPair) => Promise<void>;
 }
 
 function flowDeps(
@@ -93,6 +95,7 @@ function flowDeps(
               }
             : null,
         onLinked: (pair) => roles.pair(pair),
+        accountLinked: deps.onAccountLinked,
         onUnlinked: (pair) => roles.strip(pair),
         now: () => new Date(),
         logger,

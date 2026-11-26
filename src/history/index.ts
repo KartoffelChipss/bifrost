@@ -10,11 +10,15 @@ import { NoticeBoard, type SendNotice } from '../guild-sync/notices';
 import type { StatusSignal } from '../guild-sync/statusSignal';
 import { HISTORY_LOCK_KEY, PostgresGuildSyncStore } from '../guild-sync/store';
 import type { GuildWriter } from '../guild-sync/writers/writer';
+import { MentionBackfill } from './backfill';
 import { HistoryEditor, type EditorThreads } from './editor';
 import { listenToDiscordEdits } from './events';
+import { MentionFixups } from './fixup';
 import { CopyFormatter } from './format';
 import { HistoryImporter, type HistoryMode } from './importer';
 import { PASS_BUDGET_MS } from './limits';
+import { PostgresMentionStore } from './mentionStore';
+import { MentionWork, mentionLinkHook } from './mentionWork';
 import { HistoryMirror } from './mirror';
 import { PostgresHistoryStore } from './store';
 import type { HistoryPorts } from './types';
@@ -93,10 +97,30 @@ function threadStateRecorder(sync: Sync) {
     };
 }
 
-function buildImporter(deps: HistoryDeps, context: AddonContext) {
-    const sync = new PostgresGuildSyncStore(deps.sequelize);
+type Report = (linkId: string, key: string, text: string) => Promise<void>;
+
+/** Posts a history notice to the link's admin channel. */
+function reporter(sync: Sync, deps: HistoryDeps, context: AddonContext) {
     const notices = new NoticeBoard(deps.sendNotice, context.logger);
-    const importer = new HistoryImporter({
+    return async (id: string, key: string, text: string): Promise<void> => {
+        const settings = await sync.loadSettings(id);
+        await notices.post(
+            `history:${id}`,
+            noticeCategory(key),
+            settings.adminChannelId,
+            key,
+            text
+        );
+    };
+}
+
+function buildImporter(
+    deps: HistoryDeps,
+    context: AddonContext,
+    sync: Sync,
+    report: Report
+) {
+    return new HistoryImporter({
         store: new PostgresHistoryStore(deps.sequelize),
         sync: {
             lastSnapshot: (id) => sync.lastSnapshot(id, 'discord', true),
@@ -112,21 +136,11 @@ function buildImporter(deps: HistoryDeps, context: AddonContext) {
             (await sync.loadSettings(id)).adminChannelId,
         commandPrefix: deps.commandPrefix,
         mode: modeOf(sync, context),
-        report: async (id, key, text) => {
-            const settings = await sync.loadSettings(id);
-            await notices.post(
-                `history:${id}`,
-                noticeCategory(key),
-                settings.adminChannelId,
-                key,
-                text
-            );
-        },
+        report,
         pause,
         now: () => new Date(),
         logger: context.logger,
     });
-    return { sync, importer };
 }
 
 /** Opens and closes Fluxer threads around edits of copies inside them. */
@@ -144,11 +158,9 @@ export function editorThreads(
     };
 }
 
-/** Mirrors Discord edits and deletes of imported messages. */
-function startMirror(deps: HistoryDeps, context: AddonContext, sync: Sync) {
-    const store = new PostgresHistoryStore(deps.sequelize);
-    const mirror = new HistoryMirror({
-        store,
+/** The editor and formatter the mirror and mention fix-ups share. */
+function copyTools(deps: HistoryDeps, store: PostgresHistoryStore) {
+    return {
         editor: new HistoryEditor(
             store,
             deps.links,
@@ -160,6 +172,61 @@ function startMirror(deps: HistoryDeps, context: AddonContext, sync: Sync) {
             ports: deps.ports,
             commandPrefix: deps.commandPrefix,
         }),
+    };
+}
+
+/**
+ * Starts the mention fix-up of a member who just linked accounts. Wired
+ * to identity's accountLinked in src/addons/index.ts.
+ */
+export function historyLinkHook(
+    deps: Pick<HistoryDeps, 'sequelize' | 'listGuildLinks'>
+): (pair: { readonly discordUserId: string }) => Promise<void> {
+    return mentionLinkHook({
+        mentions: new PostgresMentionStore(deps.sequelize),
+        listGuildLinks: deps.listGuildLinks,
+        now: () => new Date(),
+    });
+}
+
+/** The backfill and fix-ups of imported copies' mentions. */
+function buildMentionWork(
+    deps: HistoryDeps,
+    context: AddonContext,
+    sync: Sync,
+    report: Report
+): MentionWork {
+    const store = new PostgresHistoryStore(deps.sequelize);
+    const mentions = new PostgresMentionStore(deps.sequelize);
+    const { editor, formatter } = copyTools(deps, store);
+    const now = () => new Date();
+    const common = { mentions, store, ports: deps.ports, formatter, pause };
+    const logger = context.logger;
+    const mode = modeOf(sync, context);
+    return new MentionWork({
+        mentions,
+        backfill: new MentionBackfill({ ...common, now, logger }),
+        fixups: new MentionFixups({
+            ...common,
+            editor,
+            mode,
+            report,
+            now,
+            logger,
+        }),
+        listGuildLinks: deps.listGuildLinks,
+        mode,
+        now: () => Date.now(),
+        logger,
+    });
+}
+
+/** Mirrors Discord edits and deletes of imported messages. */
+function startMirror(deps: HistoryDeps, context: AddonContext, sync: Sync) {
+    const store = new PostgresHistoryStore(deps.sequelize);
+    const mirror = new HistoryMirror({
+        store,
+        ...copyTools(deps, store),
         ports: deps.ports,
         mode: modeOf(sync, context),
         logger: context.logger,
@@ -228,6 +295,22 @@ export async function importLinks(
 }
 
 /**
+ * One history pass: the import, then mention work at low priority (see
+ * mentionWork.ts), told whether the import still has work.
+ */
+export async function historyPass(
+    deps: Pick<HistoryDeps, 'listGuildLinks' | 'statusSignal'>,
+    importer: HistoryImporter,
+    work: Pick<MentionWork, 'run'>,
+    logger: AddonLogger,
+    held: () => Promise<boolean>
+): Promise<PassResult> {
+    const result = await importLinks(deps, importer, logger, held);
+    const more = await work.run(result.more, held);
+    return { more: result.more || more, waiting: result.waiting };
+}
+
+/**
  * Turns pass results into the loop's busy or idle answer. While a job
  * waits, the loop ticks busy but runs a real pass only every WAIT_POLL_MS.
  */
@@ -251,6 +334,39 @@ export class WaitThrottle {
 }
 
 /**
+ * The loop's pass: one history pass under the history leader lock, inside
+ * the add-on boundary. While a job waits, only every WAIT_POLL_MS.
+ */
+function lockedPass(
+    deps: HistoryDeps,
+    context: AddonContext,
+    sync: Sync,
+    importer: HistoryImporter,
+    work: MentionWork
+): () => Promise<boolean> {
+    const holder = `${hostname()}:${process.pid}:history`;
+    const throttle = new WaitThrottle(() => Date.now());
+    const run = (held: () => Promise<boolean>) =>
+        historyPass(deps, importer, work, context.logger, held);
+    return async () => {
+        if (throttle.resting()) return true;
+        const result = await context.boundary.run(
+            ADDON_NAME,
+            'import',
+            async () => {
+                const locked = await sync.withLeaderLock(
+                    holder,
+                    run,
+                    HISTORY_LOCK_KEY
+                );
+                return locked.ran ? locked.value : IDLE;
+            }
+        );
+        return throttle.after(result.ok ? result.value : IDLE);
+    };
+}
+
+/**
  * The history add-on: copies past Discord messages into the synced
  * channels, posts and threads, and carries later Discord edits and
  * deletes over to those copies. In dry-run it only counts them.
@@ -261,34 +377,14 @@ export function createHistoryAddon(deps: HistoryDeps): Addon {
     return {
         name: ADDON_NAME,
         async start(context: AddonContext) {
-            const { sync, importer } = buildImporter(deps, context);
+            const sync = new PostgresGuildSyncStore(deps.sequelize);
+            const report = reporter(sync, deps, context);
+            const importer = buildImporter(deps, context, sync, report);
+            const work = buildMentionWork(deps, context, sync, report);
             stopMirror = startMirror(deps, context, sync);
             const optOuts = new PostgresHistoryStore(deps.sequelize);
             deps.ports.useOptOuts?.((id) => optOuts.isOptedOut(id));
-            const holder = `${hostname()}:${process.pid}:history`;
-            const throttle = new WaitThrottle(() => Date.now());
-            const pass = async () => {
-                if (throttle.resting()) return true;
-                const result = await context.boundary.run(
-                    ADDON_NAME,
-                    'import',
-                    async () => {
-                        const locked = await sync.withLeaderLock(
-                            holder,
-                            (held) =>
-                                importLinks(
-                                    deps,
-                                    importer,
-                                    context.logger,
-                                    held
-                                ),
-                            HISTORY_LOCK_KEY
-                        );
-                        return locked.ran ? locked.value : IDLE;
-                    }
-                );
-                return throttle.after(result.ok ? result.value : IDLE);
-            };
+            const pass = lockedPass(deps, context, sync, importer, work);
             task = new RepeatingTask(pass, BUSY_DELAY_MS, IDLE_DELAY_MS);
             task.start(FIRST_DELAY_MS);
         },

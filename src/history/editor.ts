@@ -1,6 +1,6 @@
 import type { ChannelLinker } from '../guild-sync/links';
 import { closedThreadCode } from './errors';
-import { clipContent, defuseMentions } from './format';
+import { clipContent, contentHash, defuseMentions } from './format';
 import { MAX_CONTENT_LENGTH } from './limits';
 import type { HistoryStore } from './store';
 import type {
@@ -14,6 +14,15 @@ import type {
 const EDITED_NOTE = '\n*Edited by its author*';
 
 const OPEN: ThreadFlags = { archived: false, locked: false };
+
+/**
+ * The text an edit sets: cut to Fluxer's limit, with @everyone and @here
+ * defused. The last line, such as the date note or the edit marker, is
+ * kept.
+ */
+export function copyText(content: string): string {
+    return clipContent(defuseMentions(content), MAX_CONTENT_LENGTH);
+}
 
 /**
  * Runs an edit. Returns null when it went through, or the code when
@@ -99,22 +108,30 @@ export class HistoryEditor {
         return { webhook: bridge.fluxerWebhook, threadId };
     }
 
-    /** Sets the author's new text, marked as edited. */
+    /**
+     * Sets the author's new text, marked as edited. The copy no longer
+     * shows its Discord source, so its mentions are cleared: a fix-up
+     * (fixup.ts) must not render the source over the author's text.
+     */
     async edit(copy: ImportedMessage, text: string): Promise<void> {
         await this.replace(copy, `${text}${EDITED_NOTE}`);
+        await this.store.recordMentions(copy.discordMessageId, []);
     }
 
     /**
-     * Sets the copy's text, cut to Fluxer's limit, with @everyone and
-     * @here defused. The last line, such as the date note or the edit
-     * marker, is kept.
+     * Sets the copy's text (copyText) and records its new content hash,
+     * which fix-ups compare a fresh rendering with.
      */
     async replace(copy: ImportedMessage, content: string): Promise<void> {
         const job = await this.jobOf(copy);
         const target = await this.target(copy, job);
-        const text = clipContent(defuseMentions(content), MAX_CONTENT_LENGTH);
+        const text = copyText(content);
         await this.whileEditable(copy, job, () =>
             this.ports.editCopy(target, copy.fluxerMessageId ?? '', text)
+        );
+        await this.store.setContentHash(
+            copy.discordMessageId,
+            contentHash(text)
         );
     }
 

@@ -14,6 +14,7 @@ import * as historySkipStreak from './migrations/00009-history-skip-streak';
 import * as historyFailureTracking from './migrations/00010-history-failure-tracking';
 import * as statusMessage from './migrations/00011-settings-status-message';
 import * as destMissing from './migrations/00012-object-map-dest-missing';
+import * as historyMentions from './migrations/00013-history-mentions';
 import { MIGRATIONS_MODEL, MIGRATIONS_TABLE } from './schema';
 
 /**
@@ -73,6 +74,11 @@ const MIGRATIONS: RunnableMigration<QueryInterface>[] = [
         name: '00012-object-map-dest-missing',
         up: destMissing.up,
         down: destMissing.down,
+    },
+    {
+        name: '00013-history-mentions',
+        up: historyMentions.up,
+        down: historyMentions.down,
     },
 ];
 

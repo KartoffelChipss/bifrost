@@ -29,6 +29,7 @@ import type {
     SourceMessage,
 } from '../history/types';
 import { dateNote, defuseMentions, optOutPayload } from '../history/format';
+import { renderedMentions } from '../history/mentions';
 import { copyWebhook, NO_MENTIONS } from '../history/quietWebhook';
 import type { IdentityPorts, MemberState, UserInfo } from '../identity';
 import type { Side } from '../identity/store';
@@ -846,6 +847,7 @@ export class UpstreamBridge
 
     describe(raw: unknown): SourceMessage {
         const m = raw as DiscordMessage;
+        const repliedUserId = m.mentions.repliedUser?.id ?? null;
         return {
             id: m.id,
             authorId: m.author.id,
@@ -857,7 +859,7 @@ export class UpstreamBridge
             // Discord sends the quoted message's author with a reply.
             reply:
                 m.type === MessageType.Reply
-                    ? { authorId: m.mentions.repliedUser?.id ?? null }
+                    ? { authorId: repliedUserId }
                     : null,
             reactions: m.reactions.cache.map((r) => ({
                 name: r.emoji.id
@@ -865,6 +867,11 @@ export class UpstreamBridge
                     : (r.emoji.name ?? '?'),
                 count: r.count,
             })),
+            mentionIds: renderedMentions(
+                m.content,
+                m.mentions.users.keys(),
+                repliedUserId
+            ),
             raw: m,
         };
     }
@@ -913,6 +920,25 @@ export class UpstreamBridge
         return [...page.values()]
             .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
             .map((m) => this.describe(m));
+    }
+
+    async fetchMessage(
+        discordId: string,
+        messageId: string
+    ): Promise<SourceMessage | null> {
+        try {
+            const channel = await this.discordHistory(discordId);
+            const message = await channel.messages.fetch({
+                message: messageId,
+                cache: false,
+                force: true,
+            });
+            return this.describe(message);
+        } catch (error) {
+            // Unknown Message, or its channel or thread is gone.
+            if (isNotFound(error)) return null;
+            throw error;
+        }
     }
 
     async newestMessageId(discordId: string): Promise<string | null> {

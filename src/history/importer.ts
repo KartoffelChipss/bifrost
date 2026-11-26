@@ -17,7 +17,12 @@ import {
     isUploadError,
 } from './errors';
 import { ArchiveThreads } from './archive';
-import { CopyFormatter, contentHash, withNote } from './format';
+import {
+    CopyFormatter,
+    attachmentsNote,
+    contentHash,
+    withNote,
+} from './format';
 import {
     MAX_PARALLEL,
     PAGE_SIZE,
@@ -1142,6 +1147,7 @@ export class HistoryImporter {
         );
         const fluxerId = await this.send(target, payload, message.id);
         await store.finishMessage(message.id, fluxerId);
+        await this.recordMentions(message);
         // A copy ends every streak: the target works.
         this.linkSkips.delete(link.id);
         const patch = {
@@ -1157,6 +1163,21 @@ export class HistoryImporter {
         await store.updateJob(job.id, patch, now());
         await this.deps.pause(SEND_INTERVAL_MS);
         return { ...job, ...patch };
+    }
+
+    /**
+     * Records whom the copy mentions. A failure is logged: the copy is
+     * sent, and the backfill (backfill.ts) records it later.
+     */
+    private async recordMentions(message: SourceMessage): Promise<void> {
+        try {
+            const ids = await this.formatter.mentionsOf(message);
+            await this.deps.store.recordMentions(message.id, ids);
+        } catch (error) {
+            this.deps.logger.warn(
+                `[history] Could not record the mentions of ${message.id}: ${describeError(error)}`
+            );
+        }
     }
 
     /**
@@ -1188,10 +1209,7 @@ export class HistoryImporter {
         discordId: string
     ): Promise<string> {
         const names = (payload.attachments ?? []).map((f) => f.name);
-        const content = withNote(
-            payload.content,
-            `*Attachments not copied: ${names.join(', ')}*`
-        );
+        const content = withNote(payload.content, attachmentsNote(names));
         await this.deps.store.setContentHash(discordId, contentHash(content));
         try {
             return await this.deps.ports.sendCopy(target, {
