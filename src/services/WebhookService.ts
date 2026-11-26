@@ -296,7 +296,9 @@ export class WebhookService {
             {
                 content: data.content,
                 username: data.username,
-                avatarUrl: data.avatarURL,
+                // Fork: Fluxer rejects an avatar_url that is not a URL,
+                // such as '' (URLType in WebhookRequestSchemas.ts).
+                avatarUrl: data.avatarURL || undefined,
                 files:
                     data.attachments?.map((attachment) => ({
                         url: attachment.url,

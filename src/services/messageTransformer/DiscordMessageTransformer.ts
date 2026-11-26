@@ -20,6 +20,19 @@ import {
 
 type DiscordMessage = OmitPartialGroupDMChannel<Message<boolean>>;
 
+/**
+ * The author's avatar URL, falling back to Discord's default avatar.
+ * Fork: Fluxer rejects a whole webhook message whose avatar_url is not
+ * a URL (URLType in WebhookRequestSchemas.ts), and avatarURL() is null
+ * for members without a custom avatar.
+ */
+export function authorAvatar(author: {
+    avatarURL(): string | null;
+    displayAvatarURL?: () => string;
+}): string {
+    return author.avatarURL() ?? author.displayAvatarURL?.() ?? '';
+}
+
 export default class DiscordMessageTransformer extends MessageTransformer<
     DiscordMessage,
     WebhookMessageData
@@ -192,7 +205,7 @@ export default class DiscordMessageTransformer extends MessageTransformer<
                 {
                     content: messageContent,
                     username: message.author.username,
-                    avatarURL: message.author.avatarURL() || '',
+                    avatarURL: authorAvatar(message.author),
                     attachments: attachments,
                     embeds,
                 },
@@ -209,7 +222,7 @@ export default class DiscordMessageTransformer extends MessageTransformer<
                 return fidelity.finish({
                     content: messageContent,
                     username: message.author.username,
-                    avatarURL: message.author.avatarURL() || '',
+                    avatarURL: authorAvatar(message.author),
                     attachments: attachments,
                     embeds,
                 }); // Fork
@@ -248,7 +261,7 @@ export default class DiscordMessageTransformer extends MessageTransformer<
         return fidelity.finish({
             content: messageContent,
             username: message.author.username,
-            avatarURL: message.author.avatarURL() || '',
+            avatarURL: authorAvatar(message.author),
             attachments: attachments,
             embeds,
         }); // Fork
