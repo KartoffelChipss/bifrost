@@ -26,6 +26,7 @@ import {
 } from './limits';
 import { MAX_JOBS, type HistoryStore } from './store';
 import { HistorySurvey } from './survey';
+import { threadOrder, threadTurns, type ThreadOrder } from './threadOrder';
 import type {
     HistoryJob,
     HistoryPorts,
@@ -43,7 +44,8 @@ import type {
  * history import). A text channel is copied before it is bridged, so its
  * history sits above live messages and nothing echoes. A thread or forum
  * post is copied through its bridged parent's webhook while the thread
- * relay holds new replies back.
+ * relay holds new replies back. The threads of one parent are copied one
+ * at a time, oldest Discord activity first (threadOrder.ts).
  */
 
 export { MAX_PARALLEL, PAGE_SIZE, PASS_BUDGET_MS, SEND_INTERVAL_MS };
@@ -157,6 +159,8 @@ interface Pass {
     readonly channelTypes: ReadonlyMap<string, number>;
     /** False once the history leader lock is lost: writes stop. */
     readonly held: () => Promise<boolean>;
+    /** The order thread imports of one parent run in (threadOrder.ts). */
+    readonly order: ThreadOrder;
 }
 
 /** What a pass works on, besides the link and the deadline. */
@@ -305,7 +309,9 @@ export class HistoryImporter {
         const listed = new Set(this.deps.excluded);
         if (adminId) listed.add(adminId);
         const skip = snapshot ? excludedIds(snapshot, listed) : listed;
-        if (snapshot) await this.createJobs(link, snapshot, skip);
+        const copied = snapshot
+            ? await this.createJobs(link, snapshot, skip)
+            : new Set<string>();
         const jobs = open
             ? await store.listOpenJobs(link.id)
             : await store.listJobs(link.id);
@@ -319,6 +325,7 @@ export class HistoryImporter {
             channelTypes: new Map(
                 (snapshot?.channels ?? []).map((c) => [c.id, c.type])
             ),
+            order: threadOrder(snapshot, copied),
         };
     }
 
@@ -345,12 +352,13 @@ export class HistoryImporter {
     /**
      * Makes jobs for new source channels and threads, up to MAX_JOBS per
      * link. Past the bound no job is made, and the jobs already made go on.
+     * Returns the Discord threads that have a Fluxer copy (mapTargets).
      */
     private async createJobs(
         link: LinkedGuild,
         snapshot: GuildSnapshot,
         skip: ReadonlySet<string>
-    ): Promise<void> {
+    ): Promise<Set<string>> {
         const { store, now } = this.deps;
         const keys = await store.jobKeys(link.id);
         const known = new Set(keys.map((k) => `${k.kind}:${k.discordId}`));
@@ -368,7 +376,7 @@ export class HistoryImporter {
                 now()
             );
         }
-        await this.mapTargets(link);
+        return this.mapTargets(link);
     }
 
     /** Links already warned that they reached MAX_JOBS. */
@@ -383,16 +391,22 @@ export class HistoryImporter {
         await this.deps.report(link.id, `full:${MAX_JOBS}`, text);
     }
 
-    private async mapTargets(link: LinkedGuild): Promise<void> {
+    /**
+     * Gives each job its Fluxer target from guild-sync's object map.
+     * Returns the Discord threads that have a Fluxer copy.
+     */
+    private async mapTargets(link: LinkedGuild): Promise<Set<string>> {
         const { store, sync, now } = this.deps;
         const rows = await sync.loadObjectMap(link.id);
         const target = new Map<string, string>();
+        const copied = new Set<string>();
         for (const row of rows) {
             if (row.state !== 'active' || !row.discordId || !row.fluxerId)
                 continue;
             if (row.kind === 'channel' || row.kind === 'thread') {
                 target.set(`${row.kind}:${row.discordId}`, row.fluxerId);
             }
+            if (row.kind === 'thread') copied.add(row.discordId);
         }
         const keys: JobKey[] = await store.jobKeys(link.id);
         for (const job of keys) {
@@ -401,6 +415,7 @@ export class HistoryImporter {
                 await store.updateJob(job.id, { fluxerId }, now());
             }
         }
+        return copied;
     }
 
     /**
@@ -452,8 +467,11 @@ export class HistoryImporter {
             : `own:${job.id}`;
     }
 
-    /** Jobs that can run now. Bridged channels finish with a gap pass. */
-    private async runnable(jobs: HistoryJob[]) {
+    /**
+     * Jobs that can run now. Bridged channels finish with a gap pass. A
+     * thread runs only in its turn (threadTurns).
+     */
+    private async runnable(jobs: HistoryJob[], turns: ReadonlySet<string>) {
         const ready: HistoryJob[] = [];
         const now = this.deps.now().getTime();
         for (const job of jobs) {
@@ -466,6 +484,7 @@ export class HistoryImporter {
             }
             if (job.status !== 'pending' && job.status !== 'importing')
                 continue;
+            if (!turns.has(job.id)) continue;
             if (
                 job.parentDiscordId &&
                 (await this.deps.links.byDiscordChannel(job.parentDiscordId))
@@ -517,7 +536,8 @@ export class HistoryImporter {
     }
 
     private async importAll(pass: Pass, jobs: HistoryJob[]): Promise<boolean> {
-        const candidates = await this.runnable(jobs);
+        const { turns, queued } = threadTurns(jobs, pass.order);
+        const candidates = await this.runnable(jobs, turns);
         const picked: HistoryJob[] = [];
         const keys = new Set<string>();
         for (const job of candidates) {
@@ -529,7 +549,13 @@ export class HistoryImporter {
         const results = await Promise.all(
             picked.map((job) => this.step(pass, job))
         );
-        const more = candidates.length > picked.length || results.some(Boolean);
+        // A thread that finishes lets the next one of its parent run.
+        const next = picked.some(
+            (job) =>
+                job.kind === 'thread' && queued.has(job.parentDiscordId ?? '')
+        );
+        const more =
+            candidates.length > picked.length || results.some(Boolean) || next;
         if (!more) await this.reportDone(pass.link);
         return more;
     }
