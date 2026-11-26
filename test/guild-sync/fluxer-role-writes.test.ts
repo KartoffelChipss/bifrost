@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { Client } from '@fluxerjs/core';
+import { ThreadChannel, type Client } from '@fluxerjs/core';
 import { findListed } from '../../src/guild-sync/readers/fluxer';
 import {
     FluxerGuildWriter,
+    needsReopen,
     roleUpdateBody,
 } from '../../src/guild-sync/writers/fluxer';
 
@@ -174,5 +175,49 @@ describe('Fluxer writes without a single-object read', () => {
             body: { name: 'wave' },
             auth: true,
         });
+    });
+});
+
+describe('Fluxer edits of archived threads', () => {
+    it('needs a reopen only to change more than archived on an archived thread', () => {
+        assert.equal(needsReopen(true, { locked: false }), true);
+        assert.equal(
+            needsReopen(true, { name: 'x', archived: undefined }),
+            true
+        );
+        assert.equal(
+            needsReopen(true, { archived: false, locked: true }),
+            false
+        );
+        assert.equal(needsReopen(true, { archived: true }), false);
+        assert.equal(needsReopen(false, { locked: true }), false);
+    });
+
+    it('unarchives in the same edit and archives again after', async () => {
+        const edits: Record<string, unknown>[] = [];
+        const thread = Object.assign(Object.create(ThreadChannel.prototype), {
+            archived: true,
+            flags: 0,
+            parentId: null,
+            edit: async (options: Record<string, unknown>) => {
+                edits.push(options);
+                return thread;
+            },
+        });
+        const channels = { fetch: async () => thread };
+        const client = {
+            isReady: () => true,
+            guilds: { fetch: async () => ({ id: 'g1', client: { channels } }) },
+            channels,
+        } as unknown as Client;
+        await new FluxerGuildWriter({ current: client }).updateThread(
+            'g1',
+            't1',
+            { locked: true }
+        );
+        assert.deepEqual(edits, [
+            { locked: true, archived: false },
+            { archived: true },
+        ]);
     });
 });

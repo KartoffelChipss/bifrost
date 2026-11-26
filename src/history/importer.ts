@@ -989,7 +989,10 @@ export class HistoryImporter {
         const threadId = await this.lockedThread(job);
         if (!threadId) return work();
         const { writer } = this.deps;
+        // Fluxer refuses to unlock a thread that stays archived; sends
+        // unarchive it anyway, and finishing restores Discord's state.
         await writer.updateThread(link.fluxerGuildId, threadId, {
+            archived: false,
             locked: false,
         });
         try {

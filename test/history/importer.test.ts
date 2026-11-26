@@ -406,7 +406,7 @@ describe('copying a forum post', () => {
         // Unlocked only while the page is sent, then locked again; an
         // archived thread is never opened, as a webhook post reopens it.
         assert.deepEqual(s.threadEdits, [
-            'f200 {"locked":false}',
+            'f200 {"archived":false,"locked":false}',
             'f200 {"locked":true}',
             'f200 {"archived":true,"locked":true}',
         ]);
@@ -456,7 +456,7 @@ describe('thread lock window', () => {
         t.ports.failNext = 1;
         await t.importer.run(LINK);
         assert.deepEqual(t.threadEdits, [
-            'f200 {"locked":false}',
+            'f200 {"archived":false,"locked":false}',
             'f200 {"locked":true}',
         ]);
     });
