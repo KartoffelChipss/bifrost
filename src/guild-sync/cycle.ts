@@ -20,9 +20,10 @@ import { IdMap } from './idmap';
 import { historyLocks } from './project';
 import type { ChannelLinker, ThreadSource } from './links';
 import {
+    applyAlert,
     applyNotice,
-    planFingerprint,
-    planNotice,
+    planAlert,
+    type Alert,
     type NoticeBoard,
 } from './notices';
 import type { MapRow, PlanOp } from './ops';
@@ -72,7 +73,7 @@ export interface CycleDeps {
         readonly discord?: ThreadSource;
         readonly fluxer?: ThreadSource;
     };
-    /** Posts plans and results to the link's admin channel. */
+    /** Posts alerts (approval, abort, failed apply) to the admin channel. */
     readonly notices: NoticeBoard;
     /** The command prefix, for the approval hint in a notice. */
     readonly commandPrefix: string;
@@ -701,7 +702,27 @@ function withoutRemovals(plan: Plan): Plan {
     };
 }
 
-/** Saves, logs and posts a plan. */
+/** Posts an alert to the link's admin channel, deduped per category. */
+async function postAlert(
+    linkId: string,
+    settings: SyncSettings,
+    deps: CycleDeps,
+    alert: Alert | null
+): Promise<void> {
+    if (alert === null) return;
+    await deps.notices.post(
+        linkId,
+        alert.category,
+        settings.adminChannelId,
+        alert.key,
+        alert.text
+    );
+}
+
+/**
+ * Saves and logs a plan. Only a plan that waits for approval or was
+ * aborted is posted; the status message shows the rest.
+ */
 async function publish(
     plan: Plan,
     settings: SyncSettings,
@@ -710,14 +731,8 @@ async function publish(
 ): Promise<void> {
     await deps.store.savePlan(plan, now);
     deps.logger.info(`[guild-sync] ${summarizePlan(plan)}`);
-    const notice = planNotice(plan, deps.commandPrefix);
-    if (notice === null) return;
-    await deps.notices.post(
-        plan.guildLinkId,
-        settings.adminChannelId,
-        planFingerprint(plan),
-        notice
-    );
+    const alert = planAlert(plan, deps.commandPrefix);
+    await postAlert(plan.guildLinkId, settings, deps, alert);
 }
 
 type Planned = Extract<CycleOutcome, { status: 'planned' }>;
@@ -757,12 +772,7 @@ async function planAndApply(
         ? await applySaved(run, gated, built, deps, held)
         : null;
     if (!applied) return { status: 'planned', plan, more: false };
-    await deps.notices.post(
-        link.id,
-        settings.adminChannelId,
-        `applied:${plan.id}`,
-        applyNotice(plan, applied)
-    );
+    await postAlert(link.id, settings, deps, applyAlert(plan, applied));
     // Only clean progress asks for another cycle, so a failing write is
     // retried at the normal pace and never in a tight loop.
     const more =

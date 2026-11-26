@@ -368,6 +368,7 @@ async function sweepOne(
     const text = dryRunNotice(pairs.length, result.tally, result.checked);
     await s.notices.post(
         `identity:${link.id}`,
+        'dry-run',
         result.plan.adminChannelId,
         text,
         text

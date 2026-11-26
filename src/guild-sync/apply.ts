@@ -127,6 +127,8 @@ export interface ApplyResult {
     readonly applied: number;
     readonly failed: number;
     readonly skipped: readonly { op: PlanOp; reason: string }[];
+    /** Each failed write and why, in order. Bounded by the failure caps. */
+    readonly failures: readonly { op: PlanOp; reason: string }[];
     /** Ops held back for the next cycle, which should come soon. */
     readonly postponed: number;
     /** Why the run ended before the last op, or null. */
@@ -144,6 +146,7 @@ interface RunState {
     /** Failed writes this cycle, by failure bucket (see bucketOf). */
     readonly failedByKind: Map<string, number>;
     readonly skipped: { op: PlanOp; reason: string }[];
+    readonly failures: { op: PlanOp; reason: string }[];
     postponed: number;
     /** Kinds of position-holding objects this run created. */
     readonly created: Set<'role' | 'channel'>;
@@ -851,6 +854,7 @@ async function auditFailure(
     const { plan } = state.input;
     const { store, now, logger, failures } = state.deps;
     logger.warn(`[guild-sync] ${op.op} ${op.kind} failed: ${detail}`);
+    state.failures.push({ op, reason: detail });
     failures?.failed(opKey(plan, op), now());
     await store.audit(
         {
@@ -1153,6 +1157,7 @@ function newState(input: ApplyInput, deps: ApplyDeps): RunState {
         failed: 0,
         failedByKind: new Map(),
         skipped: [],
+        failures: [],
         postponed: 0,
         created: new Set(),
         archiveMoves: new Map(),
@@ -1199,6 +1204,7 @@ export async function applyPlan(
         applied: state.applied,
         failed: state.failed,
         skipped: state.skipped,
+        failures: state.failures,
         postponed: state.postponed,
         stopped,
     };

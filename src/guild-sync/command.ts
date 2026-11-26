@@ -114,6 +114,11 @@ export interface SyncCommandContext {
     readonly retryHistory?: (guildLinkId: string, now: Date) => Promise<number>;
     /** True for a channel the relay bridges. Notices must not go there. */
     readonly isChannelLinked: (channelId: string) => Promise<boolean>;
+    /**
+     * Called after a command changed something, so the link's status
+     * message is updated now rather than after the next cycle.
+     */
+    readonly changed?: (guildLinkId: string) => void;
     readonly now: () => Date;
 }
 
@@ -148,13 +153,29 @@ async function retryHistory(
     };
 }
 
+type RunnableCommand = Exclude<SyncCommand, { type: 'error' }>;
+
 /**
  * Carries out one command. Returns an error text, null when it worked, or
  * a note to show with the status. Once an admin channel is set, every
- * command must come from it.
+ * command must come from it. A command that worked and was not `status`
+ * reports the change through `ctx.changed`.
  */
 export async function runSyncCommand(
-    command: Exclude<SyncCommand, { type: 'error' }>,
+    command: RunnableCommand,
+    link: LinkedGuild,
+    channelId: string,
+    ctx: SyncCommandContext
+): Promise<string | SyncCommandNote | null> {
+    const result = await carryOut(command, link, channelId, ctx);
+    if (typeof result !== 'string' && command.type !== 'status') {
+        ctx.changed?.(link.id);
+    }
+    return result;
+}
+
+async function carryOut(
+    command: RunnableCommand,
     link: LinkedGuild,
     channelId: string,
     ctx: SyncCommandContext

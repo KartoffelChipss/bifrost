@@ -105,11 +105,13 @@ describe('runSyncCommand', () => {
         retryHistory?: (linkId: string, now: Date) => Promise<number>
     ) {
         const store = new FakeStore();
+        const changed: string[] = [];
         const result = (command: Runnable, channelId = 'admin') =>
             runSyncCommand(command, LINK, channelId, {
                 store,
                 isChannelLinked: async (id) => linked.includes(id),
                 retryHistory,
+                changed: (id) => changed.push(id),
                 now: () => new Date(),
             });
         // The error text, or null when the command worked.
@@ -117,7 +119,7 @@ describe('runSyncCommand', () => {
             const outcome = await result(command, channelId);
             return typeof outcome === 'string' ? outcome : null;
         };
-        return { store, run, result };
+        return { store, run, result, changed };
     }
 
     const pending: Plan = {
@@ -128,6 +130,16 @@ describe('runSyncCommand', () => {
         body: { ...EMPTY_BODY, needsApproval: true, approvalReason: 'budget' },
         abortReason: null,
     };
+
+    it('asks for a status update after a change, not after status or an error', async () => {
+        const { run, changed } = setup();
+        assert.equal(await run({ type: 'status' }), null);
+        assert.notEqual(await run({ type: 'mode', mode: 'apply' }), null);
+        assert.deepEqual(changed, []);
+        assert.equal(await run({ type: 'kill', on: true }), null);
+        assert.equal(await run({ type: 'mode', mode: 'read-only' }), null);
+        assert.deepEqual(changed, [LINK.id, LINK.id]);
+    });
 
     it('refuses apply until an admin channel is set', async () => {
         const { store, run } = setup();

@@ -10,6 +10,7 @@ import {
     resolveMode,
     runCycle,
     type CycleDeps,
+    type CycleOutcome,
     type LinkedGuild,
 } from './cycle';
 import { CycleBackoff, guardCycle } from './cycleGuard';
@@ -18,13 +19,15 @@ import { PostgresParkedMessages } from './parkedMessages';
 import { ThreadMirror, type ThreadMirrorPorts } from './threadMirror';
 import { excludedLinks, type ChannelLinker, type ThreadSource } from './links';
 import { NoticeBoard } from './notices';
-import { discordNoticeSender } from './notifier';
+import { discordNoticeSender, discordStatusMessenger } from './notifier';
 import { DiscordGuildReader } from './readers/discord';
 import { FluxerGuildReader } from './readers/fluxer';
 import { DEFAULT_SCHEDULE, SyncScheduler } from './scheduler';
 import { PostgresHistoryStore } from '../history/store';
 import { PostgresIdentityStore } from '../identity/store';
 import { PostgresGuildSyncStore, type GuildSyncStore } from './store';
+import { StatusBoard } from './statusBoard';
+import type { StatusSignal } from './statusSignal';
 import {
     followFluxerClient,
     listenToDiscordThreads,
@@ -77,6 +80,8 @@ export interface GuildSyncDeps {
     readonly excludedChannels: ReadonlySet<string>;
     /** Account linking is on: member overwrites follow linked members. */
     readonly identityEnabled?: boolean;
+    /** History passes and admin commands ask for a status update here. */
+    readonly statusSignal?: StatusSignal;
 }
 
 /** Linked accounts, Discord user ID to Fluxer user ID. */
@@ -110,17 +115,25 @@ async function linksToSync(
     return links.slice(0, MAX_LINKS_PER_RUN);
 }
 
+/** What a link's cycle did; null when it failed. */
+export type CycleObserver = (
+    guildLinkId: string,
+    outcome: CycleOutcome | null
+) => void;
+
 /**
  * Runs one cycle per linked guild while holding the leader lock. Returns
  * true when an applied plan left ops for the next cycle. A link whose
  * cycle fails backs off alone; the other links still run (cycleGuard.ts).
+ * `observe` hears every link's result, for the status message.
  */
 export async function runAll(
     store: GuildSyncStore,
     deps: GuildSyncDeps,
     cycleDeps: CycleDeps,
     holder: string,
-    backoff: CycleBackoff
+    backoff: CycleBackoff,
+    observe: CycleObserver = () => {}
 ): Promise<boolean> {
     let more = false;
     const guard = { backoff, now: cycleDeps.now, logger: cycleDeps.logger };
@@ -129,6 +142,7 @@ export async function runAll(
             const outcome = await guardCycle(`link ${link.id}`, guard, () =>
                 runCycle(link, { ...cycleDeps, stillLeader: held })
             );
+            observe(link.id, outcome.ok ? outcome.value : null);
             if (!outcome.ok) continue;
             if (outcome.value.status === 'planned' && outcome.value.more) {
                 more = true;
@@ -203,6 +217,30 @@ function buildCycleDeps(
             ? linkedMembers(deps.sequelize)
             : undefined,
     };
+}
+
+/** The live status message board for every link (statusBoard.ts). */
+function createStatusBoard(
+    deps: GuildSyncDeps,
+    context: AddonContext,
+    store: GuildSyncStore
+): StatusBoard {
+    const history = deps.historyEnabled
+        ? new PostgresHistoryStore(deps.sequelize)
+        : null;
+    return new StatusBoard({
+        store,
+        messenger: discordStatusMessenger(
+            deps.discordClient,
+            deps.isChannelLinked
+        ),
+        historyTotals: history ? (id) => history.jobTotals(id) : undefined,
+        processMode: () => context.mode.mode,
+        allowApply: context.allowApply,
+        commandPrefix: deps.commandPrefix,
+        now: () => new Date(),
+        logger: context.logger,
+    });
 }
 
 /** How long stopping waits for thread relay work in flight. */
@@ -354,6 +392,8 @@ export function createGuildSyncAddon(deps: GuildSyncDeps): Addon {
     let scheduler: SyncScheduler | null = null;
     let listener: ((...args: unknown[]) => void) | null = null;
     let stopRelay: (() => Promise<void>) | null = null;
+    let status: StatusBoard | null = null;
+    let stopListening: (() => void) | null = null;
 
     return {
         name: ADDON_NAME,
@@ -363,6 +403,12 @@ export function createGuildSyncAddon(deps: GuildSyncDeps): Addon {
             const holder = `${hostname()}:${process.pid}`;
             const threads = startThreadRelay(deps, context, store);
             stopRelay = threads.stop;
+            const board = createStatusBoard(deps, context, store);
+            status = board;
+            stopListening =
+                deps.statusSignal?.listen((id) => board.request(id)) ?? null;
+            const observe = (id: string, outcome: CycleOutcome | null) =>
+                board.recordCycle(id, outcome);
             const backoff = new CycleBackoff();
             const guard = {
                 backoff,
@@ -378,7 +424,14 @@ export function createGuildSyncAddon(deps: GuildSyncDeps): Addon {
                     'cycle',
                     async () => {
                         const run = await guardCycle('run', guard, () =>
-                            runAll(store, deps, cycleDeps, holder, backoff)
+                            runAll(
+                                store,
+                                deps,
+                                cycleDeps,
+                                holder,
+                                backoff,
+                                observe
+                            )
                         );
                         // A cycle may have created threads that held messages.
                         await threads.relay.flush();
@@ -401,11 +454,19 @@ export function createGuildSyncAddon(deps: GuildSyncDeps): Addon {
                     deps.discordClient.off(event, listener);
             }
             listener = null;
+            stopListening?.();
+            stopListening = null;
             const relayStopped = stopRelay?.();
             stopRelay = null;
-            // Both wait together, within the host's stop deadline.
-            await Promise.all([relayStopped, scheduler?.stop()]);
+            // All wait together, within the host's stop deadline. The
+            // status board clears its timers at once.
+            await Promise.all([
+                relayStopped,
+                scheduler?.stop(),
+                status?.stop(),
+            ]);
             scheduler = null;
+            status = null;
         },
     };
 }
