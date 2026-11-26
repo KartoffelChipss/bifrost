@@ -149,6 +149,12 @@ export interface ThreadSnap {
     readonly rateLimitPerUser?: number;
     /** Minutes of inactivity before it archives. */
     readonly autoArchiveDuration?: number;
+    /**
+     * The newest message when the thread was read, or null without one.
+     * Undefined in older snapshots. Left out when two snapshots are
+     * compared (withoutActivity), so chat alone never saves a snapshot.
+     */
+    readonly lastMessageId?: string | null;
 }
 
 export interface EmojiSnap {
@@ -240,6 +246,45 @@ function sortKeys(value: unknown, depth: number): unknown {
  */
 export function stableJson(value: unknown): string {
     return JSON.stringify(sortKeys(value, 0));
+}
+
+/**
+ * Orders two snowflakes by age, oldest first: negative when `a` is older.
+ * Snowflakes are decimal strings without leading zeros, so a shorter one
+ * is older and equal lengths compare as text. No parse can throw.
+ */
+export function compareSnowflakes(a: string, b: string): number {
+    if (a.length !== b.length) return a.length - b.length;
+    if (a === b) return 0;
+    return a < b ? -1 : 1;
+}
+
+/**
+ * A thread's latest activity: its newest message, or the thread itself
+ * when it has none, as both platforms sort forum posts by activity
+ * (Fluxer: fluxer_app ChannelThreads lastActivityId).
+ */
+export function lastActivityId(
+    thread: Pick<ThreadSnap, 'id' | 'lastMessageId'>
+): string {
+    const last = thread.lastMessageId ?? null;
+    return last !== null && compareSnowflakes(last, thread.id) > 0
+        ? last
+        : thread.id;
+}
+
+/** The snapshot without thread activity, for telling real changes apart. */
+export function withoutActivity(snapshot: GuildSnapshot): GuildSnapshot {
+    return {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) => {
+            const copy: { -readonly [K in keyof ThreadSnap]: ThreadSnap[K] } = {
+                ...thread,
+            };
+            delete copy.lastMessageId;
+            return copy;
+        }),
+    };
 }
 
 /** Discord's stage channel type. */

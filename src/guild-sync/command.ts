@@ -2,6 +2,14 @@ import { SYNC_MODES, type SyncMode } from '../addons/db/schema';
 import type { LinkedGuild } from './cycle';
 import { summarizePlan, type Plan } from './plan';
 import type { GuildSyncStore, SyncSettings } from './store';
+import {
+    describeResetPreview,
+    resetBlocked,
+    resetTargets,
+    targetSetKey,
+    type PendingResets,
+} from './threadReset';
+import type { ThreadResetLauncher } from './threadResetJob';
 
 /**
  * Parsing and wording for the `sync` admin command. Kept apart from the
@@ -18,6 +26,8 @@ export type SyncCommand =
     | { readonly type: 'channel'; readonly here: boolean }
     | { readonly type: 'approve'; readonly planId: string }
     | { readonly type: 'reject'; readonly planId: string }
+    /** The preview, or with `confirm` the reset of what was previewed. */
+    | { readonly type: 'reset-threads'; readonly confirm: boolean }
     | { readonly type: 'error'; readonly message: string };
 
 export const SYNC_USAGE = [
@@ -30,6 +40,7 @@ export const SYNC_USAGE = [
     '`sync channel <here|off>`',
     '`sync approve <plan-id>`',
     '`sync reject <plan-id>`',
+    '`sync reset-threads` (then `sync reset-threads confirm`)',
 ].join('\n');
 
 const PLAN_ID =
@@ -60,6 +71,16 @@ export function parseSyncCommand(args: readonly string[]): SyncCommand {
     }
     if ((verb === 'approve' || verb === 'reject') && args.length === 2) {
         if (PLAN_ID.test(value)) return { type: verb, planId: value };
+    }
+    if (verb === 'reset-threads') return parseReset(args);
+    return { type: 'error', message: SYNC_USAGE };
+}
+
+/** `reset-threads` alone, or `reset-threads confirm`. */
+function parseReset(args: readonly string[]): SyncCommand {
+    if (args.length === 1) return { type: 'reset-threads', confirm: false };
+    if (args.length === 2 && args[1].toLowerCase() === 'confirm') {
+        return { type: 'reset-threads', confirm: true };
     }
     return { type: 'error', message: SYNC_USAGE };
 }
@@ -106,7 +127,11 @@ export interface SyncCommandContext {
         | 'setApprovedPlan'
         | 'setPlanStatus'
         | 'getPlan'
+        | 'loadObjectMap'
+        | 'lastSnapshot'
     >;
+    /** `sync reset-threads`. Absent where guild-sync cannot run it. */
+    readonly threadReset?: ThreadResetCommandDeps;
     /**
      * Puts the link's failed history imports back to work, returning how
      * many. Absent when history import is off.
@@ -120,6 +145,36 @@ export interface SyncCommandContext {
      */
     readonly changed?: (guildLinkId: string) => void;
     readonly now: () => Date;
+}
+
+/** What `sync reset-threads` needs besides the store. */
+export interface ThreadResetCommandDeps {
+    readonly pending: PendingResets;
+    readonly launcher: ThreadResetLauncher;
+    /** BF_ADDONS_ALLOW_APPLY. */
+    readonly allowApply: boolean;
+    /**
+     * BF_ADDONS_RESET_USER_ID: the only user who may run the command, not
+     * even the server owner otherwise. Null turns the command off.
+     */
+    readonly userId: string | null;
+}
+
+/**
+ * Why this author may not run `sync reset-threads`, or null. The other
+ * subcommands keep the owner check in commandHandler.ts.
+ */
+export function resetRefusal(
+    reset: ThreadResetCommandDeps | undefined,
+    authorId: string
+): string | null {
+    if (!reset?.userId) {
+        return '`sync reset-threads` is not set up: `BF_ADDONS_RESET_USER_ID` is unset or invalid.';
+    }
+    if (authorId !== reset.userId) {
+        return 'Only the user named in `BF_ADDONS_RESET_USER_ID` can reset threads.';
+    }
+    return null;
 }
 
 /** Finds a plan that still waits for approval on this link. */
@@ -137,6 +192,8 @@ async function pendingPlan(
 /** A command that worked and has something to say besides the status. */
 export interface SyncCommandNote {
     readonly note: string;
+    /** Shown without the status after it. */
+    readonly alone?: boolean;
 }
 
 async function retryHistory(
@@ -156,29 +213,130 @@ async function retryHistory(
 type RunnableCommand = Exclude<SyncCommand, { type: 'error' }>;
 
 /**
- * Carries out one command. Returns an error text, null when it worked, or
- * a note to show with the status. Once an admin channel is set, every
- * command must come from it. A command that worked and was not `status`
- * reports the change through `ctx.changed`.
+ * Carries out one command for `authorId`. Returns an error text, null when
+ * it worked, or a note to show with the status. Once an admin channel is
+ * set, every command must come from it. A command that worked and changed
+ * something reports it through `ctx.changed`.
  */
 export async function runSyncCommand(
     command: RunnableCommand,
     link: LinkedGuild,
     channelId: string,
-    ctx: SyncCommandContext
+    ctx: SyncCommandContext,
+    authorId = ''
 ): Promise<string | SyncCommandNote | null> {
-    const result = await carryOut(command, link, channelId, ctx);
-    if (typeof result !== 'string' && command.type !== 'status') {
+    if (command.type === 'reset-threads') {
+        const refused = resetRefusal(ctx.threadReset, authorId);
+        if (refused) return refused;
+    }
+    const result = await carryOut(command, link, channelId, ctx, authorId);
+    if (typeof result !== 'string' && changesState(command)) {
         ctx.changed?.(link.id);
     }
     return result;
+}
+
+/** False for a command that only shows something. */
+function changesState(command: RunnableCommand): boolean {
+    if (command.type === 'status') return false;
+    return command.type !== 'reset-threads' || command.confirm;
+}
+
+/** The link's reset targets and why a reset may not run now. */
+async function resetState(
+    link: LinkedGuild,
+    settings: SyncSettings,
+    ctx: SyncCommandContext,
+    reset: ThreadResetCommandDeps
+) {
+    const rows = await ctx.store.loadObjectMap(link.id);
+    const discord = await ctx.store.lastSnapshot(link.id, 'discord', true);
+    const threads = resetTargets(rows, discord);
+    const blocked = resetBlocked(settings, reset.allowApply);
+    return {
+        threads,
+        blocked,
+        setKey: targetSetKey(link.id, threads.targets),
+    };
+}
+
+/** Who runs a reset command, where, and with what. */
+interface ResetCall {
+    readonly link: LinkedGuild;
+    readonly settings: SyncSettings;
+    readonly authorId: string;
+    readonly ctx: SyncCommandContext;
+    readonly reset: ThreadResetCommandDeps;
+}
+
+/**
+ * `sync reset-threads`: the preview. When the reset may run, it is
+ * remembered for this user and link, bound to the exact set shown.
+ */
+async function previewReset(call: ResetCall): Promise<SyncCommandNote> {
+    const { link, settings, ctx, reset } = call;
+    const state = await resetState(link, settings, ctx, reset);
+    if (!state.blocked && state.threads.targets.length > 0) {
+        reset.pending.remember(link.id, call.authorId, state.setKey, ctx.now());
+    }
+    return {
+        note: describeResetPreview(state.threads, state.blocked),
+        alone: true,
+    };
+}
+
+const CONFIRM_REFUSALS = {
+    missing:
+        'No reset preview is waiting for you. Run `sync reset-threads` first; a preview can be confirmed for 10 minutes.',
+    changed:
+        'The threads changed since your preview. Run `sync reset-threads` again to see the new set.',
+} as const;
+
+/** `sync reset-threads confirm`: starts the previewed reset in the background. */
+async function confirmReset(
+    call: ResetCall
+): Promise<string | SyncCommandNote> {
+    const { link, settings, ctx, reset, authorId } = call;
+    const state = await resetState(link, settings, ctx, reset);
+    if (state.blocked) return state.blocked;
+    const { targets } = state.threads;
+    if (targets.length === 0) return 'No thread copies to reset.';
+    const check = reset.pending.check(
+        link.id,
+        authorId,
+        state.setKey,
+        ctx.now()
+    );
+    if (check !== 'ok') return CONFIRM_REFUSALS[check];
+    const started = reset.launcher.start(link, targets);
+    if (started === 'busy') return 'A thread reset is already running.';
+    if (started === 'unavailable') {
+        return 'Guild sync is not running, so the reset cannot start.';
+    }
+    reset.pending.clear(link.id, authorId);
+    return {
+        note: `Resetting ${targets.length} thread copies in the background, about one per second. A notice in this channel reports the result.`,
+        alone: true,
+    };
+}
+
+async function runReset(
+    command: Extract<RunnableCommand, { type: 'reset-threads' }>,
+    call: Omit<ResetCall, 'reset'>
+): Promise<string | SyncCommandNote> {
+    const reset = call.ctx.threadReset;
+    if (!reset) return 'Thread reset is not available here.';
+    return command.confirm
+        ? confirmReset({ ...call, reset })
+        : previewReset({ ...call, reset });
 }
 
 async function carryOut(
     command: RunnableCommand,
     link: LinkedGuild,
     channelId: string,
-    ctx: SyncCommandContext
+    ctx: SyncCommandContext,
+    authorId: string
 ): Promise<string | SyncCommandNote | null> {
     const { store, now } = ctx;
     const settings = await store.loadSettings(link.id);
@@ -203,6 +361,8 @@ async function carryOut(
             return null;
         case 'history-retry':
             return retryHistory(link, ctx);
+        case 'reset-threads':
+            return runReset(command, { link, settings, authorId, ctx });
         case 'channel':
             if (command.here && (await ctx.isChannelLinked(channelId))) {
                 return 'This channel is bridged. Notices here would be copied to the other server. Pick a channel that is not linked.';

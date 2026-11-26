@@ -286,6 +286,7 @@ export class FakeGuild implements GuildReader, GuildWriter {
         ) {
             throw new Error('a forum post needs its first message');
         }
+        if (this.failCreates.has(spec.name)) throw new Error('create refused');
         const id = `f-thread-${++this.seq}`;
         this.posts.push(spec);
         this.patch({

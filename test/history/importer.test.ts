@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { MapRow } from '../../src/guild-sync/ops';
-import type { GuildSnapshot } from '../../src/guild-sync/snapshot';
+import type { GuildSnapshot, ThreadSnap } from '../../src/guild-sync/snapshot';
 import {
     HistoryImporter,
     MAX_FAILURES,
@@ -1163,6 +1163,139 @@ describe('bridging during an import', () => {
         await s.drain();
         assert.equal(s.ports.sent.length, gap);
         assert.equal(s.store.job('10').status, 'done');
+    });
+});
+
+describe('thread order', () => {
+    /** A post in forum `parentId`, last active at `lastMessageId`. */
+    const post = (
+        id: string,
+        parentId: string,
+        lastMessageId?: string
+    ): ThreadSnap => ({
+        id,
+        parentId,
+        name: `post ${id}`,
+        archived: false,
+        locked: false,
+        tags: [],
+        ...(lastMessageId ? { lastMessageId } : {}),
+    });
+
+    /** Forums 20 and 25 with these posts, each with two replies. */
+    function forum(s: ReturnType<typeof setup>, threads: ThreadSnap[]) {
+        s.state.snapshot = discordGuild({
+            channels: [
+                channel('20', { type: 15, name: 'forum' }),
+                channel('25', { type: 15, name: 'other' }),
+            ],
+            threads,
+        });
+        for (const thread of threads) {
+            const id = Number(thread.id);
+            s.ports.add(thread.id, String(id + 1));
+            s.ports.add(thread.id, thread.lastMessageId ?? String(id + 2));
+        }
+    }
+
+    /** Fluxer threads in the order their copies were first sent. */
+    const firstSent = (s: ReturnType<typeof setup>) => [
+        ...new Set(s.ports.sent.map((m) => m.threadId)),
+    ];
+
+    /** Forum 20 by activity: 220 (at 230), 240 (no reply known), 210 (at 290). */
+    const three = () => [
+        post('210', '20', '290'),
+        post('220', '20', '230'),
+        post('240', '20'),
+    ];
+
+    it('copies the threads of one parent one at a time, oldest activity first', async () => {
+        const s = setup();
+        forum(s, three());
+        for (const id of ['210', '220', '240']) s.map('thread', id, `f${id}`);
+        await s.links.link(LINK.id, '20', 'f20');
+        await s.drain();
+        assert.deepEqual(firstSent(s), ['f220', 'f240', 'f210']);
+        // Each thread's copies are all sent before the next one starts.
+        const runs = s.ports.sent.filter(
+            (m, i, all) => i === 0 || all[i - 1].threadId !== m.threadId
+        );
+        assert.equal(runs.length, 3);
+    });
+
+    it('holds newer threads while the oldest has no Fluxer copy yet', async () => {
+        const s = setup();
+        forum(s, [post('210', '20', '290'), post('220', '20', '230')]);
+        s.map('thread', '210', 'f210');
+        await s.links.link(LINK.id, '20', 'f20');
+        await s.drain();
+        assert.deepEqual(s.ports.sent, []);
+        s.map('thread', '220', 'f220');
+        await s.drain();
+        assert.deepEqual(firstSent(s), ['f220', 'f210']);
+    });
+
+    it('holds newer threads while the oldest waits out a backoff', async () => {
+        const s = setup();
+        forum(s, three());
+        for (const id of ['210', '220', '240']) s.map('thread', id, `f${id}`);
+        await s.links.link(LINK.id, '20', 'f20');
+        await s.importer.planJobs(LINK);
+        const head = s.store.job('220');
+        const retryAt = new Date(s.state.clock + 60_000);
+        await s.store.updateJob(head.id, { retryAt });
+        await s.importer.run(LINK);
+        assert.deepEqual(s.ports.sent, []);
+        s.state.clock += 120_000;
+        await s.drain();
+        assert.deepEqual(firstSent(s), ['f220', 'f240', 'f210']);
+    });
+
+    it('lets newer threads go once the oldest failed', async () => {
+        const s = setup();
+        forum(s, three());
+        for (const id of ['210', '220', '240']) s.map('thread', id, `f${id}`);
+        await s.links.link(LINK.id, '20', 'f20');
+        await s.importer.planJobs(LINK);
+        await s.store.updateJob(s.store.job('220').id, { status: 'failed' });
+        await s.drain();
+        assert.deepEqual(firstSent(s), ['f240', 'f210']);
+    });
+
+    it('goes past a post guild-sync went past, and a deleted thread', async () => {
+        const s = setup();
+        // 220 has no copy while the newer 250 has one: guild-sync let
+        // newer posts go ahead of it after repeated failures.
+        forum(s, [
+            post('210', '20', '290'),
+            post('220', '20', '230'),
+            post('250', '20', '260'),
+        ]);
+        s.map('thread', '210', 'f210');
+        s.map('thread', '250', 'f250');
+        await s.importer.planJobs(LINK);
+        // A thread deleted on Discord before it got a copy.
+        await s.store.ensureJob(LINK.id, 'thread', '205', '20');
+        await s.links.link(LINK.id, '20', 'f20');
+        await s.drain();
+        assert.deepEqual(firstSent(s), ['f250', 'f210']);
+    });
+
+    it('runs the threads of different parents side by side', async () => {
+        const s = setup();
+        forum(s, [...three(), post('260', '25', '299'), post('270', '25')]);
+        for (const id of ['210', '220', '240', '260', '270'])
+            s.map('thread', id, `f${id}`);
+        await s.links.link(LINK.id, '20', 'f20');
+        await s.links.link(LINK.id, '25', 'f25');
+        await s.importer.run(LINK);
+        assert.deepEqual(firstSent(s).sort(), ['f220', 'f270']);
+        await s.drain();
+        assert.deepEqual(
+            firstSent(s).filter((id) => ['f260', 'f270'].includes(id ?? '')),
+            ['f270', 'f260']
+        );
     });
 });
 

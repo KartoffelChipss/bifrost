@@ -151,6 +151,7 @@ export function discordThread(
         pinned: t.flags.has(ChannelFlags.Pinned),
         rateLimitPerUser: t.rateLimitPerUser ?? 0,
         autoArchiveDuration: t.autoArchiveDuration ?? 1440,
+        lastMessageId: t.lastMessageId ?? null,
     };
 }
 

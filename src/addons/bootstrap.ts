@@ -1,6 +1,7 @@
 import type { Sequelize } from 'sequelize';
 import type { GatewayIntentBits, Partials } from 'discord.js';
 import { StatusSignal } from '../guild-sync/statusSignal';
+import { ThreadResetPort } from '../guild-sync/threadResetJob';
 import type { UpstreamServices } from '../guild-sync/upstreamBridge';
 import type { LinkService } from '../services/LinkService';
 import type { AddonCommandDeps, DiscordCommandFactory } from './commands';
@@ -88,11 +89,17 @@ function channelLinkCheck(
         (await linkService.getChannelLinkByDiscordChannelId(id)) !== null;
 }
 
+/** Made once at startup, shared by the `sync` command and guild-sync. */
+interface SharedPorts {
+    readonly statusSignal: StatusSignal;
+    readonly threadReset: ThreadResetPort;
+}
+
 function buildDiscordExtension(
     deps: ForkBootstrapDeps,
     config: AddonConfig,
     linkService: AddonLinkService,
-    statusSignal: StatusSignal
+    shared: SharedPorts
 ): DiscordClientExtension {
     return {
         intents: addonDiscordIntents(config),
@@ -102,7 +109,8 @@ function buildDiscordExtension(
             findGuildLink: (id) => linkService.getGuildLinkForDiscordGuild(id),
             discordOwnerId: deps.discordOwnerId,
             isChannelLinked: channelLinkCheck(linkService),
-            statusSignal,
+            statusSignal: shared.statusSignal,
+            threadReset: shared.threadReset,
         }),
     };
 }
@@ -111,7 +119,7 @@ async function startForkAddons(
     deps: ForkBootstrapDeps,
     config: AddonConfig,
     services: UpstreamServices,
-    statusSignal: StatusSignal
+    shared: SharedPorts
 ): Promise<void> {
     const { runtime, logger } = deps;
     const addons = await runtime.startAddons(
@@ -126,7 +134,8 @@ async function startForkAddons(
                 commandPrefix: deps.commandPrefix,
                 sequelize: deps.sequelize,
                 bridge: runtime.createBridge(services),
-                statusSignal,
+                statusSignal: shared.statusSignal,
+                threadReset: shared.threadReset,
             },
             config
         )
@@ -141,7 +150,10 @@ async function startForkAddons(
 export function createForkBootstrap(deps: ForkBootstrapDeps): ForkBootstrap {
     const config = requireAddonConfig(deps.env);
     // Shared by the `sync` command and the add-ons, which start later.
-    const statusSignal = new StatusSignal();
+    const shared: SharedPorts = {
+        statusSignal: new StatusSignal(),
+        threadReset: new ThreadResetPort(),
+    };
     return {
         config,
         initDatabase: async () => {
@@ -152,8 +164,7 @@ export function createForkBootstrap(deps: ForkBootstrapDeps): ForkBootstrap {
             );
         },
         discordExtension: (linkService) =>
-            buildDiscordExtension(deps, config, linkService, statusSignal),
-        start: (services) =>
-            startForkAddons(deps, config, services, statusSignal),
+            buildDiscordExtension(deps, config, linkService, shared),
+        start: (services) => startForkAddons(deps, config, services, shared),
     };
 }

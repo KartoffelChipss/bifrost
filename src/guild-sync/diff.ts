@@ -3,6 +3,7 @@ import { IdMap } from './idmap';
 import type { FieldChange, Finding, MapRow, PlanOp, SyncKind } from './ops';
 import { diffOrders } from './order';
 import { NO_BITS, flagNames, translatePermissions } from './permissions';
+import { oldestFirstPerParent } from './postOrder';
 import type { Fields, ProjectionContext } from './project';
 import {
     botHeldBits,
@@ -763,11 +764,16 @@ function diffThreads(input: DiffInput, ctx: ProjectionContext, out: Out) {
     const mapped = (t: ThreadSnap) => ctx.map.dest('channel', t.parentId);
     const present = new Set(destination.channels.map((c) => c.id));
     const included = (t: ThreadSnap) => !input.excluded?.has(t.id);
-    const sources = holdUnbridgedPosts(
-        input,
-        source.threads.filter((t) => included(t) && mapped(t) !== null),
-        ctx.map,
-        out
+    // Fluxer cannot backdate a post, so new ones are created oldest first
+    // in each parent (postOrder.ts). Mapped threads keep their places.
+    const sources = oldestFirstPerParent(
+        holdUnbridgedPosts(
+            input,
+            source.threads.filter((t) => included(t) && mapped(t) !== null),
+            ctx.map,
+            out
+        ),
+        (t) => ctx.map.dest('thread', t.id) === null
     );
     diffObjects(
         {

@@ -6,10 +6,13 @@ import { runAddonMigrations } from '../../src/addons/db/migrator';
 import { TABLES } from '../../src/addons/db/schema';
 import { EMPTY_BODY } from '../../src/guild-sync/plan';
 import { stableJson } from '../../src/guild-sync/snapshot';
+import { latestIntent } from '../../src/guild-sync/adopt';
+import { PostgresParkedMessages } from '../../src/guild-sync/parkedMessages';
 import {
     HISTORY_LOCK_KEY,
     PLANS_KEPT_PER_LINK,
     PostgresGuildSyncStore,
+    THREAD_RESET_OP,
 } from '../../src/guild-sync/store';
 import { PostgresHistoryStore } from '../../src/history/store';
 import { PostgresIdentityStore } from '../../src/identity/store';
@@ -90,6 +93,57 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         const loaded = await store.lastSnapshot(linkId, 'discord', true);
         assert.ok(loaded);
         assert.equal(stableJson(loaded), stableJson(snapshot));
+    });
+
+    it('refreshes the newest healthy snapshot in place', async () => {
+        const post = (lastMessageId: string) => ({
+            id: '500',
+            parentId: 'c1',
+            name: 'post',
+            archived: false,
+            locked: false,
+            tags: [],
+            lastMessageId,
+        });
+        // Newer than the snapshots earlier tests saved.
+        const at = new Date(Date.now() + 60 * 60_000);
+        await store.saveSnapshot(
+            linkId,
+            discordGuild({ name: 'older', threads: [post('600')] }),
+            true,
+            new Date(at.getTime() - 60_000)
+        );
+        await store.saveSnapshot(
+            linkId,
+            discordGuild({ threads: [post('600')] }),
+            true,
+            at
+        );
+        // An unhealthy read is newer, but never the one refreshed.
+        await store.saveSnapshot(
+            linkId,
+            discordGuild({ name: 'broken' }),
+            false,
+            new Date(at.getTime() + 60_000)
+        );
+        const count = async () =>
+            (await db.query(`SELECT id FROM ${TABLES.snapshots}`))[0].length;
+        const before = await count();
+        await store.refreshSnapshot(
+            linkId,
+            discordGuild({ threads: [post('700')] })
+        );
+        assert.equal(await count(), before);
+        const loaded = await store.lastSnapshot(linkId, 'discord', true);
+        assert.equal(loaded?.name, 'Server');
+        assert.equal(loaded?.threads[0].lastMessageId, '700');
+        const [older] = await db.query<{ payload: { threads: unknown[] } }>(
+            `SELECT payload FROM ${TABLES.snapshots} WHERE payload->>'name' = 'older'`,
+            { type: QueryTypes.SELECT }
+        );
+        assert.deepEqual(older.payload.threads, [post('600')]);
+        const unhealthy = await store.lastSnapshot(linkId, 'discord', false);
+        assert.equal(unhealthy?.name, 'broken');
     });
 
     it('prunes old snapshots but keeps the newest healthy one', async () => {
@@ -618,6 +672,239 @@ describe('PostgresGuildSyncStore', { skip: !url }, () => {
         assert.deepEqual(await store.countMapped(otherLink), {
             role: 2,
             channel: 1,
+        });
+    });
+    describe('forgetCopiedThread', () => {
+        let link: string;
+        const now = new Date();
+        const history = () => new PostgresHistoryStore(db);
+
+        async function thread(discordId: string, createdBySync: boolean) {
+            return store.insertMapping(
+                {
+                    guildLinkId: link,
+                    kind: 'thread',
+                    discordId,
+                    fluxerId: `f-${discordId}`,
+                    createdBySync,
+                    appliedFields: {},
+                },
+                now
+            );
+        }
+
+        async function relayed(discordId: string, n: number) {
+            await store.saveThreadMessage(
+                {
+                    guildLinkId: link,
+                    discordThreadId: discordId,
+                    fluxerThreadId: `f-${discordId}`,
+                    discordMessageId: `reset-dm${n}`,
+                    fluxerMessageId: `reset-fm${n}`,
+                },
+                now
+            );
+        }
+
+        async function park(side: 'discord' | 'fluxer', threadId: string) {
+            await new PostgresParkedMessages(db).park({
+                from: side,
+                messageId: `parked-${side}-${threadId}`,
+                threadId,
+                parentId: 'reset-parent',
+                webhookId: null,
+                parkedAt: now.getTime(),
+            });
+        }
+
+        async function job(discordId: string, n: number) {
+            await history().ensureJob(link, 'thread', discordId, 'p', now);
+            const found = (await history().listJobs(link)).find(
+                (j) => j.discordId === discordId
+            );
+            assert.ok(found);
+            await history().updateJob(
+                found.id,
+                {
+                    fluxerId: `f-${discordId}`,
+                    status: 'done',
+                    cutoffId: '500',
+                    checkpointId: '500',
+                    catchUps: 2,
+                    imported: 9,
+                    failures: 1,
+                    retries: 1,
+                    failingId: 'target',
+                    retryAt: now,
+                    skipped: 1,
+                    skipStreak: 1,
+                    streakFromId: '400',
+                    messageCount: 10,
+                    attachmentCount: 3,
+                    surveyedAt: now,
+                    importWebhook: { id: 'w', token: 'secret' },
+                    archiveThreadId: 'f-archive',
+                    lastError: 'boom',
+                },
+                now
+            );
+            await history().startMessage(
+                {
+                    discordMessageId: `reset-h${n}`,
+                    jobId: found.id,
+                    discordAuthorId: 'a',
+                    fluxerMessageId: null,
+                    fluxerTargetId: `f-${discordId}`,
+                    inThread: true,
+                    webhookId: 'w',
+                },
+                now
+            );
+            return found.id;
+        }
+
+        async function intent(sourceId: string, name: string) {
+            await store.audit(
+                {
+                    planId: randomUUID(),
+                    guildLinkId: link,
+                    op: 'create-intent',
+                    kind: 'thread',
+                    sourceId,
+                    destId: null,
+                    before: null,
+                    after: { name },
+                    result: 'intent',
+                },
+                new Date(now.getTime() - 60_000)
+            );
+        }
+
+        before(async () => {
+            link = randomUUID();
+            await db.query(
+                `INSERT INTO guild_links (id, "discordGuildId", "fluxerGuildId", "createdAt") VALUES ($1, 'dr', 'fr', now())`,
+                { bind: [link] }
+            );
+        });
+
+        it('clears exactly one copied thread and resets its history job', async () => {
+            const reset = await thread('reset-1', true);
+            await thread('reset-keep', false);
+            await relayed('reset-1', 1);
+            await relayed('reset-keep', 2);
+            await park('discord', 'reset-1');
+            await park('fluxer', 'f-reset-1');
+            await park('discord', 'reset-keep');
+            const resetJob = await job('reset-1', 1);
+            const keptJob = await job('reset-keep', 2);
+            await intent('reset-1', 'One');
+            await intent('reset-1', 'One renamed');
+            await intent('reset-keep', 'Kept');
+            const runId = randomUUID();
+
+            const cleared = await store.forgetCopiedThread(
+                link,
+                {
+                    rowId: reset.id,
+                    discordId: 'reset-1',
+                    fluxerId: 'f-reset-1',
+                },
+                { runId, gone: false },
+                now
+            );
+
+            assert.deepEqual(cleared, {
+                mapRows: 1,
+                threadMessages: 1,
+                parkedMessages: 2,
+                historyMessages: 1,
+                historyJobs: 1,
+                intents: 2,
+            });
+            const rows = await store.loadObjectMap(link);
+            assert.deepEqual(
+                rows.map((r) => r.discordId),
+                ['reset-keep']
+            );
+            assert.equal(
+                await store.findThreadMessage('discord', 'reset-dm1'),
+                null
+            );
+            assert.ok(await store.findThreadMessage('discord', 'reset-dm2'));
+            const parked = new PostgresParkedMessages(db);
+            assert.equal(await parked.waiting('discord', 'reset-1'), false);
+            assert.equal(await parked.waiting('fluxer', 'f-reset-1'), false);
+            assert.equal(await parked.waiting('discord', 'reset-keep'), true);
+            assert.equal(await history().importedByDiscordId('reset-h1'), null);
+            assert.ok(await history().importedByDiscordId('reset-h2'));
+            const fresh = await history().getJob(resetJob);
+            assert.deepEqual(
+                { ...fresh, id: '' },
+                {
+                    id: '',
+                    guildLinkId: link,
+                    kind: 'thread',
+                    discordId: 'reset-1',
+                    parentDiscordId: 'p',
+                    fluxerId: null,
+                    status: 'pending',
+                    cutoffId: null,
+                    checkpointId: '0',
+                    catchUps: 0,
+                    imported: 0,
+                    failures: 0,
+                    retries: 0,
+                    failingId: null,
+                    retryAt: null,
+                    skipped: 0,
+                    skipStreak: 0,
+                    streakFromId: null,
+                    messageCount: null,
+                    attachmentCount: null,
+                    surveyedAt: null,
+                    importWebhook: null,
+                    archiveThreadId: null,
+                    lastError: null,
+                }
+            );
+            const kept = await history().getJob(keptJob);
+            assert.equal(kept?.status, 'done');
+            assert.equal(kept?.cutoffId, '500');
+
+            const intents = await store.createIntents(link, new Date(0));
+            const usable = (sourceId: string, name: string) =>
+                latestIntent(intents, { kind: 'thread', sourceId, name });
+            assert.equal(usable('reset-1', 'One'), null);
+            assert.equal(usable('reset-1', 'One renamed'), null);
+            assert.notEqual(usable('reset-keep', 'Kept'), null);
+
+            const [audit] = await db.query<Record<string, unknown>>(
+                `SELECT op, "sourceId", "destId", result, after FROM ${TABLES.auditLog}
+                 WHERE "planId" = $1 AND op = $2`,
+                { bind: [runId, THREAD_RESET_OP], type: QueryTypes.SELECT }
+            );
+            assert.equal(audit.result, 'ok');
+            assert.equal(audit.destId, 'f-reset-1');
+            assert.deepEqual((audit.after as { gone: boolean }).gone, false);
+            // A reset is not a removal: the delete budget stays untouched.
+            assert.equal(await store.removalsSince(link, new Date(0)), 0);
+        });
+
+        it('never deletes a thread row recorded from Fluxer', async () => {
+            const [kept] = await store.loadObjectMap(link);
+            const cleared = await store.forgetCopiedThread(
+                link,
+                {
+                    rowId: kept.id,
+                    discordId: 'reset-keep',
+                    fluxerId: 'f-reset-keep',
+                },
+                { runId: randomUUID(), gone: true },
+                now
+            );
+            assert.equal(cleared.mapRows, 0);
+            assert.equal((await store.loadObjectMap(link)).length, 1);
         });
     });
 });
