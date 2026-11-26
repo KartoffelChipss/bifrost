@@ -19,6 +19,8 @@ export interface PlanInfo {
     readonly deferred: number;
     /** Null for a plan saved before this process started. */
     readonly at: Date | null;
+    /** The plan's restore lines (plan.ts restoreLines); absent for none. */
+    readonly restores?: readonly string[];
 }
 
 /** What the last apply run in this process did. */
@@ -98,7 +100,22 @@ function planLines(view: StatusView): string[] {
             `**Deferred:** ${count(plan.deferred)} changes wait for later cycles`
         );
     }
-    return lines;
+    return [...lines, ...restoreStatus(plan.restores ?? [])];
+}
+
+/** Restore lines shown in the status, bounded. */
+const MAX_STATUS_RESTORES = 5;
+
+/** The plan's restores: copies deleted on Fluxer that are recreated. */
+function restoreStatus(restores: readonly string[]): string[] {
+    if (restores.length === 0) return [];
+    const shown = restores.slice(0, MAX_STATUS_RESTORES);
+    const rest = restores.length - shown.length;
+    return [
+        '**Restores:** copies deleted on Fluxer',
+        ...shown,
+        ...(rest > 0 ? [`- and ${count(rest)} more lines`] : []),
+    ];
 }
 
 function applyLines(apply: ApplyInfo | null): string[] {

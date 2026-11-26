@@ -19,6 +19,7 @@ import type { ShrinkLimits } from './health';
 import { INTENT_WINDOW_MS, MAX_INTENTS, type CreateIntent } from './adopt';
 import type { JsonValue, MapRow, SyncKind } from './ops';
 import type { Plan, PlanBody } from './plan';
+import type { DestMissingUpdate } from './restore';
 import type { GuildSnapshot } from './snapshot';
 import { countObjects } from './snapshot';
 
@@ -109,6 +110,36 @@ export interface ThreadResetCleared {
     readonly historyJobs: number;
     /** Create intents answered with a refusal (adopt.ts). */
     readonly intents: number;
+}
+
+/** A copy deleted on Fluxer whose row a restore forgets (restore.ts). */
+export interface RestoreTarget {
+    /** Its `addon_object_map` row. */
+    readonly rowId: string;
+    readonly kind: SyncKind;
+    readonly discordId: string;
+    readonly fluxerId: string;
+    /** For a channel: the thread copies sync created in it. */
+    readonly threads: readonly CopiedThread[];
+}
+
+/** Rows a restore removed or reset, by table. All zero when it changed. */
+export interface RestoreCleared extends ThreadResetCleared {
+    /** Thread copies forgotten with a restored channel. */
+    readonly threads: number;
+}
+
+/** Adds up what several forgets cleared, table by table. */
+function sumCleared(
+    parts: readonly Readonly<Record<keyof ThreadResetCleared, number>>[]
+): Record<keyof ThreadResetCleared, number> {
+    const total = noneCleared();
+    for (const part of parts) {
+        for (const key of Object.keys(total) as (keyof ThreadResetCleared)[]) {
+            total[key] += part[key];
+        }
+    }
+    return total;
 }
 
 /** The database access the thread relay needs. */
@@ -243,6 +274,30 @@ export interface GuildSyncStore {
         audit: ThreadResetAudit,
         now: Date
     ): Promise<ThreadResetCleared>;
+    /** Saves the destination absence counters (restore.ts). */
+    saveDestMissing(
+        updates: readonly DestMissingUpdate[],
+        now: Date
+    ): Promise<void>;
+    /** Restores written since `since`, from the audit log. */
+    restoresSince(guildLinkId: string, since: Date): Promise<number>;
+    /**
+     * Forgets a copy deleted on Fluxer, so the next cycle creates it
+     * again, in one transaction: deletes its map row (only the active row
+     * created by sync with this kind and these IDs; when that row changed,
+     * nothing else is done and every count is zero); answers its create
+     * intents with a refusal, so the create is never adopted onto an
+     * object a person made; for a thread, clears what forgetCopiedThread
+     * clears; for a channel, puts its history job back to a fresh pending
+     * state, deletes its imported history messages and forgets its thread
+     * copies the same way; and writes a RESTORE_OP audit row.
+     */
+    restoreCopy(
+        guildLinkId: string,
+        target: RestoreTarget,
+        runId: string,
+        now: Date
+    ): Promise<RestoreCleared>;
 }
 
 /** Arbitrary constant: 'bfsg' in ASCII. Shared by every fork instance. */
@@ -322,14 +377,18 @@ export function parseSettings(row: Row): SyncSettings {
     };
 }
 
+function optionalDate(value: unknown, field: string): Date | null {
+    if (value === null) return null;
+    if (!(value instanceof Date)) {
+        throw new StoreDataError(`${field} is not a date`);
+    }
+    return value;
+}
+
 /** Parses an `addon_object_map` row. */
 export function parseMapRow(row: Row): MapRow {
     if (typeof row.id !== 'string' || typeof row.createdBySync !== 'boolean') {
         throw new StoreDataError('object map row is malformed');
-    }
-    const missingSince = row.missingSince;
-    if (missingSince !== null && !(missingSince instanceof Date)) {
-        throw new StoreDataError('missingSince is not a date');
     }
     return {
         id: row.id,
@@ -338,8 +397,13 @@ export function parseMapRow(row: Row): MapRow {
         fluxerId: optionalId(row.fluxerId, 'fluxerId'),
         state: oneOf(OBJECT_STATES, row.state, 'state'),
         createdBySync: row.createdBySync,
-        missingSince,
+        missingSince: optionalDate(row.missingSince, 'missingSince'),
         missingCount: int(row.missingCount, 'missingCount'),
+        destMissingSince: optionalDate(
+            row.destMissingSince,
+            'destMissingSince'
+        ),
+        destMissingCount: int(row.destMissingCount, 'destMissingCount'),
         appliedFields: parseApplied(row.appliedFields),
     };
 }
@@ -501,11 +565,15 @@ function touchedRows(meta: unknown): number {
     return typeof meta === 'number' ? meta : rowCount(meta);
 }
 
-/** What forgetCopiedThread binds into its statements. */
+/** What the forget statements bind: one map row and its cleanup. */
 interface ForgetInput {
     readonly linkId: string;
-    readonly thread: CopiedThread;
-    readonly audit: ThreadResetAudit;
+    readonly kind: SyncKind;
+    readonly rowId: string;
+    readonly discordId: string;
+    readonly fluxerId: string;
+    /** Groups the audit rows of one run: a reset run or a plan. */
+    readonly runId: string;
     readonly now: Date;
 }
 
@@ -514,41 +582,39 @@ type ForgetStatement = {
     readonly bind: (input: ForgetInput) => unknown[];
 };
 
+/** What a forget can clear, by table. */
+type ForgetKey = keyof ThreadResetCleared;
+
 /**
- * The statements forgetCopiedThread runs, in order, keyed by what they
- * count. The map row goes only when it is still the active thread row
- * created by sync with exactly these IDs.
+ * The statements that forget one copied object, keyed by what they count.
+ * The map row goes only when it is still the active row created by sync
+ * with exactly these IDs and this kind. The history statements match the
+ * kind's history job (channels and threads); the message statements are
+ * run for threads only.
  */
-const FORGET_THREAD: Readonly<
-    Record<keyof ThreadResetCleared, ForgetStatement>
-> = {
+const FORGET: Readonly<Record<ForgetKey, ForgetStatement>> = {
     mapRows: {
         sql: `DELETE FROM ${TABLES.objectMap}
             WHERE id = $1 AND "guildLinkId" = $2 AND "discordId" = $3 AND "fluxerId" = $4
-              AND kind = 'thread' AND state = 'active' AND "createdBySync"`,
-        bind: (i) => [
-            i.thread.rowId,
-            i.linkId,
-            i.thread.discordId,
-            i.thread.fluxerId,
-        ],
+              AND kind = $5 AND state = 'active' AND "createdBySync"`,
+        bind: (i) => [i.rowId, i.linkId, i.discordId, i.fluxerId, i.kind],
     },
     threadMessages: {
         sql: `DELETE FROM ${TABLES.threadMessages}
             WHERE "guildLinkId" = $1 AND ("discordThreadId" = $2 OR "fluxerThreadId" = $3)`,
-        bind: (i) => [i.linkId, i.thread.discordId, i.thread.fluxerId],
+        bind: (i) => [i.linkId, i.discordId, i.fluxerId],
     },
     // Parked rows carry no link; snowflakes are unique across guilds.
     parkedMessages: {
         sql: `DELETE FROM ${TABLES.parkedMessages}
             WHERE (side = 'discord' AND "threadId" = $1) OR (side = 'fluxer' AND "threadId" = $2)`,
-        bind: (i) => [i.thread.discordId, i.thread.fluxerId],
+        bind: (i) => [i.discordId, i.fluxerId],
     },
     historyMessages: {
         sql: `DELETE FROM ${TABLES.historyMessages} WHERE "jobId" IN (
             SELECT id FROM ${TABLES.historyJobs}
-            WHERE "guildLinkId" = $1 AND kind = 'thread' AND "discordId" = $2)`,
-        bind: (i) => [i.linkId, i.thread.discordId],
+            WHERE "guildLinkId" = $1 AND kind = $3 AND "discordId" = $2)`,
+        bind: (i) => [i.linkId, i.discordId, i.kind],
     },
     // Every column back to its value from ensureJob (history/store.ts).
     historyJobs: {
@@ -559,32 +625,33 @@ const FORGET_THREAD: Readonly<
               "messageCount" = NULL, "attachmentCount" = NULL, "surveyedAt" = NULL,
               "importWebhookId" = NULL, "importWebhookToken" = NULL, "archiveThreadId" = NULL,
               "lastError" = NULL, "updatedAt" = $3
-            WHERE "guildLinkId" = $1 AND kind = 'thread' AND "discordId" = $2`,
-        bind: (i) => [i.linkId, i.thread.discordId, i.now],
+            WHERE "guildLinkId" = $1 AND kind = $4 AND "discordId" = $2`,
+        bind: (i) => [i.linkId, i.discordId, i.now, i.kind],
     },
     // One refusal per intent name still in the adoption window (adopt.ts).
     intents: {
         sql: `INSERT INTO ${TABLES.auditLog} ("planId", "guildLinkId", op, kind, "sourceId", "destId", before, after, result, at)
-            SELECT $3, $1, 'create-intent', 'thread', $2, NULL, NULL,
+            SELECT $3, $1, 'create-intent', $7, $2, NULL, NULL,
                    jsonb_build_object('name', named.name, 'refused', true), 'refused', $4
             FROM (SELECT DISTINCT after->>'name' AS name FROM ${TABLES.auditLog}
-                  WHERE "guildLinkId" = $1 AND op = 'create-intent' AND kind = 'thread'
+                  WHERE "guildLinkId" = $1 AND op = 'create-intent' AND kind = $7
                     AND "sourceId" = $2 AND result = 'intent' AND at >= $5
                     AND after->>'name' IS NOT NULL
                   LIMIT $6) named`,
         bind: (i) => [
             i.linkId,
-            i.thread.discordId,
-            i.audit.runId,
+            i.discordId,
+            i.runId,
             i.now,
             new Date(i.now.getTime() - INTENT_WINDOW_MS),
             MAX_INTENTS,
+            i.kind,
         ],
     },
 };
 
-/** The order forgetCopiedThread runs its statements in. */
-const FORGET_ORDER: readonly (keyof ThreadResetCleared)[] = [
+/** The order a thread's statements run in. The map row goes first. */
+const FORGET_THREAD: readonly ForgetKey[] = [
     'mapRows',
     'threadMessages',
     'parkedMessages',
@@ -593,8 +660,58 @@ const FORGET_ORDER: readonly (keyof ThreadResetCleared)[] = [
     'intents',
 ];
 
+/**
+ * What forgetting one restored copy runs, by kind. The map row goes
+ * first. A channel's history job starts over, so its history is copied
+ * into the new channel; the thread rows inside it are forgotten apart.
+ */
+function forgetSteps(kind: SyncKind): readonly ForgetKey[] {
+    if (kind === 'thread') return FORGET_THREAD;
+    if (kind === 'channel') {
+        return ['mapRows', 'historyMessages', 'historyJobs', 'intents'];
+    }
+    return ['mapRows', 'intents'];
+}
+
+/** Zero for every table a forget can clear. */
+function noneCleared(): Record<ForgetKey, number> {
+    return {
+        mapRows: 0,
+        threadMessages: 0,
+        parkedMessages: 0,
+        historyMessages: 0,
+        historyJobs: 0,
+        intents: 0,
+    };
+}
+
+/** The forget input for one thread copy. */
+function threadInput(
+    linkId: string,
+    thread: CopiedThread,
+    runId: string,
+    now: Date
+): ForgetInput {
+    return {
+        linkId,
+        kind: 'thread',
+        rowId: thread.rowId,
+        discordId: thread.discordId,
+        fluxerId: thread.fluxerId,
+        runId,
+        now,
+    };
+}
+
 /** The audit op of a thread reset's delete. Not a removal: no budget. */
 export const THREAD_RESET_OP = 'reset-delete';
+
+/**
+ * The audit op of a restore: a copy deleted on Fluxer whose row was
+ * forgotten, so the next cycle creates it again. Not a removal: no delete
+ * budget. The daily restore cap counts these rows (restore.ts).
+ */
+export const RESTORE_OP = 'restore';
 
 /** {@link GuildSyncStore} on the fork's Postgres database. */
 export class PostgresGuildSyncStore
@@ -661,7 +778,8 @@ export class PostgresGuildSyncStore
 
     async loadObjectMap(guildLinkId: string): Promise<MapRow[]> {
         const rows = await this.db.query<Row>(
-            `SELECT id, kind, "discordId", "fluxerId", state, "createdBySync", "missingSince", "missingCount", "appliedFields"
+            `SELECT id, kind, "discordId", "fluxerId", state, "createdBySync", "missingSince", "missingCount",
+                    "destMissingSince", "destMissingCount", "appliedFields"
              FROM ${TABLES.objectMap} WHERE "guildLinkId" = $1 ORDER BY id LIMIT $2`,
             { bind: [guildLinkId, MAX_MAP_ROWS + 1], type: QueryTypes.SELECT }
         );
@@ -859,6 +977,8 @@ export class PostgresGuildSyncStore
             createdBySync: mapping.createdBySync,
             missingSince: null,
             missingCount: 0,
+            destMissingCount: 0,
+            destMissingSince: null,
             appliedFields: mapping.appliedFields,
         };
     }
@@ -1135,26 +1255,155 @@ export class PostgresGuildSyncStore
         audit: ThreadResetAudit,
         now: Date
     ): Promise<ThreadResetCleared> {
-        const input: ForgetInput = { linkId: guildLinkId, thread, audit, now };
+        const input = threadInput(guildLinkId, thread, audit.runId, now);
         return this.db.transaction(async (transaction) => {
-            const counts: Record<keyof ThreadResetCleared, number> = {
-                mapRows: 0,
-                threadMessages: 0,
-                parkedMessages: 0,
-                historyMessages: 0,
-                historyJobs: 0,
-                intents: 0,
+            const counts = await this.runForget(
+                input,
+                FORGET_THREAD,
+                transaction
+            );
+            await this.auditReset(input, audit.gone, counts, transaction);
+            return counts;
+        });
+    }
+
+    /** Runs forget statements in order and returns what each cleared. */
+    private async runForget(
+        input: ForgetInput,
+        steps: readonly ForgetKey[],
+        transaction: Transaction
+    ): Promise<Record<ForgetKey, number>> {
+        const counts = noneCleared();
+        for (const key of steps) {
+            const statement = FORGET[key];
+            counts[key] = await this.runCounted(
+                statement.sql,
+                statement.bind(input),
+                transaction
+            );
+        }
+        return counts;
+    }
+
+    async restoreCopy(
+        guildLinkId: string,
+        target: RestoreTarget,
+        runId: string,
+        now: Date
+    ): Promise<RestoreCleared> {
+        const input: ForgetInput = {
+            linkId: guildLinkId,
+            kind: target.kind,
+            rowId: target.rowId,
+            discordId: target.discordId,
+            fluxerId: target.fluxerId,
+            runId,
+            now,
+        };
+        const [first, ...rest] = forgetSteps(target.kind);
+        return this.db.transaction(async (transaction) => {
+            const own = await this.runForget(input, [first], transaction);
+            if (own.mapRows === 0) return { ...noneCleared(), threads: 0 };
+            const cleanup = await this.runForget(input, rest, transaction);
+            const children = await this.forgetChildren(
+                input,
+                target.kind === 'channel' ? target.threads : [],
+                transaction
+            );
+            const result: RestoreCleared = {
+                ...sumCleared([own, cleanup, children.counts]),
+                threads: children.threads,
             };
-            for (const key of FORGET_ORDER) {
-                const statement = FORGET_THREAD[key];
-                counts[key] = await this.runCounted(
-                    statement.sql,
-                    statement.bind(input),
-                    transaction
+            await this.auditRestore(input, result, transaction);
+            return result;
+        });
+    }
+
+    /** Forgets the thread copies of a restored channel, in its transaction. */
+    private async forgetChildren(
+        input: ForgetInput,
+        threads: readonly CopiedThread[],
+        transaction: Transaction
+    ): Promise<{ counts: Record<ForgetKey, number>; threads: number }> {
+        const [first, ...rest] = FORGET_THREAD;
+        const parts: Record<ForgetKey, number>[] = [];
+        for (const thread of threads.slice(0, MAX_MAP_ROWS)) {
+            const child = threadInput(
+                input.linkId,
+                thread,
+                input.runId,
+                input.now
+            );
+            const row = await this.runForget(child, [first], transaction);
+            // A thread row that changed meanwhile is left as it is.
+            if (row.mapRows === 0) continue;
+            const cleanup = await this.runForget(child, rest, transaction);
+            parts.push(sumCleared([row, cleanup]));
+        }
+        return { counts: sumCleared(parts), threads: parts.length };
+    }
+
+    /** The audit row of a restore, in its transaction. */
+    private async auditRestore(
+        input: ForgetInput,
+        cleared: RestoreCleared,
+        transaction: Transaction
+    ): Promise<void> {
+        await this.db.query(
+            `INSERT INTO ${TABLES.auditLog} ("planId", "guildLinkId", op, kind, "sourceId", "destId", before, after, result, at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, 'ok', $9)`,
+            {
+                bind: [
+                    input.runId,
+                    input.linkId,
+                    RESTORE_OP,
+                    input.kind,
+                    input.discordId,
+                    input.fluxerId,
+                    JSON.stringify({ fluxerId: input.fluxerId }),
+                    JSON.stringify({ fluxerId: null, cleared }),
+                    input.now,
+                ],
+                transaction,
+            }
+        );
+    }
+
+    async restoresSince(guildLinkId: string, since: Date): Promise<number> {
+        const [row] = await this.db.query<{ count: string }>(
+            `SELECT count(*) AS count FROM ${TABLES.auditLog}
+             WHERE "guildLinkId" = $1 AND op = $2 AND result = 'ok' AND at >= $3`,
+            {
+                bind: [guildLinkId, RESTORE_OP, since],
+                type: QueryTypes.SELECT,
+            }
+        );
+        const count = Number(row?.count);
+        if (!Number.isInteger(count))
+            throw new StoreDataError('restore count is not a number');
+        return count;
+    }
+
+    async saveDestMissing(
+        updates: readonly DestMissingUpdate[],
+        now: Date
+    ): Promise<void> {
+        if (updates.length === 0) return;
+        await this.db.transaction(async (transaction) => {
+            for (const update of updates) {
+                await this.db.query(
+                    `UPDATE ${TABLES.objectMap} SET "destMissingCount" = $2, "destMissingSince" = $3, "updatedAt" = $4 WHERE id = $1`,
+                    {
+                        bind: [
+                            update.rowId,
+                            update.destMissingCount,
+                            update.destMissingSince,
+                            now,
+                        ],
+                        transaction,
+                    }
                 );
             }
-            await this.auditReset(input, counts, transaction);
-            return counts;
         });
     }
 
@@ -1171,6 +1420,7 @@ export class PostgresGuildSyncStore
     /** The audit row of a thread reset's delete, in its transaction. */
     private async auditReset(
         input: ForgetInput,
+        gone: boolean,
         cleared: ThreadResetCleared,
         transaction: Transaction
     ): Promise<void> {
@@ -1179,12 +1429,12 @@ export class PostgresGuildSyncStore
              VALUES ($1, $2, $3, 'thread', $4, $5, NULL, $6::jsonb, 'ok', $7)`,
             {
                 bind: [
-                    input.audit.runId,
+                    input.runId,
                     input.linkId,
                     THREAD_RESET_OP,
-                    input.thread.discordId,
-                    input.thread.fluxerId,
-                    JSON.stringify({ gone: input.audit.gone, cleared }),
+                    input.discordId,
+                    input.fluxerId,
+                    JSON.stringify({ gone, cleared }),
                     input.now,
                 ],
                 transaction,

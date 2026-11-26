@@ -1,5 +1,6 @@
 import type { PlanStatus, SyncDirection } from '../addons/db/schema';
 import type { Finding, PlanOp } from './ops';
+import type { RestoreItem } from './restore';
 
 /** A plan as stored in `addon_plans.ops`. */
 export interface PlanBody {
@@ -16,6 +17,17 @@ export interface PlanBody {
      * Absent in plans saved before it.
      */
     readonly removalRowIds?: readonly string[];
+    /**
+     * Copies the sync created that were deleted on Fluxer and are
+     * restored: their rows are forgotten in apply mode, and the next
+     * cycle creates them again (restore.ts). Absent in older plans.
+     */
+    readonly restores?: readonly RestoreItem[];
+    /**
+     * Why the restores wait for an admin (the mass check), or null. An
+     * approval of this plan lets the next cycle restore the same rows.
+     */
+    readonly restoreHold?: string | null;
 }
 
 export interface Plan {
@@ -68,7 +80,23 @@ function tally(names: readonly string[]): string {
     return [...counts].map(([name, n]) => `${name} ${n}`).join(', ') || 'none';
 }
 
-/** A plain-text summary: counts, then the first ops. */
+/** One line per restore, bounded, with why they wait if they do. */
+export function restoreLines(body: PlanBody): string[] {
+    const restores = body.restores ?? [];
+    const hold = body.restoreHold ?? null;
+    const lines = hold ? [`Restores held: ${hold}`] : [];
+    const outcome = hold ? 'waits for approval' : 'will be recreated';
+    for (const r of restores.slice(0, SUMMARY_OP_LIMIT)) {
+        lines.push(
+            `- restore ${r.kind} "${r.name}" (${r.fluxerId}): deleted on Fluxer, ${outcome}`
+        );
+    }
+    const rest = restores.length - SUMMARY_OP_LIMIT;
+    if (rest > 0) lines.push(`- and ${rest} more restores`);
+    return lines;
+}
+
+/** A plain-text summary: counts, then the first ops and restores. */
 export function summarizePlan(plan: Plan): string {
     const { body } = plan;
     const lines = [`Plan ${plan.id} (${plan.status}, ${plan.direction})`];
@@ -88,5 +116,6 @@ export function summarizePlan(plan: Plan): string {
     }
     const rest = body.ops.length - SUMMARY_OP_LIMIT;
     if (rest > 0) lines.push(`- and ${rest} more`);
+    lines.push(...restoreLines(body));
     return lines.join('\n');
 }

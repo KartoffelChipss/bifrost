@@ -24,22 +24,25 @@ export interface MissingUpdate {
     readonly missingSince: Date | null;
 }
 
-function presentSourceIds(source: GuildSnapshot): Map<SyncKind, Set<string>> {
-    const categories = source.channels.filter(
+/** The IDs one snapshot holds, by kind. The guild itself is not listed. */
+export function presentIds(
+    snapshot: GuildSnapshot
+): Map<SyncKind, Set<string>> {
+    const categories = snapshot.channels.filter(
         (c) => channelKind(c.type) === 'category'
     );
-    const channels = source.channels.filter(
+    const channels = snapshot.channels.filter(
         (c) => channelKind(c.type) !== 'category'
     );
     const ids = (items: readonly { id: string }[]) =>
         new Set(items.map((i) => i.id));
     return new Map<SyncKind, Set<string>>([
-        ['role', ids(source.roles)],
+        ['role', ids(snapshot.roles)],
         ['category', ids(categories)],
         ['channel', ids(channels)],
-        ['emoji', ids(source.emojis)],
-        ['sticker', ids(source.stickers)],
-        ['thread', ids(source.threads)],
+        ['emoji', ids(snapshot.emojis)],
+        ['sticker', ids(snapshot.stickers)],
+        ['thread', ids(snapshot.threads)],
     ]);
 }
 
@@ -72,7 +75,7 @@ function threadParents(
  * thread list is incomplete, or its parent cannot be told, so a gap
  * anywhere could hide it.
  */
-function threadProtected(
+export function threadProtected(
     row: MapRow,
     gaps: ReadonlySet<string>,
     parentOf: (row: MapRow) => string | null
@@ -93,7 +96,7 @@ export function trackMissing(
     direction: SyncDirection,
     now: Date
 ): MissingUpdate[] {
-    const present = presentSourceIds(source);
+    const present = presentIds(source);
     // Without Manage Threads, archived private threads cannot be listed.
     const privateHidden = (source.privateThreadGaps ?? []).length > 0;
     const gaps = new Set(source.threadGaps);
