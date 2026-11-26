@@ -107,6 +107,8 @@ async function setup(
         canPrivate: true,
         excluded: false,
         look: discordLook,
+        /** Settings edits Discord refused on the new copy. */
+        refused: undefined as string[] | undefined,
     };
     const logger = createRecordingLogger();
     const parked = new MemoryParkedMessages();
@@ -123,6 +125,7 @@ async function setup(
                     id: 'd-post',
                     ownerId: 'dw-d-forum',
                     look: state.look(thread),
+                    refused: state.refused,
                 };
             },
             async createDiscordThread(_link, thread) {
@@ -247,6 +250,20 @@ describe('a thread started on Fluxer', () => {
         assert.ok(first && first !== 'skip' && first.starterCopied);
         assert.ok(second && second !== 'skip' && !second.starterCopied);
         assert.equal(second.pair.discordId, 'd-post');
+    });
+
+    it('logs each settings edit Discord refused on the copy', async () => {
+        const s = await setup(post({ pinned: true }));
+        s.state.refused = ['flags (a post is pinned already)'];
+        await s.relay.created('fluxer', inFluxerPost('f-post'), 'starter');
+        assert.ok(
+            s.logger.entries.some(
+                (e) =>
+                    e.level === 'warn' &&
+                    e.message.includes('refused') &&
+                    e.message.includes('a post is pinned already')
+            )
+        );
     });
 
     it('holds the reply outside apply mode', async () => {

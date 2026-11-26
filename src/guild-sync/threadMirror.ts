@@ -39,6 +39,11 @@ export interface DiscordThreadInfo {
     readonly ownerId: string | null;
     /** As the Discord reader snapshots it (readers/discord.ts). */
     readonly look: ThreadLook;
+    /**
+     * For a new copy: each edit of its settings Discord refused, with the
+     * fields and the reason. Those settings keep Discord's defaults.
+     */
+    readonly refused?: readonly string[];
 }
 
 export interface ThreadMirrorPorts {
@@ -371,6 +376,11 @@ export class ThreadMirror {
         logger.info(
             `[guild-sync] Copied Fluxer thread ${info.id} to Discord as ${copy.id}`
         );
+        for (const refusal of copy.refused ?? []) {
+            logger.warn(
+                `[guild-sync] Discord refused settings for thread ${copy.id}: ${refusal}`
+            );
+        }
         const fields = differing(copy.look, info);
         if (fields.length === 0) return;
         logger.warn(

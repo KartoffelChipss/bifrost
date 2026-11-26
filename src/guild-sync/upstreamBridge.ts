@@ -589,17 +589,12 @@ export class UpstreamBridge
         );
     }
 
-    /**
-     * Gives a new Discord thread the Fluxer thread's lock, slowmode,
-     * auto-archive and pin, where they differ. Needs Manage Threads; when
-     * refused, the copy keeps Discord's defaults, which the sync then
-     * reports as drift instead of writing them to Fluxer.
-     */
-    private async matchSettings(
+    /** The Fluxer thread's lock, slowmode and auto-archive, where they differ. */
+    private static settingChanges(
         thread: AnyThreadChannel,
         info: FluxerThreadInfo
-    ): Promise<AnyThreadChannel> {
-        const changes: ThreadEditOptions = {
+    ): ThreadEditOptions {
+        return {
             ...(info.locked && !thread.locked ? { locked: true } : {}),
             ...(info.rateLimitPerUser !== undefined &&
             info.rateLimitPerUser !== (thread.rateLimitPerUser ?? 0)
@@ -612,10 +607,78 @@ export class UpstreamBridge
                           info.autoArchiveDuration as ThreadAutoArchiveDuration,
                   }
                 : {}),
-            ...(info.pinned === true ? { flags: ChannelFlags.Pinned } : {}),
         };
-        if (Object.keys(changes).length === 0) return thread;
-        return thread.edit(changes).catch(() => thread);
+    }
+
+    /** The Fluxer thread's pin, where it differs. */
+    private static flagChanges(
+        thread: AnyThreadChannel,
+        info: FluxerThreadInfo
+    ): ThreadEditOptions {
+        const pin =
+            info.pinned === true && !thread.flags.has(ChannelFlags.Pinned);
+        return pin ? { flags: ChannelFlags.Pinned } : {};
+    }
+
+    /**
+     * One edit of a new thread. When Discord refuses it, the thread keeps
+     * what it had, and the refusal is noted for the mirror to log.
+     */
+    private static async tryEdit(
+        thread: AnyThreadChannel,
+        changes: ThreadEditOptions,
+        refused: string[]
+    ): Promise<AnyThreadChannel> {
+        const fields = Object.keys(changes);
+        if (fields.length === 0) return thread;
+        try {
+            return await thread.edit(changes);
+        } catch (error) {
+            const detail =
+                error instanceof Error ? error.message : String(error);
+            refused.push(`${fields.join(', ')} (${detail})`);
+            return thread;
+        }
+    }
+
+    /**
+     * Gives a new Discord thread the Fluxer thread's lock, slowmode,
+     * auto-archive and pin, where they differ. The pin is its own edit:
+     * Discord refuses it when the forum has a pinned post already, and
+     * that must not cost the other settings. Needs Manage Threads; what
+     * Discord refuses keeps Discord's default, which the sync then reports
+     * as drift instead of writing it to Fluxer. The thread returned is
+     * the one the last edit that took gave back, so its look is the copy's.
+     */
+    private async matchSettings(
+        thread: AnyThreadChannel,
+        info: FluxerThreadInfo
+    ): Promise<{ thread: AnyThreadChannel; refused: string[] }> {
+        const refused: string[] = [];
+        const set = await UpstreamBridge.tryEdit(
+            thread,
+            UpstreamBridge.settingChanges(thread, info),
+            refused
+        );
+        const flagged = await UpstreamBridge.tryEdit(
+            set,
+            UpstreamBridge.flagChanges(set, info),
+            refused
+        );
+        return { thread: flagged, refused };
+    }
+
+    /** A new copy as the mirror sees it, with the settings Discord refused. */
+    private async matchedInfo(
+        thread: AnyThreadChannel,
+        info: FluxerThreadInfo,
+        parent: object
+    ): Promise<DiscordThreadInfo> {
+        const matched = await this.matchSettings(thread, info);
+        const copy = this.discordThreadInfo(matched.thread, parent);
+        return matched.refused.length === 0
+            ? copy
+            : { ...copy, refused: matched.refused };
     }
 
     /** The Fluxer post's first message, or a placeholder when it is gone. */
@@ -695,10 +758,7 @@ export class UpstreamBridge
         if (!thread?.isThread()) {
             throw new Error(`Discord post ${threadId} is not a thread`);
         }
-        return this.discordThreadInfo(
-            await this.matchSettings(thread, info),
-            forum
-        );
+        return this.matchedInfo(thread, info, forum);
     }
 
     /** True when the bot may start a private thread in the channel. */
@@ -744,10 +804,7 @@ export class UpstreamBridge
                 ? await this.startPrivate(parent, settings, info)
                 : await parent.threads.create(settings);
         if (!thread) return null;
-        return this.discordThreadInfo(
-            await this.matchSettings(thread, info),
-            parent
-        );
+        return this.matchedInfo(thread, info, parent);
     }
 
     /** A private thread, or null when the bot may not start one there. */
