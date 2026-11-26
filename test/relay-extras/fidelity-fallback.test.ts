@@ -18,6 +18,7 @@ import {
     discordMessage,
     FakePorts,
     LINK,
+    fetchedUrls,
     loadWebhookService,
 } from './fidelity-fakes';
 
@@ -91,8 +92,7 @@ const descriptions = (embeds: unknown) =>
         (e) => e.toJSON().description
     );
 
-const fileUrls = (files: unknown) =>
-    (files as { url: string }[]).map((f) => f.url);
+const fileUrls = fetchedUrls;
 
 describe('rejectedField', () => {
     const fidelity = nativeCopy().fidelity;

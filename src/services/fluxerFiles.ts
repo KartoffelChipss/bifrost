@@ -1,0 +1,93 @@
+/**
+ * Fork: attachments for a Fluxer webhook copy.
+ *
+ * `@fluxerjs/core` downloads each `url` file with a 30 s limit and uploads
+ * the message within its 15 s request limit, so a large video fails the
+ * whole copy. Fluxer also refuses any file over its bot limit
+ * (ATTACHMENT_MAX_SIZE_BOT, 50 MiB, in packages/constants LimitConstants),
+ * which Discord files often exceed. This module downloads files with a
+ * longer limit and leaves out files too large for Fluxer, listing them in
+ * the text instead, so the rest of the message still arrives.
+ */
+
+/** Fluxer's per-file limit for bots (LimitConstants.ts). */
+export const FLUXER_MAX_FILE_BYTES = 50 * 1024 * 1024;
+/** Time allowed to download one file from Discord. */
+export const FILE_DOWNLOAD_TIMEOUT_MS = 120_000;
+/** Fluxer's message content limit (MAX_CONTENT_LENGTH in history). */
+const MAX_CONTENT_LENGTH = 4_000;
+
+export interface CopyFile {
+    readonly url: string;
+    readonly name: string;
+    /** Bytes, when the source said. */
+    readonly size?: number;
+}
+
+export interface DownloadedFile {
+    readonly name: string;
+    readonly filename: string;
+    readonly data: ArrayBuffer;
+}
+
+export type FetchFile = (
+    url: string,
+    timeoutMs: number
+) => Promise<ArrayBuffer>;
+
+/** Downloads a file, or rejects on a bad status or the time limit. */
+export const fetchFile: FetchFile = async (url, timeoutMs) => {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) {
+        throw new Error(`Failed to fetch file from ${url}: ${res.status}`);
+    }
+    return res.arrayBuffer();
+};
+
+const isTooLarge = (bytes: number | undefined) =>
+    bytes !== undefined && bytes > FLUXER_MAX_FILE_BYTES;
+
+function megabytes(bytes: number): string {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** The line that stands in for a file Fluxer cannot take. */
+export function tooLargeLine(file: CopyFile, bytes: number): string {
+    return `📎 ${file.name} (${megabytes(bytes)}) is too large to copy to Fluxer: ${file.url}`;
+}
+
+/**
+ * Downloads the files Fluxer can take. A file over the limit, by its
+ * declared or downloaded size, is left out and listed in `lines`.
+ */
+export async function prepareFiles(
+    files: readonly CopyFile[],
+    fetcher: FetchFile = fetchFile
+): Promise<{ files: DownloadedFile[]; lines: string[]; kept: number[] }> {
+    const out: DownloadedFile[] = [];
+    const lines: string[] = [];
+    const kept: number[] = [];
+    for (const [index, file] of files.entries()) {
+        if (isTooLarge(file.size)) {
+            lines.push(tooLargeLine(file, file.size ?? 0));
+            continue;
+        }
+        const data = await fetcher(file.url, FILE_DOWNLOAD_TIMEOUT_MS);
+        if (isTooLarge(data.byteLength)) {
+            lines.push(tooLargeLine(file, data.byteLength));
+            continue;
+        }
+        out.push({ name: file.name, filename: file.name, data });
+        kept.push(index);
+    }
+    return { files: out, lines, kept };
+}
+
+/** The content with the lines below it, within Fluxer's limit. */
+export function withLines(content: string, lines: readonly string[]): string {
+    if (lines.length === 0) return content;
+    const joined = [content, ...lines].filter((part) => part !== '').join('\n');
+    return joined.length <= MAX_CONTENT_LENGTH
+        ? joined
+        : `${joined.slice(0, MAX_CONTENT_LENGTH - 1)}…`;
+}

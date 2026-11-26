@@ -9,10 +9,12 @@ import {
     type ThreadEditOptions,
     type Webhook,
 } from '@fluxerjs/core';
+import { withTimeout } from '../../addons/host';
 import type { RelayPayload } from '../links';
 import { THREAD_ONLY_TYPES } from '../snapshot';
 import { fluxerThreadWebhook } from '../threadWebhook';
 import {
+    UPLOAD_WRITE_TIMEOUT_MS,
     timedWrite,
     type ChannelMove,
     type ChannelPatch,
@@ -491,9 +493,12 @@ export class FluxerGuildWriter implements GuildWriter {
             threadName: spec.name,
             appliedTags: tagIds(parent, spec.tags),
         });
-        const sent = await timedWrite(
-            'Fluxer forum post',
-            this.sendViaWebhook(webhook, spec.starter)
+        // A first message with files downloads and uploads them, which can
+        // take far longer than one plain write (fluxerFiles.ts).
+        const sent = await withTimeout(
+            this.sendViaWebhook(webhook, spec.starter),
+            UPLOAD_WRITE_TIMEOUT_MS,
+            'Fluxer forum post'
         );
         // Fluxer gives a post's first message the ID of the post itself
         // (MessageSendService.ts). No second call checks it: a failure

@@ -49,6 +49,9 @@ import { isRelayedFluxerChannel } from './relay-extras/channels';
 // Fork: tells real edits from pin and preview updates.
 import { isContentEdit } from './relay-extras/edits';
 
+/** Fork: the Fluxer REST request limit, long enough for a 50 MiB upload. */
+const FLUXER_REST_TIMEOUT_MS = 120_000;
+
 const startFluxerClient = async ({
     linkService,
     webhookService,
@@ -74,6 +77,9 @@ const startFluxerClient = async ({
 }): Promise<Client> => {
     const clientOptions: ClientOptions = {
         intents: 0,
+        // Fork: the library's 15 s request limit aborts uploads of large
+        // attachments, which Fluxer accepts up to 50 MiB (fluxerFiles.ts).
+        rest: { timeout: FLUXER_REST_TIMEOUT_MS },
         waitForGuilds: true,
         cache: {
             guilds: FLUXER_GUILD_CACHE_LIMIT,

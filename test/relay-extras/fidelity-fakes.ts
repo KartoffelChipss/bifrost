@@ -228,5 +228,27 @@ export async function loadWebhookService() {
     process.env.BF_DISCORD_TOKEN ??= 'test-token';
     process.env.BF_CONFIG_PATH ??= mkdtempSync(join(tmpdir(), 'bifrost-'));
     const module = await import('../../src/services/WebhookService');
-    return module.WebhookService;
+    const Base = module.WebhookService;
+    // Every service a test makes downloads files with fakeFetchFile.
+    const withFakeFiles = function (this: unknown) {
+        return new Base(fakeFetchFile);
+    } as unknown as typeof Base;
+    withFakeFiles.prototype = Base.prototype;
+    return withFakeFiles;
+}
+
+/** A file download that returns the URL itself, so tests can read it back. */
+export async function fakeFetchFile(url: string): Promise<ArrayBuffer> {
+    const bytes = new TextEncoder().encode(url);
+    return bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength
+    );
+}
+
+/** The URLs of files fakeFetchFile downloaded, from their data. */
+export function fetchedUrls(files: unknown): string[] {
+    return (files as { data: ArrayBuffer }[]).map((f) =>
+        new TextDecoder().decode(f.data)
+    );
 }

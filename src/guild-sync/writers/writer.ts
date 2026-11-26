@@ -192,6 +192,11 @@ export interface GuildWriter {
 
 /** Time limit for one destination write. */
 export const WRITE_TIMEOUT_MS = 30_000;
+/**
+ * Time limit for a write that downloads and uploads files, such as a forum
+ * post's first message: up to Fluxer's 50 MiB per file (fluxerFiles.ts).
+ */
+export const UPLOAD_WRITE_TIMEOUT_MS = 5 * 60_000;
 
 /** Runs one write under the time limit. */
 export function timedWrite<T>(label: string, write: Promise<T>): Promise<T> {
