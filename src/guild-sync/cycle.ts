@@ -2,7 +2,8 @@ import type { SyncDirection } from '../addons/db/schema';
 import type { AddonLogger } from '../addons/isolation';
 import type { AddonMode } from '../addons/config';
 import { INTENT_WINDOW_MS, markAdoptions } from './adopt';
-import { applyPlan, type ApplyResult } from './apply';
+import { applyPlan, failureKey, type ApplyResult } from './apply';
+import { holdNewerPosts, threadParents, type CreateHistory } from './postOrder';
 import type { FailureLedger } from './failures';
 import type { AssetSource } from './assets';
 import { diff, type DiffInput } from './diff';
@@ -427,6 +428,32 @@ async function withAdoptions(
     return markAdoptions({ ops, intents, source, destination, map });
 }
 
+/** What the failure ledger says of one create (postOrder.ts). */
+function createHistory(
+    ledger: FailureLedger | undefined,
+    key: string,
+    now: Date
+): CreateHistory {
+    if (!ledger) return { held: false, failures: 0 };
+    return { held: ledger.blocked(key, now), failures: ledger.count(key) };
+}
+
+/**
+ * The ops less the thread creates that wait behind an older post the
+ * failure ledger holds back, so they take no write-cap slot.
+ */
+function inPostOrder(
+    link: LinkedGuild,
+    source: GuildSnapshot,
+    ops: readonly PlanOp[],
+    deps: CycleDeps,
+    now: Date
+) {
+    return holdNewerPosts(ops, threadParents(source.threads), (op) =>
+        createHistory(deps.failures, failureKey(link.id, op), now)
+    );
+}
+
 /** Diff plus guards 1, 4 to 7 and 14, in that order. */
 async function buildBody(
     link: LinkedGuild,
@@ -468,12 +495,18 @@ async function buildBody(
         link.id,
         new Date(now.getTime() - DAY_MS)
     );
-    const budget = checkDeleteBudget(owned.kept, settings, removalsToday);
-    const capped = orderAndCap(owned.kept, settings.writeCapPerCycle);
+    const ordered = inPostOrder(link, source, owned.kept, deps, now);
+    const budget = checkDeleteBudget(ordered.kept, settings, removalsToday);
+    const capped = orderAndCap(ordered.kept, settings.writeCapPerCycle);
     const body: PlanBody = {
         ops: capped.now,
         deferred: capped.deferred,
-        findings: [...found.findings, ...removals.findings, ...owned.dropped],
+        findings: [
+            ...found.findings,
+            ...removals.findings,
+            ...owned.dropped,
+            ...ordered.findings,
+        ],
         needsApproval: budget.needsApproval,
         approvalReason: budget.needsApproval ? budget.reason : null,
         removalRowIds: removals.rowIds,
