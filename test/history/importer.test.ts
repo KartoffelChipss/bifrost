@@ -54,7 +54,8 @@ function source(): GuildSnapshot {
 function setup(
     mode: HistoryMode = 'apply',
     excluded: string[] = [],
-    inlineMax?: number
+    inlineMax?: number,
+    sendIntervalMs?: number
 ) {
     const store = new FakeHistoryStore();
     const ports = new FakeHistoryPorts();
@@ -84,6 +85,7 @@ function setup(
         excluded: new Set(excluded),
         adminChannel: async () => state.admin,
         inlineMax,
+        sendIntervalMs,
         writer: {
             async updateThread(_guild, id, patch) {
                 if (patch.locked === true && state.failLocks > 0) {
@@ -292,6 +294,16 @@ describe('run-time estimate', () => {
 });
 
 describe('copying a channel', () => {
+    it('waits the configured interval after each copy', async () => {
+        const s = setup('apply', [], undefined, 200);
+        s.ports.add('10', '11');
+        s.ports.add('10', '12');
+        s.map('channel', '10', 'f10');
+        await s.drain();
+        assert.equal(s.ports.sent.length, 2);
+        assert.deepEqual(s.pauses, [200, 200]);
+    });
+
     it('copies oldest first with the original time, then waits for the bridge', async () => {
         const s = setup();
         s.ports.add('10', '11');

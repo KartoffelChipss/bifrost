@@ -7,6 +7,8 @@
  * The environment only decides whether that switch is allowed at all.
  */
 
+import { SEND_INTERVAL_MS } from '../history/limits';
+
 export type AddonMode = 'read-only' | 'dry-run' | 'apply';
 
 export interface AddonConfig {
@@ -40,6 +42,12 @@ export interface AddonConfig {
      * 0 (the default) imports every channel inline.
      */
     readonly historyInlineMax?: number;
+    /**
+     * BF_HISTORY_SEND_INTERVAL_MS: the wait after each history copy, per
+     * webhook. Unset: SEND_INTERVAL_MS, which keeps under Fluxer's webhook
+     * rate limit. Lower it only while that limit is off.
+     */
+    readonly historySendIntervalMs?: number;
     /**
      * BF_ADDONS_RESET_USER_ID: the one Discord user who may run
      * `sync reset-threads`. Absent when unset or invalid, which turns the
@@ -140,6 +148,25 @@ function parseCount(
     return { ok: true, value: count };
 }
 
+/** Upper bound for BF_HISTORY_SEND_INTERVAL_MS: one minute. */
+const MAX_SEND_INTERVAL_MS = 60_000;
+
+/** Parses BF_HISTORY_SEND_INTERVAL_MS: unset or empty is the default. */
+function parseSendInterval(
+    value: string | undefined
+): { ok: true; value: number } | { ok: false; error: string } {
+    const text = (value ?? '').trim();
+    if (text === '') return { ok: true, value: SEND_INTERVAL_MS };
+    const ms = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+    if (!Number.isSafeInteger(ms) || ms > MAX_SEND_INTERVAL_MS) {
+        return {
+            ok: false,
+            error: `BF_HISTORY_SEND_INTERVAL_MS must be a whole number from 0 to ${MAX_SEND_INTERVAL_MS}`,
+        };
+    }
+    return { ok: true, value: ms };
+}
+
 /** Parses a comma- or space-separated list of Discord IDs. */
 function parseIdList(
     name: string,
@@ -172,6 +199,7 @@ function parseSettings(env: Env): {
     mode: AddonConfig['initialMode'];
     excluded: ReadonlySet<string>;
     inlineMax: number;
+    sendIntervalMs: number;
     resetUser: ReturnType<typeof parseResetUser>;
     errors: string[];
 } {
@@ -200,11 +228,14 @@ function parseSettings(env: Env): {
         env.BF_HISTORY_INLINE_MAX
     );
     if (!inlineMax.ok) errors.push(inlineMax.error);
+    const sendInterval = parseSendInterval(env.BF_HISTORY_SEND_INTERVAL_MS);
+    if (!sendInterval.ok) errors.push(sendInterval.error);
     return {
         flags,
         mode: mode.ok ? mode.value : 'dry-run',
         excluded: excluded.ok ? excluded.value : new Set(),
         inlineMax: inlineMax.ok ? inlineMax.value : 0,
+        sendIntervalMs: sendInterval.ok ? sendInterval.value : SEND_INTERVAL_MS,
         resetUser: parseResetUser(env.BF_ADDONS_RESET_USER_ID),
         errors,
     };
@@ -302,6 +333,7 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
             initialMode: settings.mode,
             excludedChannels: settings.excluded,
             historyInlineMax: settings.inlineMax,
+            historySendIntervalMs: settings.sendIntervalMs,
             ...(archive.dir ? { archiveDir: archive.dir } : {}),
             archiveMinFreeGb: archive.minFreeGb,
             ...(resetUser.id ? { resetUserId: resetUser.id } : {}),

@@ -92,6 +92,7 @@ export function addonFactories(
                 excludedChannels: config.excludedChannels,
                 commandPrefix: deps.commandPrefix,
                 inlineMax: config.historyInlineMax ?? 0,
+                sendIntervalMs: config.historySendIntervalMs,
                 statusSignal: deps.statusSignal,
             }),
         identity: () =>

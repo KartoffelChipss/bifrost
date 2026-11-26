@@ -5,6 +5,7 @@ import {
     parseAddonConfig,
     requireAddonConfig,
 } from '../../src/addons/config';
+import { SEND_INTERVAL_MS } from '../../src/history/limits';
 
 const ON = { BF_ADDONS_ENABLED: 'true', BF_DB_DIALECT: 'postgres' };
 
@@ -106,6 +107,32 @@ describe('parseAddonConfig', () => {
         for (const bad of ['-1', '1e4', 'lots', '99999999999']) {
             assert.equal(
                 parseAddonConfig({ ...ON, BF_HISTORY_INLINE_MAX: bad }).ok,
+                false,
+                bad
+            );
+        }
+    });
+
+    it('waits the default send interval unless one is set', () => {
+        const unset = parseAddonConfig(ON);
+        assert.equal(
+            unset.ok && unset.config.historySendIntervalMs,
+            SEND_INTERVAL_MS
+        );
+        const zero = parseAddonConfig({
+            ...ON,
+            BF_HISTORY_SEND_INTERVAL_MS: '0',
+        });
+        assert.equal(zero.ok && zero.config.historySendIntervalMs, 0);
+        const set = parseAddonConfig({
+            ...ON,
+            BF_HISTORY_SEND_INTERVAL_MS: '200',
+        });
+        assert.equal(set.ok && set.config.historySendIntervalMs, 200);
+        for (const bad of ['-1', '1.5', 'fast', '60001']) {
+            assert.equal(
+                parseAddonConfig({ ...ON, BF_HISTORY_SEND_INTERVAL_MS: bad })
+                    .ok,
                 false,
                 bad
             );

@@ -123,6 +123,11 @@ export interface ImporterDeps {
      */
     readonly inlineMax?: number;
     /**
+     * The wait after each copy, per webhook. Absent: SEND_INTERVAL_MS,
+     * which keeps under Fluxer's webhook rate limit.
+     */
+    readonly sendIntervalMs?: number;
+    /**
      * Records a thread state written straight to Fluxer in guild-sync's
      * object map, so its next cycle does not take it for drift.
      */
@@ -1164,7 +1169,7 @@ export class HistoryImporter {
             retryAt: null,
         };
         await store.updateJob(job.id, patch, now());
-        await this.deps.pause(SEND_INTERVAL_MS);
+        await this.deps.pause(this.deps.sendIntervalMs ?? SEND_INTERVAL_MS);
         return { ...job, ...patch };
     }
 
