@@ -31,7 +31,12 @@ import { destIdOf, isRemoval, sourceIdOf } from './ops';
 import { EMPTY_BODY, summarizePlan, type Plan, type PlanBody } from './plan';
 import type { GuildReader } from './readers/reader';
 import type { GuildSnapshot } from './snapshot';
-import { countObjects, excludedIds, stableJson } from './snapshot';
+import {
+    countObjects,
+    excludedIds,
+    stableJson,
+    withoutActivity,
+} from './snapshot';
 import { MapTooLargeError } from './store';
 import type { GuildSyncStore, SyncSettings } from './store';
 import type { GuildWriter } from './writers/writer';
@@ -214,7 +219,12 @@ async function readAndGate(
     };
 }
 
-/** Saves a snapshot unless it matches the last one saved for that side. */
+/**
+ * Saves a snapshot unless it matches the last one saved for that side.
+ * When only thread activity changed, the last one is refreshed in place
+ * instead: history import orders threads by it, and a row per message
+ * would pile up.
+ */
 async function saveIfChanged(
     store: GuildSyncStore,
     linkId: string,
@@ -222,7 +232,13 @@ async function saveIfChanged(
     takenAt: Date
 ): Promise<void> {
     const last = await store.lastSnapshot(linkId, snapshot.side, true);
-    if (last && stableJson(last) === stableJson(snapshot)) return;
+    const fresh = stableJson(snapshot);
+    if (last && stableJson(last) === fresh) return;
+    const shape = (s: GuildSnapshot) => stableJson(withoutActivity(s));
+    if (last && shape(last) === shape(snapshot)) {
+        await store.refreshSnapshot(linkId, snapshot);
+        return;
+    }
     await store.saveSnapshot(linkId, snapshot, true, takenAt);
 }
 

@@ -160,6 +160,7 @@ export function fluxerThread(
         pinned: (t.flags & PINNED_FLAG) !== 0,
         rateLimitPerUser: t.rateLimitPerUser ?? 0,
         autoArchiveDuration: t.autoArchiveDuration,
+        lastMessageId: t.lastMessageId ?? null,
     };
 }
 

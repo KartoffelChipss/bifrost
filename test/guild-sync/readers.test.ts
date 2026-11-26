@@ -25,6 +25,7 @@ function thread(id: string) {
         rateLimitPerUser: 0,
         autoArchiveDuration: 1440,
         archiveTimestamp: `ts-${id}`,
+        lastMessageId: `last-${id}`,
     };
 }
 
@@ -162,6 +163,24 @@ describe('archived private threads', () => {
         }).read('g1');
         assert.ok(deep.ok);
         assert.deepEqual(deep.snapshot.privateThreadGaps, ['c1']);
+    });
+});
+
+describe('thread activity', () => {
+    it("reads each thread's newest message on both platforms", async () => {
+        const discord = await new DiscordGuildReader(discordClient(1)).read(
+            'g1'
+        );
+        const fluxer = await new FluxerGuildReader({
+            current: fluxerClient(1),
+        }).read('g1');
+        assert.ok(discord.ok && fluxer.ok);
+        for (const read of [discord, fluxer]) {
+            assert.deepEqual(
+                read.snapshot.threads.map((t) => t.lastMessageId),
+                ['last-p1']
+            );
+        }
     });
 });
 

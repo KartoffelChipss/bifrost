@@ -136,6 +136,15 @@ export interface GuildSyncStore {
         healthy: boolean,
         takenAt: Date
     ): Promise<void>;
+    /**
+     * Replaces the payload of the newest healthy snapshot of the
+     * snapshot's side, when only thread activity changed: history import
+     * orders threads by it, and a new row per message would pile up.
+     */
+    refreshSnapshot(
+        guildLinkId: string,
+        snapshot: GuildSnapshot
+    ): Promise<void>;
     saveMissing(updates: readonly MissingUpdate[], now: Date): Promise<void>;
     savePlan(plan: Plan, now: Date): Promise<void>;
     removalsSince(guildLinkId: string, since: Date): Promise<number>;
@@ -552,6 +561,22 @@ export class PostgresGuildSyncStore
                     JSON.stringify(countObjects(snapshot)),
                     JSON.stringify(snapshot),
                 ],
+            }
+        );
+    }
+
+    async refreshSnapshot(
+        guildLinkId: string,
+        snapshot: GuildSnapshot
+    ): Promise<void> {
+        await this.db.query(
+            `UPDATE ${TABLES.snapshots} SET payload = $3::jsonb
+             WHERE id = (
+                SELECT id FROM ${TABLES.snapshots}
+                WHERE "guildLinkId" = $1 AND side = $2 AND healthy
+                ORDER BY "takenAt" DESC LIMIT 1)`,
+            {
+                bind: [guildLinkId, snapshot.side, JSON.stringify(snapshot)],
             }
         );
     }
