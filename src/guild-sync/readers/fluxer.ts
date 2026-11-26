@@ -364,10 +364,27 @@ export class FluxerGuildReader implements GuildReader {
     }
 }
 
+/**
+ * One role, read from the full list: Fluxer has no route to read a single
+ * role (GuildRoleController.ts), so the library's fetchRole always 404s.
+ * A role missing from the list throws a 404, which isUnknown reads as gone.
+ */
+export async function fetchRoleFromList(
+    guild: Pick<Guild, 'fetchRoles'>,
+    id: string
+): Promise<unknown> {
+    const roles = await guild.fetchRoles();
+    const role = roles.find((r) => r.id === id);
+    if (role) return role;
+    throw Object.assign(new Error(`Role ${id} is not in the guild`), {
+        statusCode: 404,
+    });
+}
+
 function fetchOne(guild: Guild, kind: SyncKind, id: string): Promise<unknown> {
     switch (kind) {
         case 'role':
-            return guild.fetchRole(id);
+            return fetchRoleFromList(guild, id);
         case 'category':
         case 'channel':
         case 'thread':
