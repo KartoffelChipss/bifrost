@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Client } from '@fluxerjs/core';
-import { fetchRoleFromList } from '../../src/guild-sync/readers/fluxer';
+import { findListed } from '../../src/guild-sync/readers/fluxer';
 import {
     FluxerGuildWriter,
     roleUpdateBody,
@@ -22,7 +22,7 @@ function recordingClient(calls: Call[]) {
         (method: string) =>
         async (route: string, options?: unknown): Promise<unknown> => {
             calls.push({ method, route, options });
-            return {};
+            return undefined;
         };
     const rest = {
         get: record('get'),
@@ -36,6 +36,17 @@ function recordingClient(calls: Call[]) {
         roles,
         fetchRole: async () => {
             throw new Error('Role r1 not found in guild');
+        },
+        fetchEmoji: async () => {
+            throw new Error('Emoji e1 not found in guild');
+        },
+        fetchSticker: async () => {
+            throw new Error('Sticker s1 not found in guild');
+        },
+        // As the library does: it reads roles from Fluxer's empty 204 body.
+        setRolePositions: async () => {
+            const data: unknown = undefined;
+            return (data as unknown[]).map((r) => r);
         },
     };
     const client = {
@@ -115,18 +126,53 @@ describe('Fluxer role writes', () => {
     });
 });
 
-describe('Fluxer role lookup', () => {
-    const guild = {
-        fetchRoles: async () => [{ id: 'r1' }, { id: 'r2' }],
-    } as unknown as Parameters<typeof fetchRoleFromList>[0];
+describe('Fluxer lookup by list', () => {
+    const list = async () => [{ id: 'r1' }, { id: 'r2' }];
 
-    it('finds a role in the full list', async () => {
-        assert.deepEqual(await fetchRoleFromList(guild, 'r2'), { id: 'r2' });
+    it('finds an object in the full list', async () => {
+        assert.deepEqual(await findListed('r2', list), { id: 'r2' });
     });
 
-    it('reports a role missing from the list as a 404', async () => {
-        await assert.rejects(fetchRoleFromList(guild, 'gone'), {
-            statusCode: 404,
+    it('reports an object missing from the list as a 404', async () => {
+        await assert.rejects(findListed('gone', list), { statusCode: 404 });
+    });
+});
+
+describe('Fluxer writes without a single-object read', () => {
+    it('reorders roles with one PATCH and ignores the empty 204 body', async () => {
+        const calls: Call[] = [];
+        const { client } = recordingClient(calls);
+        await new FluxerGuildWriter({ current: client }).setRolePositions(
+            'g1',
+            [{ id: 'r1', position: 2 }]
+        );
+        assert.deepEqual(calls, [
+            {
+                method: 'patch',
+                route: '/guilds/g1/roles',
+                options: { body: [{ id: 'r1', position: 2 }], auth: true },
+            },
+        ]);
+    });
+
+    it('renames and deletes emojis and deletes stickers by ID', async () => {
+        const calls: Call[] = [];
+        const { client } = recordingClient(calls);
+        const writer = new FluxerGuildWriter({ current: client });
+        await writer.renameEmoji('g1', 'e1', 'wave');
+        await writer.deleteEmoji('g1', 'e1');
+        await writer.deleteSticker('g1', 's1');
+        assert.deepEqual(
+            calls.map((c) => `${c.method} ${c.route}`),
+            [
+                'patch /guilds/g1/emojis/e1',
+                'delete /guilds/g1/emojis/e1',
+                'delete /guilds/g1/stickers/s1',
+            ]
+        );
+        assert.deepEqual(calls[0].options, {
+            body: { name: 'wave' },
+            auth: true,
         });
     });
 });
