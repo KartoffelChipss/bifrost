@@ -6,6 +6,7 @@ import {
     HistoryImporter,
     MAX_FAILURES,
     MAX_GAP_PAGES,
+    MAX_RETRIES,
     MAX_SKIP_STREAK,
     RECOVERY_SCAN,
     MAX_PARALLEL,
@@ -65,6 +66,8 @@ function setup(
         clock: Date.parse('2026-11-25T12:00:00Z'),
         clockMoves: true,
         admin: null as string | null,
+        /** Thread locks that fail before one goes through. */
+        failLocks: 0,
     };
     const reports: string[] = [];
     const threadEdits: string[] = [];
@@ -83,6 +86,10 @@ function setup(
         inlineMax,
         writer: {
             async updateThread(_guild, id, patch) {
+                if (patch.locked === true && state.failLocks > 0) {
+                    state.failLocks -= 1;
+                    throw new Error('lock refused');
+                }
                 threadEdits.push(`${id} ${JSON.stringify(patch)}`);
             },
             async createThread(_guild, spec) {
@@ -537,6 +544,24 @@ describe('archive-thread mode', () => {
         assert.equal(s.store.job('30').status, 'ready');
     });
 
+    it('keeps a thread it made when locking it fails, rather than importing inline', async () => {
+        const s = setup('apply', ['20', '30'], 2);
+        for (const id of ['11', '12', '13']) s.ports.add('10', id);
+        s.map('channel', '10', 'f10');
+        s.state.failLocks = 1;
+        await s.importer.run(LINK);
+        assert.equal(s.store.job('10').archiveThreadId, 'thread-of-f10');
+        assert.equal(s.ports.sent.length, 0);
+        s.state.clock += RETRY_MAX_MS;
+        await s.drain();
+        assert.equal(
+            s.threadEdits.filter((e) => e.startsWith('create ')).length,
+            1
+        );
+        assert.equal(s.ports.sent.length, 3);
+        assert.ok(s.ports.sent.every((m) => m.threadId === 'thread-of-f10'));
+    });
+
     it('imports inline when the thread cannot be made', async () => {
         const s = setup('apply', ['20', '30'], 2);
         big(s, '10');
@@ -653,6 +678,129 @@ describe('failures and recovery', () => {
         assert.equal(backoffMs(1000), RETRY_MAX_MS);
     });
 
+    it('skips a message that keeps getting temporary errors after MAX_RETRIES, then copies on', async () => {
+        const s = setup('apply', ['20', '30']);
+        s.ports.add('10', '11');
+        s.ports.add('10', '12');
+        s.map('channel', '10', 'f10');
+        const original = s.ports.sendCopy.bind(s.ports);
+        let attempts = 0;
+        s.ports.sendCopy = async (target, payload) => {
+            if (!payload.content.startsWith('message 11\n'))
+                return original(target, payload);
+            attempts += 1;
+            throw Object.assign(new Error('Bad Gateway'), { statusCode: 502 });
+        };
+        for (let i = 0; i < 2 * (MAX_RETRIES + MAX_FAILURES); i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+            if (s.store.job('10').status !== 'importing') break;
+        }
+        assert.equal(attempts, MAX_RETRIES + MAX_FAILURES);
+        const job = s.store.job('10');
+        assert.equal(job.status, 'ready');
+        assert.equal(job.skipped, 1);
+        assert.deepEqual(
+            s.ports.sent.map((m) => m.content.split('\n')[0]),
+            ['message 12']
+        );
+    });
+
+    it('counts temporary errors per message, not across messages', async () => {
+        const s = setup('apply', ['20', '30']);
+        s.ports.add('10', '11');
+        s.ports.add('10', '12');
+        s.map('channel', '10', 'f10');
+        const original = s.ports.sendCopy.bind(s.ports);
+        let calls = 0;
+        s.ports.sendCopy = async (target, payload) => {
+            calls += 1;
+            const first = payload.content.startsWith('message 11\n');
+            // 11 times out MAX_RETRIES times; the last one went through.
+            if (first && calls === MAX_RETRIES)
+                s.ports.recentCopies = [
+                    {
+                        id: 'posted',
+                        webhookId: target.webhook.id,
+                        content: payload.content,
+                    },
+                ];
+            if (first || calls === MAX_RETRIES + 1)
+                throw Object.assign(new Error('timeout'), {
+                    name: 'TimeoutError',
+                });
+            return original(target, payload);
+        };
+        for (let i = 0; i <= MAX_RETRIES; i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+        }
+        assert.equal(s.store.messages[0]?.fluxerMessageId, 'posted');
+        const job = s.store.job('10');
+        assert.equal(job.failingId, '12');
+        assert.equal(job.retries, 1);
+        assert.equal(job.failures, 0);
+        await s.drain();
+        assert.equal(s.store.job('10').skipped, 0);
+        assert.equal(s.ports.sent.length, 1);
+    });
+
+    it('keeps retrying a temporary error outside any message without a bound', async () => {
+        const s = setup('apply', ['20', '30']);
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        const original = s.ports.listMessages.bind(s.ports);
+        let refusals = 2 * (MAX_RETRIES + MAX_FAILURES);
+        s.ports.listMessages = async (id, after, limit) => {
+            if (id === '10' && refusals-- > 0)
+                throw Object.assign(new Error('Service Unavailable'), {
+                    status: 503,
+                });
+            return original(id, after, limit);
+        };
+        for (let i = 0; i < 3 * (MAX_RETRIES + MAX_FAILURES); i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+        }
+        assert.equal(s.store.job('10').status, 'ready');
+        assert.equal(s.ports.sent.length, 1);
+    });
+
+    it('starts the lasting-error count over when the error moves from the target to a message', async () => {
+        const s = setup('apply', ['20', '30']);
+        s.ports.add('10', '11');
+        s.ports.add('10', '12');
+        s.map('channel', '10', 'f10');
+        const original = s.ports.listMessages.bind(s.ports);
+        let refusals = MAX_FAILURES - 1;
+        s.ports.listMessages = async (id, after, limit) => {
+            if (id === '10' && refusals-- > 0)
+                throw Object.assign(new Error('Missing Access'), {
+                    status: 403,
+                });
+            return original(id, after, limit);
+        };
+        for (let i = 0; i < MAX_FAILURES - 1; i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+        }
+        assert.equal(s.store.job('10').failures, MAX_FAILURES - 1);
+        assert.equal(s.store.job('10').failingId, 'target');
+        s.ports.failure = Object.assign(new Error('Invalid Form Body'), {
+            statusCode: 400,
+        });
+        s.ports.failNext = 1;
+        await s.importer.run(LINK);
+        const job = s.store.job('10');
+        assert.equal(job.skipped, 0);
+        assert.equal(job.failures, 1);
+        assert.equal(job.failingId, '11');
+        s.state.clock += RETRY_MAX_MS;
+        await s.drain();
+        assert.equal(s.ports.sent.length, 2);
+        assert.equal(s.store.job('10').skipped, 0);
+    });
+
     it('skips and records a message that keeps failing, then copies on', async () => {
         const s = setup();
         s.ports.add('10', '11');
@@ -716,6 +864,7 @@ describe('failures and recovery', () => {
     it('reports skipped messages in the summary', async () => {
         const s = setup('apply', ['20', '30']);
         s.ports.add('10', '11');
+        s.ports.add('10', '12');
         s.map('channel', '10', 'f10');
         s.ports.failure = Object.assign(new Error('bad'), { statusCode: 400 });
         s.ports.failNext = MAX_FAILURES;
@@ -727,7 +876,7 @@ describe('failures and recovery', () => {
         await s.drain();
         assert.match(
             s.reports.join('\n'),
-            /0 messages copied, 1 messages skipped, 0 jobs failed/
+            /1 messages copied, 1 messages skipped, 0 jobs failed/
         );
     });
 
@@ -1242,15 +1391,16 @@ describe('errors about the target', () => {
         assert.equal(s.ports.webhooks, MAX_FAILURES + 1);
     });
 
-    it('fails a job once MAX_SKIP_STREAK messages in a row are skipped, counting again after a copy', async () => {
+    it('fails a job once MAX_SKIP_STREAK messages in a row fail, counting again after a copy, and gives the streak back', async () => {
         const s = setup('apply', ['20', '30']);
         for (let i = 0; i < 2 * MAX_SKIP_STREAK; i++)
             s.ports.add('10', String(100 + i));
         s.map('channel', '10', 'f10');
         const ok = String(100 + MAX_SKIP_STREAK - 1);
         const original = s.ports.sendCopy.bind(s.ports);
+        let broken = true;
         s.ports.sendCopy = async (target, payload) => {
-            if (payload.content.startsWith(`message ${ok}\n`))
+            if (!broken || payload.content.startsWith(`message ${ok}\n`))
                 return original(target, payload);
             throw Object.assign(new Error('Invalid Form Body'), {
                 statusCode: 400,
@@ -1265,13 +1415,99 @@ describe('errors about the target', () => {
         const job = s.store.job('10');
         assert.equal(job.status, 'failed');
         assert.equal(job.imported, 1);
-        assert.equal(job.skipped, 2 * MAX_SKIP_STREAK - 1);
+        // The streak before the copy stays skipped; the one it failed in
+        // is given back, and the checkpoint is where that streak began.
+        assert.equal(job.skipped, MAX_SKIP_STREAK - 1);
+        assert.equal(job.skipStreak, 0);
+        assert.equal(job.streakFromId, null);
+        assert.equal(job.checkpointId, ok);
         assert.match(
             s.reports.join('\n'),
             new RegExp(
                 `${MAX_SKIP_STREAK} messages in a row could not be copied`
             )
         );
+        broken = false;
+        assert.equal(await s.store.retryFailed(LINK.id), 1);
+        await s.drain();
+        assert.deepEqual(
+            s.ports.sent.slice(1).map((m) => m.content.split('\n')[0]),
+            Array.from(
+                { length: MAX_SKIP_STREAK },
+                (_, i) => `message ${100 + MAX_SKIP_STREAK + i}`
+            )
+        );
+        assert.equal(s.store.job('10').status, 'ready');
+    });
+
+    it('fails a small job that skipped every message instead of finishing, and a retry copies them', async () => {
+        const s = setup('apply', ['20', '30']);
+        for (const id of ['11', '12', '13']) s.ports.add('10', id);
+        s.map('channel', '10', 'f10');
+        s.ports.failure = Object.assign(new Error('Max active threads'), {
+            statusCode: 400,
+            code: 'MAX_ACTIVE_THREADS',
+        });
+        s.ports.failNext = Number.MAX_SAFE_INTEGER;
+        for (let i = 0; i < 4 * MAX_FAILURES; i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+            if (s.store.job('10').status !== 'importing') break;
+        }
+        const job = s.store.job('10');
+        assert.equal(job.status, 'failed');
+        assert.equal(job.skipped, 0);
+        assert.equal(job.checkpointId, '0');
+        assert.deepEqual(
+            await s.store.channelsReadyToBridge(LINK.id),
+            new Set()
+        );
+        assert.match(
+            s.reports.join('\n'),
+            /stopped for channel 10: none of its messages could be copied \(3 skipped\)/
+        );
+        s.ports.failNext = 0;
+        assert.equal(await s.store.retryFailed(LINK.id), 1);
+        await s.drain();
+        assert.equal(s.ports.sent.length, 3);
+        assert.equal(s.store.job('10').status, 'ready');
+    });
+
+    it('stops skipping across a link once MAX_SKIP_STREAK messages in a row are skipped in its jobs', async () => {
+        const s = setup('apply', ['20', '30']);
+        const ids = ['10', '40', '50'];
+        s.state.snapshot = discordGuild({
+            channels: ids.map((id) => channel(id)),
+            threads: [],
+        });
+        for (const id of ids) {
+            for (let i = 1; i <= 4; i++) s.ports.add(id, `${id}${i}`);
+            s.map('channel', id, `f${id}`);
+        }
+        await s.importer.planJobs(LINK);
+        // Each job copied a message before the trouble began, so no job
+        // skips all of its messages and its own streak stays short.
+        for (const id of ids)
+            await s.store.updateJob(s.store.job(id).id, { imported: 1 });
+        s.ports.failure = Object.assign(new Error('Invalid Form Body'), {
+            statusCode: 400,
+        });
+        s.ports.failNext = Number.MAX_SAFE_INTEGER;
+        for (let i = 0; i < 10 * MAX_FAILURES; i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+        }
+        const jobs = ids.map((id) => s.store.job(id));
+        assert.ok(jobs.every((j) => j.status !== 'importing'));
+        const skipped = jobs.reduce((sum, j) => sum + j.skipped, 0);
+        assert.ok(skipped < MAX_SKIP_STREAK, `${skipped} skipped`);
+        const failed = jobs.filter((j) => j.status === 'failed');
+        assert.ok(failed.length > 0);
+        for (const j of failed) {
+            assert.equal(j.skipped, 0);
+            assert.equal(j.checkpointId, '0');
+        }
+        assert.match(s.reports.join('\n'), /across this server's channels/);
     });
 });
 
@@ -1358,6 +1594,28 @@ describe('channels bridged before their history', () => {
             /bridged before its history was copied, and its Fluxer channel cannot hold an archive thread/
         );
         assert.match(reports, /History import finished/);
+    });
+
+    it('reuses the archive thread it made when locking it failed, instead of making another', async () => {
+        const s = setup('apply', ['20', '30']);
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        await s.links.link(LINK.id, '10', 'f10');
+        s.ports.linkTimes.set('10', new Date(LINKED_AT));
+        s.state.failLocks = 2;
+        for (let i = 0; i < 10; i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+        }
+        assert.equal(
+            s.threadEdits.filter((e) => e.startsWith('create ')).length,
+            1
+        );
+        assert.equal(s.store.job('10').status, 'done');
+        assert.deepEqual(
+            s.ports.sent.map((m) => m.threadId),
+            ['thread-of-f10']
+        );
     });
 
     it('lets an admin retry a job that failed because its channel was bridged first', async () => {

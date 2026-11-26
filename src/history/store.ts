@@ -67,8 +67,10 @@ export interface HistoryStore {
     /** True when this Fluxer thread is an archive thread of history. */
     isArchiveThread(fluxerThreadId: string): Promise<boolean>;
     /**
-     * Restarts a link's failed jobs where they stopped. Returns how many.
-     * A job that never started goes back to pending.
+     * Restarts a link's failed jobs where they stopped, with fresh error
+     * counts and skip streak. Returns how many. A job that failed mid
+     * streak stopped before its first skip, so the skipped messages are
+     * tried again. A job that never started goes back to pending.
      */
     retryFailed(guildLinkId: string, now: Date): Promise<number>;
     isOptedOut(discordUserId: string): Promise<boolean>;
@@ -138,9 +140,11 @@ export function parseJob(row: Row): HistoryJob {
         imported: int(row, 'imported'),
         failures: int(row, 'failures'),
         retries: int(row, 'retries'),
+        failingId: optStr(row, 'failingId'),
         retryAt: row.retryAt instanceof Date ? row.retryAt : null,
         skipped: int(row, 'skipped'),
         skipStreak: int(row, 'skipStreak'),
+        streakFromId: optStr(row, 'streakFromId'),
         messageCount:
             row.messageCount === null ? null : int(row, 'messageCount'),
         attachmentCount:
@@ -179,9 +183,11 @@ const PATCH_COLUMNS: readonly (keyof JobPatch)[] = [
     'imported',
     'failures',
     'retries',
+    'failingId',
     'retryAt',
     'skipped',
     'skipStreak',
+    'streakFromId',
     'messageCount',
     'attachmentCount',
     'surveyedAt',
@@ -433,7 +439,8 @@ export class PostgresHistoryStore implements HistoryStore {
         const rows = await this.db.query<Row>(
             `UPDATE ${TABLES.historyJobs}
              SET status = CASE WHEN "cutoffId" IS NULL THEN 'pending' ELSE 'importing' END,
-                 failures = 0, retries = 0, "skipStreak" = 0, "retryAt" = NULL, "lastError" = NULL, "updatedAt" = $2
+                 failures = 0, retries = 0, "failingId" = NULL, "skipStreak" = 0, "streakFromId" = NULL,
+                 "retryAt" = NULL, "lastError" = NULL, "updatedAt" = $2
              WHERE "guildLinkId" = $1 AND status = 'failed'
              RETURNING id`,
             { bind: [guildLinkId, now], type: QueryTypes.SELECT }

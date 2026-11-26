@@ -3,6 +3,7 @@ import type { LinkedGuild } from '../guild-sync/cycle';
 import type { GuildWriter } from '../guild-sync/writers/writer';
 import { describeError } from './errors';
 import { PAGE_SIZE } from './limits';
+import type { HistoryStore } from './store';
 import { SURVEY_MAX_PAGES } from './survey';
 import type { HistoryJob, HistoryPorts } from './types';
 
@@ -25,6 +26,9 @@ export interface ArchiveDeps {
     readonly inlineMax: number;
     readonly ports: Pick<HistoryPorts, 'listMessages'>;
     readonly writer: Pick<GuildWriter, 'createThread' | 'updateThread'>;
+    /** Records a new thread on its job before anything else can fail. */
+    readonly store: Pick<HistoryStore, 'updateJob'>;
+    readonly now: () => Date;
     readonly logger: AddonLogger;
 }
 
@@ -33,13 +37,20 @@ export function archiveName(cutoff: Date): string {
     return `History before ${cutoff.toISOString().slice(0, 10)}`;
 }
 
+/**
+ * A thread is recorded on its job as soon as it is made. When a later
+ * step fails, such as locking it or starting the job, the retry reuses it
+ * instead of leaving an empty thread behind and making another.
+ */
 export class ArchiveThreads {
     constructor(private readonly deps: ArchiveDeps) {}
 
     /**
      * Makes the archive thread for a big channel and returns its ID, or
      * null when the channel imports inline. The thread starts locked; it
-     * opens only while a page is sent.
+     * opens only while a page is sent. Only a thread that cannot be made
+     * falls back to inline; a failure after that throws, so the job
+     * retries with the same thread.
      */
     async open(
         link: LinkedGuild,
@@ -47,20 +58,15 @@ export class ArchiveThreads {
         channelType: number | undefined,
         cutoff: Date
     ): Promise<string | null> {
-        const { inlineMax, logger } = this.deps;
-        if (inlineMax <= 0 || job.kind !== 'channel' || !job.fluxerId)
-            return null;
+        const { inlineMax } = this.deps;
+        if (job.kind !== 'channel' || !job.fluxerId) return null;
+        if (job.archiveThreadId) return this.lock(link, job.archiveThreadId);
+        if (inlineMax <= 0) return null;
         if (channelType === undefined || !THREAD_PARENTS.has(channelType))
             return null;
         if ((await this.countUpTo(job, inlineMax)) <= inlineMax) return null;
-        try {
-            return await this.create(link, job.fluxerId, channelType, cutoff);
-        } catch (error) {
-            logger.warn(
-                `[history] No archive thread for channel ${job.discordId}, importing inline: ${describeError(error)}`
-            );
-            return null;
-        }
+        const id = await this.tryCreate(link, job, channelType, cutoff);
+        return id === null ? null : this.keep(link, job, id);
     }
 
     /**
@@ -77,22 +83,45 @@ export class ArchiveThreads {
         linkedAt: Date
     ): Promise<string | null> {
         if (job.kind !== 'channel' || !job.fluxerId) return null;
+        if (job.archiveThreadId) return this.lock(link, job.archiveThreadId);
         if (channelType === undefined) {
             throw new Error('the channel type is not known yet');
         }
         if (!THREAD_PARENTS.has(channelType)) return null;
-        return this.create(link, job.fluxerId, channelType, linkedAt);
+        const id = await this.create(link, job.fluxerId, channelType, linkedAt);
+        return this.keep(link, job, id);
     }
 
-    /** Creates a locked archive thread named after the day it ends. */
+    /** Creates the thread, or logs why not and returns null. */
+    private async tryCreate(
+        link: LinkedGuild,
+        job: HistoryJob,
+        parentType: number,
+        cutoff: Date
+    ): Promise<string | null> {
+        try {
+            return await this.create(
+                link,
+                job.fluxerId ?? '',
+                parentType,
+                cutoff
+            );
+        } catch (error) {
+            this.deps.logger.warn(
+                `[history] No archive thread for channel ${job.discordId}, importing inline: ${describeError(error)}`
+            );
+            return null;
+        }
+    }
+
+    /** Creates an archive thread named after the day it ends. */
     private async create(
         link: LinkedGuild,
         parentId: string,
         parentType: number,
         cutoff: Date
     ): Promise<string> {
-        const { writer } = this.deps;
-        const id = await writer.createThread(link.fluxerGuildId, {
+        return this.deps.writer.createThread(link.fluxerGuildId, {
             parentId,
             parentType,
             name: archiveName(cutoff),
@@ -100,8 +129,24 @@ export class ArchiveThreads {
             starter: null,
             webhook: null,
         });
-        await writer.updateThread(link.fluxerGuildId, id, { locked: true });
-        return id;
+    }
+
+    /** Records a new thread on its job, then locks it. */
+    private async keep(
+        link: LinkedGuild,
+        job: HistoryJob,
+        threadId: string
+    ): Promise<string> {
+        const { store, now } = this.deps;
+        await store.updateJob(job.id, { archiveThreadId: threadId }, now());
+        return this.lock(link, threadId);
+    }
+
+    private async lock(link: LinkedGuild, threadId: string): Promise<string> {
+        await this.deps.writer.updateThread(link.fluxerGuildId, threadId, {
+            locked: true,
+        });
+        return threadId;
     }
 
     /** Locks and archives a finished archive thread for good. */

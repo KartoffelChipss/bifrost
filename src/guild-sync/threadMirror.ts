@@ -39,6 +39,11 @@ export interface DiscordThreadInfo {
     readonly ownerId: string | null;
     /** As the Discord reader snapshots it (readers/discord.ts). */
     readonly look: ThreadLook;
+    /**
+     * For a new copy: each edit of its settings Discord refused, with the
+     * fields and the reason. Those settings keep Discord's defaults.
+     */
+    readonly refused?: readonly string[];
 }
 
 export interface ThreadMirrorPorts {
@@ -137,6 +142,13 @@ export class ThreadMirror {
     /** One mirror at a time per thread, so a burst of replies makes one copy. */
     private readonly inFlight = new Map<string, Promise<MirrorResult>>();
 
+    /**
+     * The last mirror queued per Discord channel. Mirrors into one channel
+     * run one after another, so a copy is recorded before the next mirror
+     * looks for an earlier copy there and cannot take it for its own.
+     */
+    private readonly channelQueue = new Map<string, Promise<unknown>>();
+
     constructor(private readonly deps: ThreadMirrorDeps) {}
 
     /**
@@ -156,10 +168,31 @@ export class ThreadMirror {
                     ? { ...done, starterCopied: false }
                     : done
             );
-        const work = this.run(link, event, raw).finally(() =>
-            this.inFlight.delete(event.channelId)
-        );
+        const work = this.inChannelOrder(link.discordChannelId, () =>
+            this.run(link, event, raw)
+        ).finally(() => this.inFlight.delete(event.channelId));
         this.inFlight.set(event.channelId, work);
+        return work;
+    }
+
+    /** Runs `task` after every mirror queued before it for the channel. */
+    private inChannelOrder<T>(
+        channelId: string,
+        task: () => Promise<T>
+    ): Promise<T> {
+        const before = this.channelQueue.get(channelId) ?? Promise.resolve();
+        const work = before.then(task);
+        // The queue never rejects: a failed mirror must not stop the next.
+        const settled = work.then(
+            () => undefined,
+            () => undefined
+        );
+        this.channelQueue.set(channelId, settled);
+        void settled.then(() => {
+            if (this.channelQueue.get(channelId) === settled) {
+                this.channelQueue.delete(channelId);
+            }
+        });
         return work;
     }
 
@@ -343,6 +376,11 @@ export class ThreadMirror {
         logger.info(
             `[guild-sync] Copied Fluxer thread ${info.id} to Discord as ${copy.id}`
         );
+        for (const refusal of copy.refused ?? []) {
+            logger.warn(
+                `[guild-sync] Discord refused settings for thread ${copy.id}: ${refusal}`
+            );
+        }
         const fields = differing(copy.look, info);
         if (fields.length === 0) return;
         logger.warn(
