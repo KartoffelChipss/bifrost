@@ -195,7 +195,7 @@ describe('Fluxer send fallback', () => {
     });
 
     it('returns the payload without the rejected field when the retry fails', async () => {
-        const { webhook } = scripted([GONE(), DOWN()]);
+        const { webhook } = scripted([GONE(), DOWN(), DOWN(), DOWN(), DOWN()]);
         const WebhookService = await loadWebhookService();
         const service = new WebhookService();
         const result = await service.sendCopyViaFluxerWebhook(
@@ -260,7 +260,7 @@ const relayed = { id: 'd1', channelId: '121', type: MessageType.Default };
 describe('queued copies with fork fields', () => {
     it('queues a failed copy without the reply Fluxer rejected', async () => {
         const queued: WebhookMessageData[] = [];
-        const { webhook } = scripted([GONE(), DOWN()]);
+        const { webhook } = scripted([GONE(), DOWN(), DOWN(), DOWN(), DOWN()]);
         const relay = await relayQueueing(webhook, queued);
         await relay.relayMessage(relayed as never);
         assert.equal(queued.length, 1);
@@ -296,9 +296,15 @@ describe('queued copies with fork fields', () => {
     });
 
     it('rewrites a queued entry without the field Fluxer rejected', async () => {
-        const { webhook, sent } = scripted([GONE(), DOWN()]);
+        const { webhook, sent } = scripted([
+            GONE(),
+            DOWN(),
+            DOWN(),
+            DOWN(),
+            DOWN(),
+        ]);
         const run = await drainOnce(webhook);
-        assert.equal(sent.length, 2);
+        assert.equal(sent.length, 4);
         const rewrite = run.updates.find((u) => 'payload' in u);
         assert.ok(rewrite, 'the entry payload is rewritten');
         const stored = JSON.parse(rewrite.payload as string);
