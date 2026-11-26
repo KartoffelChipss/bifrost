@@ -65,6 +65,8 @@ function setup(
         clock: Date.parse('2026-11-25T12:00:00Z'),
         clockMoves: true,
         admin: null as string | null,
+        /** Thread locks that fail before one goes through. */
+        failLocks: 0,
     };
     const reports: string[] = [];
     const threadEdits: string[] = [];
@@ -83,6 +85,10 @@ function setup(
         inlineMax,
         writer: {
             async updateThread(_guild, id, patch) {
+                if (patch.locked === true && state.failLocks > 0) {
+                    state.failLocks -= 1;
+                    throw new Error('lock refused');
+                }
                 threadEdits.push(`${id} ${JSON.stringify(patch)}`);
             },
             async createThread(_guild, spec) {
@@ -535,6 +541,24 @@ describe('archive-thread mode', () => {
         assert.equal(s.store.job('30').archiveThreadId, null);
         assert.ok(s.ports.sent.every((m) => m.threadId === null));
         assert.equal(s.store.job('30').status, 'ready');
+    });
+
+    it('keeps a thread it made when locking it fails, rather than importing inline', async () => {
+        const s = setup('apply', ['20', '30'], 2);
+        for (const id of ['11', '12', '13']) s.ports.add('10', id);
+        s.map('channel', '10', 'f10');
+        s.state.failLocks = 1;
+        await s.importer.run(LINK);
+        assert.equal(s.store.job('10').archiveThreadId, 'thread-of-f10');
+        assert.equal(s.ports.sent.length, 0);
+        s.state.clock += RETRY_MAX_MS;
+        await s.drain();
+        assert.equal(
+            s.threadEdits.filter((e) => e.startsWith('create ')).length,
+            1
+        );
+        assert.equal(s.ports.sent.length, 3);
+        assert.ok(s.ports.sent.every((m) => m.threadId === 'thread-of-f10'));
     });
 
     it('imports inline when the thread cannot be made', async () => {
@@ -1358,6 +1382,28 @@ describe('channels bridged before their history', () => {
             /bridged before its history was copied, and its Fluxer channel cannot hold an archive thread/
         );
         assert.match(reports, /History import finished/);
+    });
+
+    it('reuses the archive thread it made when locking it failed, instead of making another', async () => {
+        const s = setup('apply', ['20', '30']);
+        s.ports.add('10', '11');
+        s.map('channel', '10', 'f10');
+        await s.links.link(LINK.id, '10', 'f10');
+        s.ports.linkTimes.set('10', new Date(LINKED_AT));
+        s.state.failLocks = 2;
+        for (let i = 0; i < 10; i++) {
+            await s.importer.run(LINK);
+            s.state.clock += RETRY_MAX_MS;
+        }
+        assert.equal(
+            s.threadEdits.filter((e) => e.startsWith('create ')).length,
+            1
+        );
+        assert.equal(s.store.job('10').status, 'done');
+        assert.deepEqual(
+            s.ports.sent.map((m) => m.threadId),
+            ['thread-of-f10']
+        );
     });
 
     it('lets an admin retry a job that failed because its channel was bridged first', async () => {

@@ -455,10 +455,12 @@ export class HistoryImporter {
     /**
      * An archive thread's history goes on through the import webhook. A
      * finished one waits as ready until its channel is bridged, then
-     * copies up to the link (finishArchive).
+     * copies up to the link (finishArchive). A pending one starts again
+     * and reuses its thread (ArchiveThreads).
      */
     private async archiveRunnable(job: HistoryJob): Promise<HistoryJob | null> {
-        if (job.status === 'importing') return job;
+        // A pending job has a thread when a step after making it failed.
+        if (job.status === 'importing' || job.status === 'pending') return job;
         if (job.status !== 'ready') return null;
         const bridged = await this.deps.links.byDiscordChannel(job.discordId);
         return bridged ? job : null;
