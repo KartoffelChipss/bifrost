@@ -7,6 +7,7 @@
  * The environment only decides whether that switch is allowed at all.
  */
 
+import type { FluxerDbSettings } from '../fluxer-db/pool';
 import { SEND_INTERVAL_MS } from '../history/limits';
 
 export type AddonMode = 'read-only' | 'dry-run' | 'apply';
@@ -28,6 +29,14 @@ export interface AddonConfig {
      * less free space than this. Defaults to 20.
      */
     readonly archiveMinFreeGb?: number;
+    /**
+     * BF_ADDON_NAME_SYNC: puts each Discord member's current name on every
+     * Fluxer copy of their messages (src/name-sync). Absent while add-ons
+     * are off.
+     */
+    readonly nameSync?: boolean;
+    /** BF_FLUXER_DB_*: Fluxer's database. Set when name sync is on. */
+    readonly fluxerDb?: FluxerDbSettings;
     readonly initialMode: Exclude<AddonMode, 'apply'>;
     /** BF_ADDONS_ALLOW_APPLY. Without it, no add-on writes to a server. */
     readonly allowApply: boolean;
@@ -188,6 +197,7 @@ const BOOL_KEYS = {
     history: 'BF_ADDON_HISTORY',
     identity: 'BF_ADDON_IDENTITY',
     archive: 'BF_ADDON_ARCHIVE',
+    nameSync: 'BF_ADDON_NAME_SYNC',
     allowApply: 'BF_ADDONS_ALLOW_APPLY',
 } as const;
 
@@ -209,6 +219,7 @@ function parseSettings(env: Env): {
         history: false,
         identity: false,
         archive: false,
+        nameSync: false,
         allowApply: false,
     };
     for (const [field, envName] of Object.entries(BOOL_KEYS)) {
@@ -277,6 +288,52 @@ function parseArchive(
     return { ok: true, ...(dir ? { dir } : {}), minFreeGb: gb };
 }
 
+const DEFAULT_FLUXER_DB_PORT = 5432;
+const MAX_PORT = 65_535;
+
+/**
+ * Parses BF_FLUXER_DB_HOST, _PORT, _NAME, _USER and _PASS (or _PASS_FILE,
+ * read by src/utils/env.ts). The host and password are required only while
+ * name sync is on.
+ */
+function parseFluxerDb(
+    env: Env,
+    on: boolean
+): { ok: true; value?: FluxerDbSettings } | { ok: false; error: string } {
+    if (!on) return { ok: true };
+    const host = (env.BF_FLUXER_DB_HOST ?? '').trim();
+    const password = env.BF_FLUXER_DB_PASS ?? '';
+    if (host === '' || password === '') {
+        return {
+            ok: false,
+            error: 'BF_ADDON_NAME_SYNC needs BF_FLUXER_DB_HOST and BF_FLUXER_DB_PASS (or BF_FLUXER_DB_PASS_FILE)',
+        };
+    }
+    const portText = (env.BF_FLUXER_DB_PORT ?? '').trim();
+    const port = portText === '' ? DEFAULT_FLUXER_DB_PORT : Number(portText);
+    if (
+        !/^\d*$/.test(portText) ||
+        !Number.isSafeInteger(port) ||
+        port < 1 ||
+        port > MAX_PORT
+    ) {
+        return {
+            ok: false,
+            error: `BF_FLUXER_DB_PORT must be a port from 1 to ${MAX_PORT}`,
+        };
+    }
+    return {
+        ok: true,
+        value: {
+            host,
+            port,
+            database: (env.BF_FLUXER_DB_NAME ?? '').trim() || 'fluxer',
+            user: (env.BF_FLUXER_DB_USER ?? '').trim() || 'bifrost_bridge',
+            password,
+        },
+    };
+}
+
 /** Add-ons off. Bad sub-settings become warnings, so the relay still starts. */
 function disabledConfig(errors: readonly string[]): AddonConfig {
     return {
@@ -311,7 +368,9 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
     }
     const archive = parseArchive(env, settings.flags.archive);
     if (!archive.ok) settings.errors.push(archive.error);
-    if (settings.errors.length > 0 || !archive.ok)
+    const fluxerDb = parseFluxerDb(env, settings.flags.nameSync);
+    if (!fluxerDb.ok) settings.errors.push(fluxerDb.error);
+    if (settings.errors.length > 0 || !archive.ok || !fluxerDb.ok)
         return { ok: false, error: settings.errors.join('; ') };
 
     // Read exactly as upstream does (src/utils/env.ts, src/db/sequelize.ts):
@@ -336,6 +395,7 @@ export function parseAddonConfig(env: Env): AddonConfigResult {
             historySendIntervalMs: settings.sendIntervalMs,
             ...(archive.dir ? { archiveDir: archive.dir } : {}),
             archiveMinFreeGb: archive.minFreeGb,
+            ...(fluxerDb.value ? { fluxerDb: fluxerDb.value } : {}),
             ...(resetUser.id ? { resetUserId: resetUser.id } : {}),
             warnings: resetWarnings,
         },

@@ -29,6 +29,7 @@ export const TABLES = {
     archiveMessages: 'addon_archive_messages',
     archiveMembers: 'addon_archive_members',
     archiveFiles: 'addon_archive_files',
+    nameSync: 'addon_name_sync',
 } as const;
 
 /** Umzug's record of applied add-on migrations, apart from upstream's. */

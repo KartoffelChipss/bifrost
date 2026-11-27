@@ -55,7 +55,11 @@ export class HistoryMirror {
             if (raw === null || raw === undefined) return;
             const message = this.deps.ports.describe(raw);
             const { formatter, editor, store } = this.deps;
-            const payload = await formatter.build(message, found.linkId);
+            const payload = await formatter.build(
+                message,
+                found.linkId,
+                found.copy
+            );
             await editor.replace(found.copy, payload.content);
             // The copy renders the edited text, so its mentions follow.
             await store.recordMentions(

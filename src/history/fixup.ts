@@ -91,7 +91,11 @@ export function rendersAs(
         return true;
     const names = (payload.attachments ?? []).map((file) => file.name);
     if (names.length === 0) return false;
-    const noted = withNote(payload.content, attachmentsNote(names));
+    const noted = withNote(
+        payload.content,
+        attachmentsNote(names),
+        copy.native === true
+    );
     return contentHash(noted) === copy.contentHash;
 }
 
@@ -253,7 +257,7 @@ export class MentionFixups {
         );
         await pause(FIXUP_READ_INTERVAL_MS);
         if (!message) return 'same';
-        const payload = await formatter.build(message, fixup.guildLinkId);
+        const payload = await formatter.build(message, fixup.guildLinkId, copy);
         if (rendersAs(copy, payload)) return 'same';
         if (mode !== 'apply') return 'changed';
         const writable =

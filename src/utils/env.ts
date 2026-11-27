@@ -21,6 +21,7 @@ function resolveFileSecret(varName: string) {
 resolveFileSecret('BF_FLUXER_TOKEN');
 resolveFileSecret('BF_DISCORD_TOKEN');
 resolveFileSecret('BF_DB_PASS');
+resolveFileSecret('BF_FLUXER_DB_PASS');
 resolveFileSecret('BF_DISCORD_HEALTH_TOKEN');
 resolveFileSecret('BF_FLUXER_HEALTH_TOKEN');
 

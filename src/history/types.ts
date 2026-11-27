@@ -177,6 +177,10 @@ export interface ImportedMessage {
      * written before it was recorded.
      */
     readonly contentHash?: string | null;
+    /** Set by the rewrite job: no date or reactions line (CopyStyle). */
+    readonly native?: boolean;
+    /** Set by the rewrite job: the copy is a Fluxer reply. */
+    readonly nativeReply?: boolean;
 }
 
 /** A recent Fluxer message, for crash recovery. */

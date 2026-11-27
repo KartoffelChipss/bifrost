@@ -326,3 +326,41 @@ describe('archive settings', () => {
         assert.equal(result.config.archiveDir, undefined);
     });
 });
+
+describe('name sync settings', () => {
+    const on = {
+        ...ON,
+        BF_ADDON_NAME_SYNC: 'true',
+        BF_FLUXER_DB_HOST: 'fluxer-postgres-1',
+        BF_FLUXER_DB_PASS: 'secret',
+    };
+
+    it('needs the Fluxer database host and password', () => {
+        for (const missing of ['BF_FLUXER_DB_HOST', 'BF_FLUXER_DB_PASS']) {
+            const result = parseAddonConfig({ ...on, [missing]: '' });
+            assert.equal(result.ok, false, missing);
+            assert.match(!result.ok ? result.error : '', /BF_FLUXER_DB_HOST/);
+        }
+    });
+
+    it('reads the connection, with defaults for port, database and role', () => {
+        const result = parseAddonConfig(on);
+        assert.ok(result.ok);
+        assert.equal(result.config.nameSync, true);
+        assert.deepEqual(result.config.fluxerDb, {
+            host: 'fluxer-postgres-1',
+            port: 5432,
+            database: 'fluxer',
+            user: 'bifrost_bridge',
+            password: 'secret',
+        });
+    });
+
+    it('refuses a bad port, and asks nothing while name sync is off', () => {
+        const bad = parseAddonConfig({ ...on, BF_FLUXER_DB_PORT: '70000' });
+        assert.equal(bad.ok, false);
+        const off = parseAddonConfig(ON);
+        assert.ok(off.ok);
+        assert.equal(off.config.fluxerDb, undefined);
+    });
+});

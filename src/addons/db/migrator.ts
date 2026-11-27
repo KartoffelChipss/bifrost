@@ -17,6 +17,7 @@ import * as destMissing from './migrations/00012-object-map-dest-missing';
 import * as historyMentions from './migrations/00013-history-mentions';
 import * as failureCounts from './migrations/00014-failure-counts';
 import * as discordArchive from './migrations/00015-discord-archive';
+import * as nativeHistory from './migrations/00016-native-history';
 import { MIGRATIONS_MODEL, MIGRATIONS_TABLE } from './schema';
 
 /**
@@ -91,6 +92,11 @@ const MIGRATIONS: RunnableMigration<QueryInterface>[] = [
         name: '00015-discord-archive',
         up: discordArchive.up,
         down: discordArchive.down,
+    },
+    {
+        name: '00016-native-history',
+        up: nativeHistory.up,
+        down: nativeHistory.down,
     },
 ];
 

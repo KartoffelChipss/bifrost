@@ -74,9 +74,14 @@ export function contentHash(content: string): string {
 
 /**
  * Adds a note line just above the last line (the date note), fitted to
- * Fluxer's limit.
+ * Fluxer's limit. A native copy has no date note, so the note goes last.
  */
-export function withNote(content: string, note: string): string {
+export function withNote(
+    content: string,
+    note: string,
+    native = false
+): string {
+    if (native) return clipContent(`${content}\n${note}`, MAX_CONTENT_LENGTH);
     const split = content.lastIndexOf('\n');
     const joined =
         split < 0
@@ -124,22 +129,42 @@ export interface FormatterDeps {
     readonly commandPrefix: string;
 }
 
+/**
+ * How a copy was made. A native copy (the rewrite job,
+ * src/history-rewrite) carries its Discord time in its ID and real
+ * reactions, so it has no date or reactions line; a native reply is a
+ * Fluxer reply, so it needs no quote.
+ */
+export interface CopyStyle {
+    readonly native?: boolean;
+    readonly nativeReply?: boolean;
+}
+
 /** Builds the Fluxer copy of a Discord message, for an import or an edit. */
 export class CopyFormatter {
     constructor(private readonly deps: FormatterDeps) {}
 
-    async build(message: SourceMessage, linkId: string): Promise<RelayPayload> {
+    async build(
+        message: SourceMessage,
+        linkId: string,
+        style: CopyStyle = {}
+    ): Promise<RelayPayload> {
         const { store, ports } = this.deps;
         const base = (await store.isOptedOut(message.authorId))
             ? optOutPayload()
             : await ports.payload(message.raw, linkId, {
-                  withoutReply: await this.hideReply(message),
+                  withoutReply:
+                      style.nativeReply === true ||
+                      (await this.hideReply(message)),
               });
-        // The copy carries its original time, which Fluxer cannot set.
-        const tail = [
-            reactionLine(message.reactions),
-            dateNote(message.createdAt),
-        ].filter((line): line is string => Boolean(line));
+        // An imported copy carries its original time, which Fluxer cannot
+        // set; a native copy's ID already holds it.
+        const tail = style.native
+            ? []
+            : [
+                  reactionLine(message.reactions),
+                  dateNote(message.createdAt),
+              ].filter((line): line is string => Boolean(line));
         const lines = [fitBody(defuseMentions(base.content), tail), ...tail];
         return {
             ...base,

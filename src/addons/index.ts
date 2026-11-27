@@ -15,6 +15,7 @@ import { FluxerGuildWriter } from '../guild-sync/writers/fluxer';
 import { createHistoryAddon, editorThreads, historyLinkHook } from '../history';
 import type { HistoryPorts } from '../history/types';
 import { createIdentityAddon, type IdentityPorts } from '../identity';
+import { createNameSyncAddon } from '../name-sync';
 import { createRelayExtras, withRelayExtras } from '../relay-extras';
 import type { RelayLookupPorts } from '../relay-extras/types';
 
@@ -130,6 +131,20 @@ export function addonFactories(
                               (config.archiveMinFreeGb ??
                                   DEFAULT_ARCHIVE_MIN_FREE_GB) *
                               1024 ** 3,
+                      }),
+              }
+            : {}),
+        ...(config.fluxerDb
+            ? {
+                  nameSync: () =>
+                      createNameSyncAddon({
+                          discordClient: deps.discordClient,
+                          fluxerClientRef: deps.fluxerClientRef,
+                          sequelize: deps.sequelize,
+                          listGuildLinks: deps.listGuildLinks,
+                          fluxerDb: config.fluxerDb as NonNullable<
+                              AddonConfig['fluxerDb']
+                          >,
                       }),
               }
             : {}),

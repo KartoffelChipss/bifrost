@@ -183,6 +183,8 @@ export function parseImported(row: Row): ImportedMessage {
         inThread: row.inThread,
         webhookId: str(row, 'webhookId'),
         contentHash: optStr(row, 'contentHash'),
+        native: row.native === true,
+        nativeReply: row.nativeReply === true,
     };
 }
 
